@@ -10,7 +10,7 @@ Your kid presses a big red button, says what they want to draw, and a coloring p
 
 Built with a Raspberry Pi 5, OpenAI APIs, and a cardboard box with googly eyes.
 
-**~3 hours to build | ~$150 in parts | ~$0.06 per page**
+**~3 hours to build | ~$135 in parts + printer | ~$0.06 per page**
 
 ---
 
@@ -34,17 +34,20 @@ The whole cycle takes ~20-30 seconds.
 
 | Part | What It Does | ~Price |
 |------|-------------|--------|
-| [Raspberry Pi 5 (4GB)](https://www.raspberrypi.com/products/raspberry-pi-5/) | The brain | $60 |
+| [PiShop Raspberry Pi 5 Budget Kit (4GB)](https://www.amazon.com/s?k=PiShop+Raspberry+Pi+5+Budget+Kit+4GB) | Pi + power supply + SD card + case | $75 |
 | [Brother HL-L2405W](https://www.brother-usa.com/products/hll2405w) | B&W laser printer, USB | $100 |
 | [EG STARTS 100mm Arcade Button](https://www.amazon.com/dp/B01LZMANZ7) | Big red dome button | $10 |
 | [CHANGEEK USB Mic](https://www.amazon.com/dp/B0B4MJQ81C) | Gooseneck USB microphone | $10 |
-| USB Speaker | Any USB-powered speaker (Pi 5 has no headphone jack) | $10 |
-| Micro SD Card (32GB) | Storage | $8 |
-| [Pi 5 27W USB-C PSU](https://www.raspberrypi.com/products/27w-power-supply/) | Power supply | $12 |
-| USB-A to USB-B Cable | Connects Pi to printer | $5 |
+| USB Sound Bar Speaker | USB-powered speaker (Pi 5 has no headphone jack) | $10 |
+| [Pi 5 Active Cooler](https://www.amazon.com/s?k=Raspberry+Pi+5+Official+Active+Cooler) | Blower fan + heatsink (recommended) | $5 |
+| [UGREEN USB-A to USB-B Cable](https://www.amazon.com/s?k=UGREEN+USB+A+to+USB+B+Printer+Cable) | Connects Pi to printer | $7 |
+| [Female Spade Crimp Terminals](https://www.amazon.com/s?k=female+spade+crimp+terminal+4.8mm) | Connects wires to button's 4.8mm spade terminals | $8 |
+| [5" Round Ventilation Grille](https://www.amazon.com/s?k=5+inch+round+ventilation+grille) | Speaker grille for the enclosure | $6 |
 | Cardboard + hot glue | The enclosure | $5 |
 
-Tools: box cutter, metal ruler, pencil, hot glue gun.
+You may also want: a [micro HDMI to HDMI adapter](https://www.amazon.com/s?k=UGREEN+Micro+HDMI+to+HDMI) for initial Pi setup with a monitor, and a [USB-C SD card reader](https://www.amazon.com/s?k=uni+SD+card+reader+USB+C) for flashing the SD card.
+
+Tools: box cutter, metal ruler, pencil, hot glue gun, wire strippers (for spade terminals).
 
 ## Quick Start
 

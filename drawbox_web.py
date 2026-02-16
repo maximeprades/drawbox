@@ -51,7 +51,7 @@ BLOCKED_WORDS = {
     "rape", "molest", "abuse", "kidnap", "assault", "victim",
     "war", "soldier", "army", "military", "combat", "battle",
     "thong", "lingerie", "bikini", "underwear",
-    "poop", "pee", "fart", "vomit", "snot",
+    "pee", "fart", "vomit", "snot",
 }
 
 def is_safe(text):
