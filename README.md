@@ -162,4 +162,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Bug fixes, build guide improvements, and
 
 ---
 
+## Photos
+
+<p align="center">
+  <img src="docs/3.jpeg" alt="DrawBox — front view with button, mic, and label" width="400">
+  <img src="docs/2.jpeg" alt="DrawBox — giant googly eyes" width="400">
+  <img src="docs/1.jpeg" alt="Kid using DrawBox" width="400">
+</p>
+
+---
+
 Built for my kids. Now yours can have one too.
