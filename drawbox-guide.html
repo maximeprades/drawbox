@@ -1,0 +1,1768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawBox — Complete Build Guide</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--border:#e8e5de;--text:#1a1a1a;--muted:#666;--accent:#c0392b;--green:#27ae60;--blue:#2980b9;--amber:#f39c12;--dark:#2c2c2c;--code-bg:#1e1e1e;--code-text:#d4d4d4}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.nav{position:fixed;top:0;left:0;width:250px;height:100vh;background:var(--dark);color:#fff;overflow-y:auto;z-index:100;padding:20px 0;transition:transform .3s;will-change:transform;transform:translateZ(0)}
+.nav-logo{padding:10px 20px 20px;font-size:20px;font-weight:700;border-bottom:1px solid #444;margin-bottom:10px}
+.nav-logo span{color:var(--accent)}
+.nav-sec{padding:12px 20px 4px;font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:#777;font-weight:600}
+.nav a{display:flex;align-items:center;gap:9px;padding:8px 20px;color:#bbb;text-decoration:none;font-size:12.5px;border-left:3px solid transparent;transition:all .15s}
+.nav a:hover{background:rgba(255,255,255,.05);color:#fff}
+.nav a.active{background:rgba(255,255,255,.08);color:#fff;border-left-color:var(--accent);font-weight:600}
+.nn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#444;font-size:10px;font-weight:700;flex-shrink:0}
+.nav a.done .nn{background:var(--green)}
+.nav-tog{display:none;position:fixed;top:10px;left:10px;z-index:200;background:var(--dark);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:16px;cursor:pointer}
+.main{margin-left:250px;max-width:800px;padding:36px 36px 100px}
+.hero{background:var(--dark);color:#fff;padding:44px 36px;border-radius:14px;margin-bottom:36px;position:relative;overflow:hidden}
+.hero::after{content:'🎨';position:absolute;right:24px;top:50%;transform:translateY(-50%);font-size:72px;opacity:.12}
+.hero h1{font-size:32px;margin-bottom:6px}
+.hero>p{color:#aaa;font-size:14px;max-width:480px}
+.hero-s{display:flex;gap:28px;margin-top:22px;flex-wrap:wrap}
+.hero-s div{font-size:12px;color:#999}
+.hero-s strong{display:block;font-size:18px;color:#fff;margin-bottom:1px}
+.pbar{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:28px;position:sticky;top:0;z-index:50;will-change:auto;backface-visibility:hidden}
+.pbar-l{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:6px}
+.ptrk{width:100%;height:7px;background:#eee;border-radius:4px;overflow:hidden}
+.pfil{height:100%;background:var(--green);border-radius:4px;transition:width .5s}
+.phase{margin-bottom:44px;contain:layout style}
+.ph{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--border)}
+.pi{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.ph h2{font-size:20px;font-weight:700}
+.ph p{font-size:12px;color:var(--muted)}
+.step{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:14px;overflow:hidden;will-change:auto}
+.step:hover{border-color:#ccc}
+.sh{display:flex;align-items:center;gap:12px;padding:16px 20px;cursor:pointer;user-select:none}
+.sc{width:26px;height:26px;border-radius:50%;border:2px solid #ddd;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;transition:all .2s;font-size:13px;color:transparent}
+.sc:hover{border-color:var(--green)}
+.step.done .sc{background:var(--green);border-color:var(--green);color:#fff}
+.st{font-weight:600;font-size:14px;flex:1}
+.stm{font-size:11px;color:var(--muted);background:#f5f5f0;padding:2px 9px;border-radius:10px;white-space:nowrap}
+.se{font-size:16px;color:#ccc;transition:transform .2s;flex-shrink:0}
+.step.open .se{transform:rotate(180deg)}
+.sb{display:none;padding:0 20px 20px;border-top:1px solid var(--border);content-visibility:auto}
+.step.open .sb{display:block}
+.sb p{margin:10px 0;font-size:13.5px}
+.cb{background:var(--code-bg);color:var(--code-text);border-radius:7px;padding:16px 18px;margin:12px 0;overflow-x:auto;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12.5px;line-height:1.6;position:relative;white-space:pre-wrap;word-break:break-all}
+.cb .ll{position:absolute;top:5px;right:8px;font-size:9px;color:#555;text-transform:uppercase;letter-spacing:.5px}
+.cm{color:#6a9955}
+.cs{color:#ce9178}
+.ck{color:#569cd6}
+.cc{color:#dcdcaa}
+.al{border-radius:7px;padding:12px 16px;margin:12px 0;font-size:12.5px;display:flex;gap:9px;align-items:flex-start}
+.al-i{font-size:15px;flex-shrink:0;margin-top:1px}
+.al-w{background:#fef9e7;border:1px solid #f0d78c}
+.al-t{background:#eafaf1;border:1px solid #a3d9a5}
+.al-n{background:#ebf5fb;border:1px solid #a9cce3}
+.al-d{background:#fdf0ef;border:1px solid #f5b7b1}
+.al-yt{background:#fef0f0;border:1px solid #e8a0a0}
+.al-yt a{color:#c0392b;font-weight:600;text-decoration:none}
+.al-yt a:hover{text-decoration:underline}
+.pg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.pc{background:#fafaf6;border:1px solid var(--border);border-radius:7px;padding:12px;font-size:12.5px}
+.pc strong{display:block;font-size:12.5px;margin-bottom:3px}
+.pc span{font-size:11.5px;color:var(--muted)}
+.ps{display:inline-block;font-size:9px;padding:2px 7px;border-radius:8px;margin-top:5px;font-weight:600;background:#eafaf1;color:var(--green)}
+.dg{background:#f5f4f0;border:1px solid var(--border);border-radius:7px;padding:16px;margin:14px 0;overflow-x:auto}
+.dl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:600}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12.5px}
+th{background:var(--dark);color:#fff;padding:9px 12px;text-align:left;font-size:11px;font-weight:600}
+td{padding:9px 12px;border-bottom:1px solid var(--border)}
+tr:nth-child(even){background:#fafaf6}
+.pf{background:var(--code-bg);border-radius:9px;overflow:hidden;margin:14px 0}
+.pfh{background:#333;padding:6px 14px;display:flex;align-items:center;gap:7px;font-size:11px;color:#aaa}
+.dot{width:9px;height:9px;border-radius:50%}
+.dr{background:#ff5f56}.dy{background:#ffbd2e}.dg2{background:#27c93f}
+.pf pre{padding:16px 18px;overflow-x:auto;font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.6;color:var(--code-text);max-height:550px;overflow-y:auto;white-space:pre;margin:0}
+@media(max-width:900px){.nav{transform:translateX(-100%)}.nav.open{transform:translateX(0)}.nav-tog{display:block}.main{margin-left:0;padding:56px 16px 100px}.pg{grid-template-columns:1fr}.hero::after{display:none}.hero{padding:28px 20px}.hero h1{font-size:26px}}
+</style>
+</head>
+<body>
+<button class="nav-tog" onclick="document.querySelector('.nav').classList.toggle('open')">☰ Guide</button>
+<nav class="nav" id="nav">
+<div class="nav-logo">🎨 Draw<span>Box</span></div>
+<div class="nav-sec">Getting Started</div>
+<a href="#s1"><span class="nn">1</span> Parts Inventory</a>
+<div class="nav-sec">Phase 1 — Pi Setup</div>
+<a href="#s2"><span class="nn">2</span> Flash SD Card</a>
+<a href="#s3"><span class="nn">3</span> First Boot &amp; SSH</a>
+<a href="#s4"><span class="nn">4</span> Install Dependencies</a>
+<div class="nav-sec">Phase 2 — Printer</div>
+<a href="#s5"><span class="nn">5</span> Connect &amp; CUPS</a>
+<a href="#s6"><span class="nn">6</span> Test Print</a>
+<div class="nav-sec">Phase 3 — Software</div>
+<a href="#s7"><span class="nn">7</span> OpenAI API Key</a>
+<a href="#s8"><span class="nn">8</span> DrawBox Script</a>
+<a href="#s9"><span class="nn">9</span> Manual Test</a>
+<a href="#s10"><span class="nn">10</span> Auto-Start</a>
+<div class="nav-sec">Phase 4 — Hardware</div>
+<a href="#s11"><span class="nn">11</span> Wire Button</a>
+<a href="#s12"><span class="nn">12</span> Mic &amp; Speaker</a>
+<a href="#s13"><span class="nn">13</span> Integration Test</a>
+<div class="nav-sec">Phase 5 — Enclosure</div>
+<a href="#s14"><span class="nn">14</span> Cut Panels</a>
+<a href="#s15"><span class="nn">15</span> Printer Shell</a>
+<a href="#s16"><span class="nn">16</span> Control Deck</a>
+<a href="#s17"><span class="nn">17</span> Finish!</a>
+<div class="nav-sec">Phase 6 — Finishing Up</div>
+<a href="#s18"><span class="nn">18</span> WiFi Portability</a>
+<a href="#s19"><span class="nn">19</span> Cost &amp; Reliability</a>
+<a href="#s20"><span class="nn">20</span> Web Dashboard</a>
+</nav>
+
+<div class="main">
+
+<div class="hero">
+<h1>DrawBox Build Guide</h1>
+<p>Your kid presses a big red button, tells the box what they want to draw, and a coloring page prints out. Magic in a box.</p>
+<div class="hero-s">
+<div><strong>~3 hrs</strong>Total build</div>
+<div><strong>20</strong>Steps</div>
+<div><strong>$0.06</strong>Per page</div>
+</div>
+</div>
+
+<div class="pbar">
+<div class="pbar-l"><span>Build Progress</span><span id="pt">0 / 17</span></div>
+<div class="ptrk"><div class="pfil" id="pf" style="width:0%"></div></div>
+</div>
+
+<!-- ======= INVENTORY ======= -->
+<div class="phase" id="s1">
+<div class="ph"><div class="pi" style="background:#ebf5fb">📦</div><div><h2>Parts Inventory</h2><p>Confirm everything before you start</p></div></div>
+<div class="step" data-n="1">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Unbox & verify all parts</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>Lay everything out. Here's your exact kit:</p>
+<div class="pg">
+<div class="pc"><strong>🖥️ Raspberry Pi 5 (4GB)</strong><span>The brain. Runs the whole show.</span><div class="ps">✓ You have this</div></div>
+<div class="pc"><strong>💾 Micro SD Card + USB-C PSU</strong><span>Pi's hard drive + 27W power supply</span><div class="ps">✓ You have this</div></div>
+<div class="pc"><strong>🖨️ Brother HL-L2405W</strong><span>B&W laser, USB + WiFi. 14"×14"×7.2"</span><div class="ps">✓ Ordered</div></div>
+<div class="pc"><strong>🔴 EG STARTS 100mm Arcade Button</strong><span>Big red dome, LED, microswitch. 100mm diameter!</span><div class="ps">✓ Ordered</div></div>
+<div class="pc"><strong>🎙️ C G CHANGEEK Gooseneck USB Mic</strong><span>Flexible gooseneck, built-in sound card, USB-A</span><div class="ps">✓ Ordered</div></div>
+<div class="pc"><strong>🔊 USB Speaker</strong><span>USB-powered, plug-and-play. No 3.5mm needed (Pi 5 has no headphone jack!)</span><div class="ps">✓ Ordered</div></div>
+<div class="pc"><strong>🔌 USB-A to USB-B Cable</strong><span>Connects Pi to printer (square end → printer)</span><div class="ps">✓ Ordered</div></div>
+<div class="pc"><strong>📦 Golden State Art Cardboard (10pk)</strong><span>24×36" corrugated, one-side white. No wrapping needed!</span><div class="ps">✓ Ordered</div></div>
+</div>
+<div class="al al-w"><span class="al-i">⚠️</span><div><strong>Jumper wires:</strong> The EG STARTS 100mm button usually comes with wires and a microswitch connector. Check the package. If it only has bare terminals, you need 2 female-to-female dupont jumper wires (~$3 on Amazon).</div></div>
+<div class="al al-n"><span class="al-i">🔧</span><div><strong>Tools needed:</strong> Box cutter, metal ruler, pencil, hot glue gun + sticks, something to trace the 100mm circle (coffee mug or compass).</div></div>
+</div></div></div>
+
+<!-- ======= PHASE 1: PI ======= -->
+<div class="phase" id="s2">
+<div class="ph"><div class="pi" style="background:#eafaf1">🖥️</div><div><h2>Phase 1 — Raspberry Pi Setup</h2><p>From sealed box to running computer</p></div></div>
+
+<div class="step" data-n="2">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Flash the SD card with Raspberry Pi OS</div><span class="stm">10 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p><strong>On your Mac or PC:</strong></p>
+<p>1. Download <strong>Raspberry Pi Imager</strong> from raspberrypi.com/software</p>
+<p>2. Insert your micro SD card (use adapter if needed)</p>
+<p>3. Open Imager and select:</p>
+<div class="cb"><span class="ll">settings</span>Device:    Raspberry Pi 5
+OS:        Raspberry Pi OS Lite (64-bit)
+           → Under "Raspberry Pi OS (other)" → Lite version
+Storage:   Your SD card</div>
+<p>4. <strong>Click the gear icon ⚙️ (OS Customization)</strong> — this is the key step:</p>
+<div class="cb"><span class="ll">customization</span>☑ Set hostname:       <span class="cs">drawbox</span>
+☑ Enable SSH:         <span class="cs">Use password authentication</span>
+☑ Set username:       <span class="cs">pi</span>
+☑ Set password:       <span class="cs">your-password-here</span>  ← remember this!
+☑ Configure WiFi:
+    SSID:             <span class="cs">your-wifi-name</span>
+    Password:         <span class="cs">your-wifi-password</span>
+    Country:          <span class="cs">US</span>
+☑ Set locale:
+    Timezone:         <span class="cs">America/New_York</span>
+    Keyboard:         <span class="cs">us</span></div>
+<p>5. Click <strong>Write</strong>. Wait 5-10 minutes.</p>
+<div class="al al-t"><span class="al-i">💡</span><div>Setting WiFi + SSH here means you <strong>never need a monitor, keyboard, or mouse</strong> on the Pi. You'll control it entirely from your laptop. This is called "headless" setup.</div></div>
+<div class="al al-yt"><span class="al-i">▶️</span><div><strong>Video guide:</strong> <a href="https://www.youtube.com/results?search_query=raspberry+pi+imager+headless+setup+ssh+wifi" target="_blank" rel="noopener">Search: Raspberry Pi Imager headless setup</a> — watch someone walk through each screen.</div></div>
+</div></div>
+
+<div class="step" data-n="3" id="s3">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">First boot & SSH into the Pi</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p><strong>Assemble:</strong></p>
+<p>1. Insert flashed SD card into Pi (bottom slot, push until click)</p>
+<p>2. Plug USB-C power supply in</p>
+<p>3. That's it — green LED flickers as it boots</p>
+<div class="al al-w"><span class="al-i">⏳</span><div><strong>Wait 60-90 seconds</strong> on first boot. It needs to expand filesystem, connect WiFi, start SSH.</div></div>
+<p><strong>Connect from your laptop terminal:</strong></p>
+<div class="cb"><span class="ll">terminal</span><span class="cc">ssh</span> pi@drawbox.local</div>
+<p>Type <code>yes</code> for fingerprint, then your password.</p>
+<p><strong>If drawbox.local doesn't work:</strong></p>
+<div class="cb"><span class="ll">terminal</span><span class="cm"># Check your router's admin page for the Pi's IP</span>
+<span class="cm"># Or try:</span>
+<span class="cc">ping</span> drawbox.local
+<span class="cm"># Then: ssh pi@[IP_ADDRESS]</span></div>
+<p>When you see <code>pi@drawbox:~ $</code> — you're in! 🎉</p>
+<div class="al al-t"><span class="al-i">💡</span><div>From now on, every command in this guide is typed into this SSH terminal.</div></div>
+<div class="al al-w"><span class="al-i">⚠️</span><div><strong>SSH may die after reboot.</strong> Pi OS sometimes only enables <code>ssh.socket</code> but not <code>ssh.service</code>. To make SSH reliable, run:<br/><code>sudo systemctl enable ssh.socket && sudo systemctl enable ssh.service</code></div></div>
+</div></div>
+
+<div class="step" data-n="4" id="s4">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Install all software dependencies</div><span class="stm">10 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>Run these one at a time in SSH:</p>
+<p><strong>A — Update system:</strong></p>
+<div class="cb"><span class="ll">bash</span>sudo apt update && sudo apt upgrade -y</div>
+<p style="font-size:11px;color:var(--muted)">Takes 3-5 min. Let it run.</p>
+<p><strong>B — System packages:</strong></p>
+<div class="cb"><span class="ll">bash</span>sudo apt install -y cups printer-driver-brlaser python3-pip \
+    libportaudio2 libsndfile1 alsa-utils mpg123</div>
+<p><strong>C — Python packages:</strong></p>
+<div class="cb"><span class="ll">bash</span>pip3 install --break-system-packages \
+    openai gpiozero sounddevice soundfile numpy Pillow</div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>What these do:</strong> <code>cups</code> = print system, <code>printer-driver-brlaser</code> = Brother driver, <code>mpg123</code> = plays TTS audio, <code>openai</code> = GPT Image + Whisper + TTS API, <code>gpiozero</code> = button input, <code>sounddevice</code> = mic recording, <code>Pillow</code> = image processing</div></div>
+</div></div>
+</div>
+
+<!-- ======= PHASE 2: PRINTER ======= -->
+<div class="phase" id="s5">
+<div class="ph"><div class="pi" style="background:#fef9e7">🖨️</div><div><h2>Phase 2 — Printer Setup</h2><p>Brother HL-L2405W via USB</p></div></div>
+
+<div class="step" data-n="5">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Connect printer & configure CUPS</div><span class="stm">10 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p><strong>Physical setup:</strong></p>
+<p>1. Unbox Brother, remove all packing tape/inserts</p>
+<p>2. Install toner cartridge (in box, wrapped in plastic)</p>
+<p>3. Load Letter paper (8.5×11) in tray</p>
+<p>4. Plug in power, turn on</p>
+<p>5. USB-A end → Pi, USB-B end → back of printer</p>
+<div class="al al-w"><span class="al-i">⚠️</span><div>Wait for printer to finish calibration (~30 sec). Ready light should be solid green.</div></div>
+<p><strong>Configure CUPS:</strong></p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Add user to printer admin group</span>
+sudo usermod -aG lpadmin pi
+
+<span class="cm"># Start print system</span>
+sudo systemctl enable cups
+sudo systemctl start cups
+
+<span class="cm"># Verify Pi sees printer via USB</span>
+lsusb
+<span class="cm"># Should show: "Brother Industries, Ltd"</span>
+
+<span class="cm"># List available printers</span>
+lpinfo -v
+<span class="cm"># Look for: direct usb://Brother/HL-L2405W...</span></div>
+<p><strong>Add the printer:</strong></p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Add using driverless (IPP Everywhere) — works on Pi OS Bookworm</span>
+sudo lpadmin -p drawbox-printer -E \
+    -v "$(lpinfo -v 2>/dev/null | grep -i brother | head -1 | awk '{print $2}')" \
+    -m everywhere
+
+<span class="cm"># If driverless fails, try brlaser driver:</span>
+<span class="cm"># sudo lpadmin -p drawbox-printer -E \</span>
+<span class="cm">#     -v "$(lpinfo -v | grep -i brother | head -1 | awk '{print $2}')" \</span>
+<span class="cm">#     -m drv:///brlaser.drv/brl2405w.ppd</span>
+
+<span class="cm"># Set as default</span>
+sudo lpoptions -d drawbox-printer
+sudo cupsenable drawbox-printer
+sudo cupsaccept drawbox-printer</div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>Printer sleep mode:</strong> The Brother HL-L2405W goes to sleep after a few minutes of inactivity. Print jobs queue up and will print automatically when the printer wakes — just takes a few extra seconds for the first print.</div></div>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Web UI option:</strong> Run <code>sudo cupsctl --remote-admin</code>, then open <code>http://drawbox.local:631</code> in your browser → Administration → Add Printer.</div></div>
+<div class="al al-yt"><span class="al-i">▶️</span><div><strong>Video guide:</strong> <a href="https://www.youtube.com/results?search_query=raspberry+pi+cups+usb+printer+setup" target="_blank" rel="noopener">Search: Raspberry Pi CUPS USB printer setup</a></div></div>
+</div></div>
+
+<div class="step" data-n="6" id="s6">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Send a test print</div><span class="stm">2 min</span><span class="se">▼</span></div>
+<div class="sb">
+<div class="cb"><span class="ll">bash</span>echo "DrawBox test - $(date)" | lp -d drawbox-printer
+lpstat -p -d</div>
+<p>A page should print. If it does — printer is working! 🎉</p>
+<div class="al al-d"><span class="al-i">🔧</span><div><strong>Nothing printed?</strong> <code>lpstat -p</code> (is it listed?), <code>lsusb</code> (Brother showing?), try replugging USB, check <code>sudo tail /var/log/cups/error_log</code></div></div>
+</div></div>
+</div>
+
+<!-- ======= PHASE 3: SOFTWARE ======= -->
+<div class="phase" id="s7">
+<div class="ph"><div class="pi" style="background:#fdf0ef">💻</div><div><h2>Phase 3 — Software</h2><p>Speech → Image → Print pipeline</p></div></div>
+
+<div class="step" data-n="7">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Set up OpenAI API key</div><span class="stm">3 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>You likely have one already. If not: platform.openai.com → API Keys → Create new key → name it "DrawBox"</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Save to shell profile</span>
+echo 'export OPENAI_API_KEY="sk-your-key-here"' >> ~/.bashrc
+source ~/.bashrc
+
+<span class="cm"># Verify</span>
+echo $OPENAI_API_KEY</div>
+<div class="al al-n"><span class="al-i">💰</span><div><strong>Cost:</strong> ~$0.04/image (GPT Image) + ~$0.006/min (Whisper) + ~$0.01 (TTS voice) = ~$0.06 per coloring page. $5 = ~80 pages.</div></div>
+</div></div>
+
+<div class="step" data-n="8" id="s8">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Create the DrawBox script</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>This is the entire app — one Python file:</p>
+<div class="cb"><span class="ll">bash</span>nano ~/drawbox.py</div>
+<p>Paste the script below. In nano: right-click to paste, Ctrl+O to save, Ctrl+X to exit.</p>
+<div class="al al-n"><span class="al-i">✏️</span><div><strong>Customize:</strong> Edit the coloring prompt below. Your changes will be included in the script.</div></div>
+<div style="margin:12px 0">
+</div>
+<div style="margin:12px 0">
+<label for="cprompt" style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Coloring Prompt — edit to customize</label>
+<textarea id="cprompt" spellcheck="false" style="display:block;width:100%;min-height:220px;margin-top:6px;padding:14px 16px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12.5px;line-height:1.6;background:var(--code-bg);color:var(--code-text);border:2px solid var(--border);border-radius:7px;resize:vertical;tab-size:4">Create a simple coloring page for children ages 3-8.
+This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
+- Black and white LINE DRAWING only
+- Thick, clean outlines (3-4px stroke)
+- NO shading, NO gradients, NO filled/solid areas
+- NO gray — pure black lines on white
+- Simple shapes, minimal fine detail
+- Large open areas for coloring with crayons
+- Friendly, fun, cute, non-scary style
+- Centered, filling most of the space
+- Style: children's coloring book page
+- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
+- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
+- If the request is ambiguous, default to the most innocent interpretation</textarea>
+<div style="display:flex;gap:8px;margin-top:8px">
+<button onclick="navigator.clipboard.writeText(document.getElementById('cprompt').value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Prompt',1500)" style="padding:6px 14px;font-size:12px;font-weight:600;background:var(--blue);color:#fff;border:none;border-radius:6px;cursor:pointer">Copy Prompt</button>
+<button onclick="document.getElementById('cprompt').value='Create a simple coloring page for children ages 3-8.\nThis is used by YOUNG CHILDREN — output MUST be 100% child-safe.\n- Black and white LINE DRAWING only\n- Thick, clean outlines (3-4px stroke)\n- NO shading, NO gradients, NO filled/solid areas\n- NO gray — pure black lines on white\n- Simple shapes, minimal fine detail\n- Large open areas for coloring with crayons\n- Friendly, fun, cute, non-scary style\n- Centered, filling most of the space\n- Style: children\'s coloring book page\n- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)\n- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old\n- If the request is ambiguous, default to the most innocent interpretation';updScript()" style="padding:6px 14px;font-size:12px;font-weight:600;background:#eee;color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer">Reset Default</button>
+</div>
+</div>
+<div class="pf"><div class="pfh"><span class="dot dr"></span><span class="dot dy"></span><span class="dot dg2"></span>drawbox.py</div>
+<pre>#!/usr/bin/env python3
+"""DrawBox — AI Coloring Page Printer for Kids
+
+Hardware: Pi 5, Brother HL-L2405W (USB), EG STARTS 100mm button,
+          CHANGEEK USB mic, USB speaker
+"""
+
+import os, time, tempfile, subprocess, random, hashlib, threading
+import sounddevice as sd
+import soundfile as sf
+import numpy as np
+from gpiozero import Button as GpioButton
+from openai import OpenAI
+from PIL import Image
+import base64
+from io import BytesIO
+from pathlib import Path
+
+# ── CONFIG ──────────────────────────────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+BUTTON_PIN = 17
+SAMPLE_RATE = 44100
+PRINTER_NAME = "drawbox-printer"
+RECORD_SECONDS = 10
+REBOOT_HOLD_SEC = 5           # hold button 5s to reboot
+TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
+CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
+
+# ── SAFETY BLOCKLIST ────────────────────────────
+BLOCKED_WORDS = {
+    "kill", "murder", "dead", "death", "die", "dying", "corpse",
+    "blood", "bloody", "gore", "gory", "wound", "stab", "shoot",
+    "gun", "guns", "rifle", "pistol", "shotgun", "weapon", "knife",
+    "bomb", "explode", "explosion", "grenade", "missile", "nuke",
+    "sex", "sexy", "sexual", "nude", "naked", "porn", "hentai",
+    "penis", "dick", "cock", "vagina", "pussy", "boob", "breast",
+    "nipple", "butt", "ass", "anus", "genital", "erotic", "orgasm",
+    "fuck", "shit", "damn", "bitch", "bastard", "crap", "piss",
+    "whore", "slut", "hooker", "prostitute", "stripper",
+    "drug", "drugs", "cocaine", "heroin", "meth", "weed", "marijuana",
+    "alcohol", "beer", "wine", "vodka", "drunk", "cigarette", "smoke",
+    "devil", "satan", "demon", "hell", "torture", "horror", "zombie",
+    "vampire", "skeleton", "skull", "coffin", "grave", "creepy",
+    "scary", "nightmare", "terror", "evil", "wicked", "curse",
+    "hate", "racist", "racism", "nazi", "hitler", "slavery", "slave",
+    "suicide", "hanging", "noose", "drown", "poison", "overdose",
+    "rape", "molest", "abuse", "kidnap", "assault", "victim",
+    "war", "soldier", "army", "military", "combat", "battle",
+    "thong", "lingerie", "bikini", "underwear",
+    "poop", "pee", "fart", "vomit", "snot",
+}
+
+def is_safe(text):
+    words = text.lower()
+    return not any(w in words for w in BLOCKED_WORDS)
+
+COLORING_PROMPT = """<span id="prompt-in-script">Create a simple coloring page for children ages 3-8.
+This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
+- Black and white LINE DRAWING only
+- Thick, clean outlines (3-4px stroke)
+- NO shading, NO gradients, NO filled/solid areas
+- NO gray — pure black lines on white
+- Simple shapes, minimal fine detail
+- Large open areas for coloring with crayons
+- Friendly, fun, cute, non-scary style
+- Centered, filling most of the space
+- Style: children's coloring book page
+- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
+- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
+- If the request is ambiguous, default to the most innocent interpretation</span>"""
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# ── VOICE FEEDBACK ─────────────────────────────
+# All voice lines. Keys with lists pick randomly.
+VOICE_LINES = {
+    "ready":     "Ready! Press the button and tell me what to draw!",
+    "listening": "I'm listening!",
+    "thinking":  [
+        "Ooh, great idea! Let me draw that for you!",
+        "That sounds awesome! Drawing it now!",
+        "Cool! Give me a moment...",
+        "Love it! One coloring page coming right up!",
+        "Nice choice! Let me work on that!",
+    ],
+    "printing":  "Here it comes!",
+    "done":      "All done! Press the button when you want another one!",
+    "error":     "Oops, something went wrong. Try again!",
+    "too_short": ("I didn't catch that. Press the button "
+                  "and tell me what you want to draw!"),
+    "busy":      ("Hold on, I'm still working on your picture! "
+                  "Almost done..."),
+    "blocked":   ("Hmm, I can't draw that. How about something "
+                  "fun like an animal or a rainbow?"),
+    "reboot":    "Rebooting now! See you in a moment.",
+}
+
+class VoiceFeedback:
+    """Pre-generates TTS lines and caches them as .mp3 files."""
+
+    def __init__(self):
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self._cache = {}  # key → path (or list of paths)
+        self._warm_up()
+
+    def _tts_path(self, text):
+        """Deterministic filename based on voice + text content."""
+        h = hashlib.md5(f"{TTS_VOICE}:{text}".encode()).hexdigest()[:12]
+        return CACHE_DIR / f"{h}.mp3"
+
+    def _generate_one(self, text):
+        """Generate a single TTS file if not already cached."""
+        path = self._tts_path(text)
+        if path.exists():
+            return path
+        print(f"   🔊 Caching: {text[:50]}...")
+        try:
+            resp = client.audio.speech.create(
+                model="tts-1", voice=TTS_VOICE, input=text)
+            resp.stream_to_file(str(path))
+        except Exception as e:
+            print(f"   ⚠️  TTS cache error: {e}")
+            return None
+        return path
+
+    def _warm_up(self):
+        """Pre-generate all static voice lines at startup."""
+        print("🔊 Warming up voice cache...")
+        for key, val in VOICE_LINES.items():
+            if isinstance(val, list):
+                paths = []
+                for line in val:
+                    p = self._generate_one(line)
+                    if p: paths.append(p)
+                self._cache[key] = paths
+            else:
+                p = self._generate_one(val)
+                if p: self._cache[key] = p
+        print("   ✅ Voice cache ready")
+
+    def play(self, key, block=True):
+        """Play a cached voice line by key.
+        If block=False, plays in a background thread."""
+        entry = self._cache.get(key)
+        if entry is None:
+            # Fallback: generate on the fly
+            text = VOICE_LINES.get(key, key)
+            if isinstance(text, list): text = random.choice(text)
+            self._play_live(text)
+            return
+        if isinstance(entry, list):
+            path = random.choice(entry) if entry else None
+        else:
+            path = entry
+        if not path: return
+        if block:
+            self._play_file(path)
+        else:
+            threading.Thread(target=self._play_file,
+                             args=(path,), daemon=True).start()
+
+    def play_dynamic(self, text, block=True):
+        """Speak arbitrary text (not cached). Used for
+        transcription read-back or dynamic messages."""
+        if block:
+            self._play_live(text)
+        else:
+            threading.Thread(target=self._play_live,
+                             args=(text,), daemon=True).start()
+
+    def _play_file(self, path):
+        try:
+            time.sleep(0.5)  # let USB speaker wake up
+            subprocess.run(["mpg123", "-q", str(path)], check=True)
+        except Exception:
+            # Fallback to aplay if mpg123 fails
+            try:
+                subprocess.run(["aplay", "-q", str(path)], check=False)
+            except Exception:
+                pass
+
+    def _play_live(self, text):
+        """Generate and play TTS on the fly (uncached)."""
+        print(f"🔊 Speaking: {text}")
+        try:
+            resp = client.audio.speech.create(
+                model="tts-1", voice=TTS_VOICE, input=text)
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            resp.stream_to_file(tmp.name)
+            self._play_file(tmp.name)
+            os.unlink(tmp.name)
+        except Exception as e:
+            print(f"   TTS error: {e}")
+            subprocess.run(["espeak", text], check=False)
+
+# ── BEEP FALLBACK ──────────────────────────────
+def beep(freq=440, dur=0.2):
+    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), False)
+    sd.play((np.sin(freq * t * 2 * np.pi) * 0.3).astype(np.float32),
+            SAMPLE_RATE)
+    sd.wait()
+
+def beep_ready():
+    beep(523, 0.1); time.sleep(0.05)
+    beep(659, 0.1); time.sleep(0.05)
+    beep(784, 0.2)
+
+# ── RECORD ──────────────────────────────────────
+def record_audio():
+    print(f"🎙️  Recording for {RECORD_SECONDS}s...")
+    frames = []
+    def cb(indata, fc, ti, st): frames.append(indata.copy())
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, callback=cb):
+        time.sleep(RECORD_SECONDS)
+    if not frames: return None
+    audio = np.concatenate(frames)
+    if len(audio) / SAMPLE_RATE < 0.5: return None
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    sf.write(tmp.name, audio, SAMPLE_RATE)
+    print(f"   Recorded {len(audio)/SAMPLE_RATE:.1f}s")
+    return tmp.name
+
+# ── TRANSCRIBE ──────────────────────────────────
+def transcribe(path):
+    print("📝 Transcribing...")
+    with open(path, "rb") as f:
+        r = client.audio.transcriptions.create(model="whisper-1", file=f)
+    os.unlink(path)
+    print(f'   Heard: "{r.text}"')
+    return r.text
+
+# ── GENERATE ────────────────────────────────────
+def generate_image(desc):
+    print(f"🎨 Generating: {desc}")
+    r = client.images.generate(
+        model="gpt-image-1",
+        prompt=f"{COLORING_PROMPT}\n\nChild requested: {desc}",
+        size="1024x1024", quality="medium")
+    img_bytes = base64.b64decode(r.data[0].b64_json)
+    img = Image.open(BytesIO(img_bytes)).convert("L")
+    img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
+    img = img.resize((1125, 1125), Image.LANCZOS)
+    canvas = Image.new("L", (1275, 1650), 255)
+    canvas.paste(img, (75, 262))
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    canvas.save(tmp.name); tmp.close()
+    return tmp.name
+
+# ── PRINT ───────────────────────────────────────
+def print_image(path):
+    print("🖨️  Printing...")
+    subprocess.run(["lp", "-d", PRINTER_NAME,
+        "-o", "media=Letter", "-o", "fit-to-page", path], check=True)
+    os.unlink(path)
+    print("   ✅ Sent to printer!")
+
+# ── MAIN ────────────────────────────────────────
+is_busy = False
+
+def main():
+    global is_busy
+    btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
+
+    voice = VoiceFeedback()
+
+    print("=" * 48)
+    print("  🎨 DrawBox Ready!")
+    print("  Press the red button to start!")
+    print("=" * 48)
+    voice.play("ready")
+
+    try:
+        while True:
+            btn.wait_for_press()
+
+            # ── LONG-PRESS REBOOT ──
+            held = 0.0
+            while btn.is_pressed:
+                time.sleep(0.1)
+                held += 0.1
+                if held >= REBOOT_HOLD_SEC:
+                    print("🔄 Reboot requested (5s hold)")
+                    voice.play("reboot")
+                    subprocess.run(["sudo", "reboot"])
+                    return  # script exits; systemd won't restart (clean exit)
+            # Button released before 5s — normal press
+
+            # ── BUSY GUARD ──
+            if is_busy:
+                voice.play("busy", block=False)
+                continue
+
+            is_busy = True
+            try:
+                # LISTENING
+                voice.play("listening")
+                path = record_audio()
+
+                if not path:
+                    voice.play("too_short")
+                elif not (text := transcribe(path)) or len(text.strip()) < 2:
+                    voice.play("too_short")
+                elif not is_safe(text):
+                    print(f"🚫 Blocked: {text}")
+                    voice.play("blocked")
+                else:
+                    # THINKING (random variation)
+                    voice.play("thinking")
+                    img = generate_image(text)
+
+                    # PRINTING
+                    voice.play("printing")
+                    print_image(img)
+
+                    # DONE
+                    voice.play("done")
+
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                voice.play("error")
+            finally:
+                is_busy = False
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down")
+
+if __name__ == "__main__":
+    main()
+</pre></div>
+</div></div>
+
+<div class="step" data-n="9" id="s9">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Manual test (no button yet)</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>Test the image pipeline before wiring hardware:</p>
+<div class="cb"><span class="ll">bash</span>python3 -c "
+from openai import OpenAI
+import base64, subprocess, os, tempfile
+from PIL import Image
+from io import BytesIO
+
+client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+print('Generating test image...')
+r = client.images.generate(model='gpt-image-1',
+    prompt='Simple coloring page for kids: a happy dinosaur. Black and white line drawing, thick outlines, no shading.',
+    size='1024x1024', quality='medium')
+print('Processing...')
+img = Image.open(BytesIO(base64.b64decode(r.data[0].b64_json))).convert('L')
+img = img.point(lambda x: 0 if x < 180 else 255, '1').convert('L')
+img = img.resize((1125, 1125), Image.LANCZOS)
+c = Image.new('L', (1275, 1650), 255)
+c.paste(img, (75, 262))
+t = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+c.save(t.name); t.close()
+print('Printing...')
+subprocess.run(['lp','-d','drawbox-printer','-o','media=Letter','-o','fit-to-page',t.name])
+os.unlink(t.name)
+print('Done! Check printer.')
+"</div>
+<p>A dinosaur coloring page should print. If it does — core pipeline works! 🦕</p>
+<div class="al al-d"><span class="al-i">🔧</span><div><strong>Troubleshoot:</strong> API error → check <code>echo $OPENAI_API_KEY</code> · Image too dark → lower 180 to 150 · Too light → raise to 200 · Printer error → <code>lpstat -p</code></div></div>
+</div></div>
+
+<div class="step" data-n="10" id="s10">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Set up auto-start on boot</div><span class="stm">3 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>Makes DrawBox start when Pi powers on — no SSH needed.</p>
+<div class="cb"><span class="ll">bash</span>sudo tee /etc/systemd/system/drawbox.service << 'EOF'
+[Unit]
+Description=DrawBox AI Coloring Page Printer
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Environment=OPENAI_API_KEY=sk-your-actual-key-here
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/python3 /home/pi/drawbox.py
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Install]
+WantedBy=multi-user.target
+EOF</div>
+<div class="cb"><span class="ll">bash</span>sudo systemctl daemon-reload
+sudo systemctl enable drawbox
+sudo systemctl start drawbox
+
+<span class="cm"># Check status</span>
+sudo systemctl status drawbox
+
+<span class="cm"># Watch live logs</span>
+journalctl -u drawbox -f</div>
+<div class="al al-w"><span class="al-i">⚠️</span><div>Replace <code>sk-your-actual-key-here</code> with your real key from Step 7. Replace <code>pi</code> if you used a different username. Systemd doesn't read <code>~/.bashrc</code>, so the key must be set here too.</div></div>
+<div class="al al-yt"><span class="al-i">▶️</span><div><strong>Video guide:</strong> <a href="https://www.youtube.com/results?search_query=raspberry+pi+systemd+service+autostart+python" target="_blank" rel="noopener">Search: Raspberry Pi systemd autostart Python</a></div></div>
+</div></div>
+</div>
+
+<!-- ======= PHASE 4: HARDWARE ======= -->
+<div class="phase" id="s11">
+<div class="ph"><div class="pi" style="background:#fce4ec">🔌</div><div><h2>Phase 4 — Hardware Wiring</h2><p>Button, mic, speaker → Pi</p></div></div>
+
+<div class="step" data-n="11">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Wire the 100mm arcade button</div><span class="stm">10 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>The EG STARTS 100mm button has a <strong>microswitch</strong> underneath with 3 terminals: COM, NO, NC.</p>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>LED note:</strong> The built-in LED is 12V — Pi GPIO is 3.3V so the LED won't light. That's fine, the button works perfectly as a switch without it.</div></div>
+<div class="dg"><div class="dl">Wiring Diagram</div>
+<pre style="font-family:'SF Mono',monospace;font-size:12px;line-height:1.6;margin:0">EG STARTS 100mm Button              Raspberry Pi 5
+
+  ┌─────────────┐
+  │ Microswitch  │
+  │              │
+  │  COM ●───────────────────► Pin 11 (GPIO 17)
+  │              │
+  │  NO  ●───────────────────► Pin 9  (GND)
+  │              │
+  │  NC  ●       │  ← ignore, don't connect
+  └─────────────┘
+
+Pi GPIO Header (USB ports facing right):
+         3V3  [1]  [2]  5V
+             [3]  [4]  5V
+             [5]  [6]  GND
+             [7]  [8]
+  GND ►  [9]  [10]
+  GPIO17 ► [11] [12]
+</pre></div>
+<p><strong>Steps:</strong> Attach wires to COM and NO on microswitch → COM → Pin 11 (GPIO 17), NO → Pin 9 (GND)</p>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Test:</strong> <code>python3 -c "from gpiozero import Button; b=Button(17); print('pressed' if b.is_pressed else 'open')"</code> → prints "open" normally, "pressed" when held down.</div></div>
+<div class="al al-yt"><span class="al-i">▶️</span><div><strong>Video guide:</strong> <a href="https://www.youtube.com/results?search_query=arcade+button+raspberry+pi+GPIO+wiring" target="_blank" rel="noopener">Search: Arcade button Raspberry Pi GPIO wiring</a></div></div>
+</div></div>
+
+<div class="step" data-n="12" id="s12">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Plug in mic & speaker</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<div class="al al-w"><span class="al-i">⚠️</span><div><strong>Pi 5 has no headphone jack!</strong> Audio output must go through USB or Bluetooth. We use a USB speaker plugged into a Pi USB port.</div></div>
+<p><strong>CHANGEEK mic:</strong> USB-A into any free Pi port. Gooseneck bends through enclosure slot.</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Verify mic is detected</span>
+arecord -l
+<span class="cm"># Should show "USB PnP Sound Device"</span>
+
+<span class="cm"># Test record (5 sec)</span>
+arecord -d 5 -f S16_LE -r 44100 test.wav</div>
+<p><strong>USB speaker:</strong> Plug into another USB-A port on the Pi.</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Verify speaker is detected</span>
+aplay -l
+<span class="cm"># Should show a "USB Audio" or "USB Speaker" device</span>
+
+<span class="cm"># Play back your test recording through USB speaker</span>
+aplay test.wav
+
+<span class="cm"># Test with a tone</span>
+speaker-test -t wav -c 1</div>
+<p><strong>Set default audio devices:</strong> The Pi sees multiple sound cards. Create <code>~/.asoundrc</code> to route audio correctly:</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Check your card numbers (mic and speaker will differ per Pi)</span>
+arecord -l   <span class="cm"># note the card number for "USB PnP Sound Device"</span>
+aplay -l     <span class="cm"># note the card number for your USB speaker</span>
+
+<span class="cm"># Create ALSA config (adjust card numbers to match yours)</span>
+cat > ~/.asoundrc << 'EOF'
+pcm.!default {
+    type asym
+    playback.pcm "plug:hw:3,0"
+    capture.pcm "plug:hw:2,0"
+}
+ctl.!default {
+    type hw
+    card 3
+}
+EOF</div>
+<div class="al al-w"><span class="al-i">⚠️</span><div><strong>Card numbers vary!</strong> Your mic might be card 2 and speaker card 3, or different. Use the numbers from <code>arecord -l</code> and <code>aplay -l</code> above. After creating <code>.asoundrc</code>, test with: <code>arecord -d 3 test.wav && aplay test.wav</code></div></div>
+<p style="margin-top:16px"><strong>Temporary alternative: Bluetooth speaker</strong></p>
+<p>If you don't have a USB speaker yet, the Pi 5 has built-in Bluetooth. Pair any Bluetooth speaker:</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Start Bluetooth pairing</span>
+bluetoothctl
+<span class="cm"># Inside bluetoothctl:</span>
+power on
+agent on
+scan on
+<span class="cm"># Wait for your speaker to appear, note its MAC address (XX:XX:XX:XX:XX:XX)</span>
+pair XX:XX:XX:XX:XX:XX
+trust XX:XX:XX:XX:XX:XX
+connect XX:XX:XX:XX:XX:XX
+exit
+
+<span class="cm"># Verify audio routes to Bluetooth</span>
+speaker-test -t wav -c 1</div>
+<div class="al al-n"><span class="al-i">💡</span><div><strong>Auto-reconnect:</strong> After trusting a Bluetooth speaker, PipeWire (Pi OS Bookworm) will auto-reconnect on boot — as long as the speaker is powered on and in range. If it drops, reconnect manually: <code>bluetoothctl connect XX:XX:XX:XX:XX:XX</code></div></div>
+<div class="al al-yt"><span class="al-i">▶️</span><div><strong>Video guide:</strong> <a href="https://www.youtube.com/results?search_query=raspberry+pi+5+usb+audio+bluetooth+speaker+setup" target="_blank" rel="noopener">Search: Raspberry Pi 5 USB audio & Bluetooth speaker setup</a></div></div>
+</div></div>
+
+<div class="step" data-n="13" id="s13">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Full integration test</div><span class="stm">5 min</span><span class="se">▼</span></div>
+<div class="sb">
+<div class="cb"><span class="ll">bash</span>sudo systemctl stop drawbox  <span class="cm"># stop service</span>
+python3 ~/drawbox.py          <span class="cm"># run manually to see output</span></div>
+<p><strong>The moment of truth:</strong></p>
+<p>1. Watch console for "Warming up voice cache…" — first run caches all TTS lines ✓</p>
+<p>2. Hear: "Ready! Press the button and tell me what to draw!" ✓</p>
+<p>3. Press the big red button ✓</p>
+<p>4. Hear: "I'm listening!" — speak: "a happy cat wearing a birthday hat" ✓</p>
+<p>5. Hear a random thinking line like: "Ooh, great idea! Let me draw that for you!" ✓</p>
+<p>6. Hear: "Here it comes!" — printer starts ✓</p>
+<p>7. Hear: "All done! Press the button when you want another one!" ✓</p>
+<p>8. Press button while busy — hear: "Hold on, I'm still working…" (ignored) ✓</p>
+<p>9. Coloring page prints in ~20-30 seconds! 🎉🎉🎉</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Once verified, restart auto-start</span>
+sudo systemctl start drawbox</div>
+</div></div>
+</div>
+
+<!-- ======= PHASE 5: ENCLOSURE ======= -->
+<div class="phase" id="s14">
+<div class="ph"><div class="pi" style="background:#fff3e0">📦</div><div><h2>Phase 5 — Cardboard Enclosure</h2><p>Two-piece: Printer Shell + Control Deck</p></div></div>
+
+<div class="step" data-n="14">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Cut all panels</div><span class="stm">20 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>Using your Golden State Art sheets. White side faces OUT. Cut all holes before assembly.</p>
+<div class="al al-w"><span class="al-i">⚠️</span><div><strong>Updated for 100mm button:</strong> Button hole is 100mm. Control Deck height is 80mm for dome clearance. Mic gets a 30×15mm slot for the gooseneck.</div></div>
+<table>
+<tr><th>Panel</th><th>Part</th><th>Size (mm)</th><th>Holes</th></tr>
+<tr><td><strong>A</strong></td><td>Shell — Back</td><td>400 × 220</td><td>⌀30mm + ⌀25mm (cables, near bottom)</td></tr>
+<tr><td><strong>B</strong></td><td>Shell — Left</td><td>395 × 220</td><td>None</td></tr>
+<tr><td><strong>C</strong></td><td>Shell — Right</td><td>395 × 220</td><td>None</td></tr>
+<tr><td><strong>D</strong></td><td>Shell — Top</td><td>400 × 395</td><td>280×150mm output window</td></tr>
+<tr><td><strong>E</strong></td><td>Deck — Top</td><td>400 × 170</td><td>⌀100mm button, 30×15mm mic slot</td></tr>
+<tr><td><strong>F</strong></td><td>Deck — Bottom</td><td>400 × 170</td><td>None</td></tr>
+<tr><td><strong>G</strong></td><td>Deck — Front</td><td>400 × 80</td><td>None</td></tr>
+<tr><td><strong>H</strong></td><td>Deck — Back</td><td>400 × 80</td><td>18×10mm USB-C + ⌀20mm USB</td></tr>
+<tr><td><strong>I</strong></td><td>Deck — Left</td><td>164 × 80</td><td>None</td></tr>
+<tr><td><strong>J</strong></td><td>Deck — Right</td><td>164 × 80</td><td>None</td></tr>
+<tr><td><strong>K</strong></td><td>Lip Strips ×4</td><td>2× 400×15 + 2× 170×15</td><td>None</td></tr>
+</table>
+<div class="dg"><div class="dl">Deck Top Panel (E) — Hole Positions</div>
+<svg viewBox="0 0 520 240" width="100%">
+<rect x="50" y="30" width="400" height="170" fill="#f0ebe1" stroke="#2c2c2c" stroke-width="2" rx="2"/>
+<text x="250" y="22" text-anchor="middle" font-size="10" fill="#888">BACK</text>
+<text x="250" y="218" text-anchor="middle" font-size="10" fill="#888">FRONT</text>
+<circle cx="180" cy="115" r="50" fill="white" stroke="#c0392b" stroke-width="2"/>
+<text x="180" y="112" text-anchor="middle" font-size="11" fill="#c0392b" font-weight="700">BUTTON</text>
+<text x="180" y="127" text-anchor="middle" font-size="10" fill="#c0392b">⌀100mm</text>
+<rect x="283" y="100" width="30" height="15" rx="7" fill="white" stroke="#c0392b" stroke-width="1.5"/>
+<text x="298" y="92" text-anchor="middle" font-size="9" fill="#c0392b" font-weight="600">MIC SLOT</text>
+<text x="298" y="130" text-anchor="middle" font-size="8" fill="#c0392b">30×15mm</text>
+<line x1="50" y1="230" x2="180" y2="230" stroke="#c0392b" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="115" y="243" text-anchor="middle" font-size="10" fill="#c0392b" font-weight="600">130mm center</text>
+<line x1="50" y1="226" x2="50" y2="234" stroke="#c0392b" stroke-width="1"/>
+<line x1="180" y1="226" x2="180" y2="234" stroke="#c0392b" stroke-width="1"/>
+</svg>
+</div>
+</div></div>
+
+<div class="step" data-n="15" id="s15">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Build the Printer Shell</div><span class="stm">15 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>White side OUT on all panels.</p>
+<p><strong>1.</strong> Stand Panel A (back) upright. Glue Panel B (left) at 90° to its left edge, flush bottom. Glue Panel C (right) to the other side. → U-shape.</p>
+<div class="dg"><div class="dl">U-Shape (top view)</div>
+<svg viewBox="0 0 400 180" width="100%">
+<rect x="80" y="25" width="240" height="120" fill="#d4a373" stroke="#2c2c2c" stroke-width="2"/>
+<text x="200" y="90" text-anchor="middle" font-size="12" fill="#fff" font-weight="600">BACK (A)</text>
+<polygon points="80,25 30,50 30,170 80,145" fill="#c49363" stroke="#2c2c2c" stroke-width="2"/>
+<text x="48" y="110" text-anchor="middle" font-size="9" fill="#fff" font-weight="600" transform="rotate(-75,48,110)">LEFT (B)</text>
+<polygon points="320,25 370,50 370,170 320,145" fill="#c49363" stroke="#2c2c2c" stroke-width="2"/>
+<text x="352" y="110" text-anchor="middle" font-size="9" fill="#fff" font-weight="600" transform="rotate(75,352,110)">RIGHT (C)</text>
+<line x1="80" y1="25" x2="80" y2="145" stroke="#e74c3c" stroke-width="3"/>
+<line x1="320" y1="25" x2="320" y2="145" stroke="#e74c3c" stroke-width="3"/>
+<text x="80" y="18" text-anchor="middle" font-size="9" fill="#e74c3c" font-weight="700">GLUE</text>
+<text x="320" y="18" text-anchor="middle" font-size="9" fill="#e74c3c" font-weight="700">GLUE</text>
+<text x="200" y="172" text-anchor="middle" font-size="10" fill="#888">← OPEN FRONT →</text>
+</svg></div>
+<p><strong>2.</strong> Glue Panel D (top) onto all three walls. Output window faces the front, 70mm solid at back.</p>
+<p><strong>3.</strong> Slide Brother printer in from front. Thread cables through back holes.</p>
+</div></div>
+
+<div class="step" data-n="16" id="s16">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Build Control Deck & install components</div><span class="stm">20 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p><strong>1. Build the box:</strong> Panel F (bottom) flat → glue walls G, H, I, J around edges. <strong>Don't glue top yet.</strong></p>
+<p><strong>2. Install inside:</strong></p>
+<div class="dg"><div class="dl">Internal Layout (top view, lid off)</div>
+<svg viewBox="0 0 500 220" width="100%">
+<rect x="50" y="20" width="400" height="170" fill="#fff" stroke="#2c2c2c" stroke-width="2" rx="2"/>
+<text x="250" y="14" text-anchor="middle" font-size="9" fill="#888">BACK</text>
+<text x="250" y="206" text-anchor="middle" font-size="9" fill="#888">FRONT</text>
+<rect x="70" y="42" width="85" height="56" fill="#2d8c3c" stroke="#1a6b28" stroke-width="1.5" rx="2"/>
+<text x="112" y="68" text-anchor="middle" font-size="9" fill="#fff" font-weight="600">Raspberry</text>
+<text x="112" y="81" text-anchor="middle" font-size="9" fill="#fff" font-weight="600">Pi 5</text>
+<rect x="340" y="38" width="55" height="55" fill="#555" stroke="#333" stroke-width="1.5" rx="25"/>
+<circle cx="367" cy="65" r="18" fill="#444" stroke="#333" stroke-width="1"/>
+<text x="367" y="69" text-anchor="middle" font-size="8" fill="#aaa">SPKR</text>
+<circle cx="200" cy="110" r="42" fill="none" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4,3"/>
+<text x="200" y="108" text-anchor="middle" font-size="9" fill="#c0392b">100mm Button</text>
+<text x="200" y="120" text-anchor="middle" font-size="8" fill="#c0392b">(through top)</text>
+<rect x="283" y="100" width="18" height="8" rx="3" fill="none" stroke="#c0392b" stroke-width="1.5"/>
+<text x="292" y="122" text-anchor="middle" font-size="7" fill="#c0392b">Mic</text>
+</svg></div>
+<p>a. Pi → bottom with foam tape (left side, USB ports right)<br/>
+b. Snap 100mm button into Panel E top hole<br/>
+c. Feed CHANGEEK mic USB through slot, gooseneck pointing up<br/>
+d. Button wires: COM→GPIO 17, NO→GND<br/>
+e. USB mic → Pi USB port<br/>
+f. USB speaker → Pi USB port (can sit outside or inside the enclosure)<br/>
+g. USB-B cable out back → down to printer<br/>
+h. USB-C power out back slot</p>
+<p><strong>3. Close top:</strong> Use <strong>velcro strips</strong> (not glue) so you can open for maintenance.</p>
+<p><strong>4. Add lip strips:</strong> Glue K strips around underside bottom edges — they nest inside the Shell walls.</p>
+</div></div>
+
+<div class="step" data-n="17" id="s17">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Finishing touches</div><span class="stm">10 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>White cardboard = clean look already. No wrapping needed!</p>
+<p><strong>Labels</strong> (print on the Brother and glue on):</p>
+<p style="font-size:16px;margin-left:16px"><strong>"🎙️ PRESS TO START"</strong> — next to button<br/><strong>"🎨 DrawBox"</strong> — front of Control Deck</p>
+<p>Stick 4 rubber bumper pads on bottom. Place Deck on Shell. Plug in power. Load paper. Wait for ready chime.</p>
+<div class="dg"><div class="dl">Final Assembly</div>
+<svg viewBox="0 0 500 360" width="100%">
+<polygon points="100,15 400,15 430,37 130,37" fill="#d4a373" stroke="#2c2c2c" stroke-width="2"/>
+<rect x="100" y="37" width="300" height="55" fill="#f5f0e8" stroke="#2c2c2c" stroke-width="2"/>
+<polygon points="400,15 430,37 430,92 400,92" fill="#e8e0d0" stroke="#2c2c2c" stroke-width="2"/>
+<ellipse cx="210" cy="24" rx="20" ry="7" fill="#e74c3c" stroke="#c0392b" stroke-width="2"/>
+<text x="250" y="72" text-anchor="middle" font-size="13" fill="#666" font-weight="600">🎨 DrawBox</text>
+<rect x="100" y="100" width="300" height="200" fill="#f5f0e8" stroke="#2c2c2c" stroke-width="2"/>
+<polygon points="400,100 430,122 430,322 400,300" fill="#e8e0d0" stroke="#2c2c2c" stroke-width="2"/>
+<polygon points="100,100 400,100 430,122 130,122" fill="#f0ebe1" stroke="#2c2c2c" stroke-width="2"/>
+<polygon points="170,104 350,104 365,118 185,118" fill="#fff" stroke="#2c2c2c" stroke-width="1"/>
+<rect x="120" y="150" width="260" height="130" fill="none" stroke="#ccc" stroke-width="1" stroke-dasharray="6,4" rx="3"/>
+<text x="250" y="210" text-anchor="middle" font-size="11" fill="#bbb">Brother HL-L2405W</text>
+<rect x="200" y="78" width="65" height="28" fill="#fff" stroke="#ddd" stroke-width="1" rx="2" transform="rotate(-2,232,92)"/>
+<text x="232" y="96" text-anchor="middle" font-size="7" fill="#ccc">coloring page!</text>
+<text x="250" y="345" text-anchor="middle" font-size="11" fill="#555">400mm wide × 395mm deep × ~300mm tall</text>
+</svg></div>
+<div style="background:#eafaf1;border:2px solid #27ae60;border-radius:12px;padding:22px;margin-top:18px;text-align:center">
+<p style="font-size:26px;margin-bottom:6px">🎉</p>
+<p style="font-size:18px;font-weight:700;color:#27ae60">DrawBox Complete!</p>
+<p style="font-size:13px;color:#555;margin-top:6px">Press the button, say something, watch the magic happen.</p>
+</div>
+</div></div>
+</div>
+
+<!-- ======= PHASE 6: FINISHING UP ======= -->
+<div class="phase" id="s18">
+<div class="ph"><div class="pi" style="background:#ebf5fb">📶</div><div><h2>Phase 6 — Finishing Up</h2><p>WiFi portability, cost protection, and reliability</p></div></div>
+
+<div class="step" data-n="18">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">WiFi portability</div><span class="stm">3 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>DrawBox needs WiFi to reach the OpenAI API. Here's how to connect it to a new network (grandma's house, school, vacation rental…).</p>
+<p><strong>Option A — SSH in and switch:</strong></p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># From your laptop (same WiFi first)</span>
+ssh pi@drawbox.local
+
+<span class="cm"># Scan available networks</span>
+nmcli dev wifi list
+
+<span class="cm"># Connect to new network</span>
+sudo nmcli dev wifi connect "New-WiFi-Name" password "wifi-password"
+
+<span class="cm"># Verify</span>
+ping -c 3 google.com</div>
+<p><strong>Option B — Pre-save multiple networks (set-and-forget):</strong></p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Add grandma's WiFi now — Pi auto-connects when in range</span>
+sudo nmcli con add type wifi ifname wlan0 con-name "Grandma" \
+     ssid "Grandma-WiFi" wifi-sec.key-mgmt wpa-psk \
+     wifi-sec.psk "grandma-password"
+
+<span class="cm"># List all saved networks</span>
+nmcli con show
+
+<span class="cm"># Remove one you don't need anymore</span>
+sudo nmcli con delete "Grandma"</div>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Pro tip:</strong> Name your phone hotspot the <strong>same SSID and password</strong> as your home WiFi. DrawBox will auto-connect to your phone's hotspot anywhere — instant portable WiFi, no config needed.</div></div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div>Pi OS Bookworm uses NetworkManager by default, so <code>nmcli</code> works out of the box. No extra packages needed.</div></div>
+</div></div>
+
+<div class="step" data-n="19" id="s19">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Cost cap & reliability</div><span class="stm">3 min</span><span class="se">▼</span></div>
+<div class="sb">
+<div class="al al-d"><span class="al-i">🚨</span><div><strong>Set a spending limit — do this now!</strong><br/>Go to <strong>platform.openai.com → Settings → Billing → Usage Limits</strong>.<br/>Set a monthly hard cap of <strong>$10–20</strong>. At ~$0.06/page, that's 150–300 coloring pages per month.<br/>This prevents a stuck button or bug from racking up a surprise bill.</div></div>
+<p><strong>Crash protection:</strong> The service file (Step 10) is already configured to restart on failure, but stop after 5 crashes in 5 minutes. This prevents a broken API key or network outage from burning through retries.</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Check if service is running</span>
+sudo systemctl status drawbox
+
+<span class="cm"># View recent logs</span>
+journalctl -u drawbox -e --no-pager -n 30
+
+<span class="cm"># Restart after fixing an issue</span>
+sudo systemctl restart drawbox</div>
+<p><strong>Log rotation:</strong> Prevent the journal from filling your SD card over time:</p>
+<div class="cb"><span class="ll">bash</span><span class="cm"># Trim logs to 50 MB max</span>
+sudo journalctl --vacuum-size=50M</div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>Voice cache:</strong> The TTS cache at <code>~/.drawbox/voice_cache/</code> is tiny (~2 MB). It regenerates automatically if you delete it. No maintenance needed.</div></div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>What happens if WiFi drops?</strong> The script catches the error, says "Oops, something went wrong. Try again!", and waits for the next button press. No data is lost. Once WiFi is back, it works again.</div></div>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Safe reboot:</strong> <strong>Hold the button for 5 seconds</strong> to safely reboot the Pi. DrawBox says "Rebooting now!" and restarts cleanly. Never yank the power cable — that can corrupt the SD card over time.</div></div>
+</div></div>
+
+<div class="step" data-n="20" id="s20">
+<div class="sh" onclick="togS(this)"><div class="sc" onclick="event.stopPropagation();togC(this)">✓</div><div class="st">Web dashboard</div><span class="stm">2 min</span><span class="se">▼</span></div>
+<div class="sb">
+<p>A lightweight web dashboard running on the Pi that you can access from <strong>any browser on your local network</strong> — your Mac, phone, tablet, whatever. Trigger prints, see logs, change settings, run diagnostics, and access Raspberry Pi Connect — all from <code>http://drawbox.local:5000</code>.</p>
+
+<p><strong>One-command deploy from your Mac:</strong></p>
+<div class="cb"><span class="ll">terminal (on your Mac)</span><span class="cm"># From the drawbox project folder on your Mac:</span>
+./deploy-web.sh</div>
+<p>That's it! The script automatically:</p>
+<p>1. Copies <code>drawbox_web.py</code>, <code>drawbox-guide.html</code>, and <code>drawbox-simulator.html</code> to the Pi</p>
+<p>2. Installs Flask if missing</p>
+<p>3. Configures sudoers for service control</p>
+<p>4. Reads your OpenAI API key from the existing <code>drawbox.service</code></p>
+<p>5. Creates and starts the <code>drawbox-web</code> systemd service</p>
+<p>6. Verifies the dashboard is responding</p>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>Re-deploy anytime:</strong> Made changes? Just run <code>./deploy-web.sh</code> again — it's idempotent. Files get overwritten and the service restarts.</div></div>
+<p><strong>Open it!</strong> Go to <code>http://drawbox.local:5000</code> from any browser on your network.</p>
+
+<p style="margin-top:20px"><strong>Manual setup (if you prefer):</strong></p>
+<details style="margin-bottom:14px">
+<summary style="cursor:pointer;font-size:13px;color:var(--blue);font-weight:600">Click to expand manual steps</summary>
+<div style="margin-top:12px">
+<div class="pf"><div class="pfh"><span class="dot dr"></span><span class="dot dy"></span><span class="dot dg2"></span>drawbox_web.py</div>
+<pre>#!/usr/bin/env python3
+"""DrawBox Web Dashboard — Control panel accessible from any browser on your network."""
+
+import os, json, tempfile, subprocess, base64
+from pathlib import Path
+from io import BytesIO
+from flask import Flask, request, jsonify, Response, render_template_string, send_file
+from openai import OpenAI
+from PIL import Image
+
+# ── CONFIG ───────────────────────────────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+PRINTER_NAME = "drawbox-printer"
+SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
+GUIDE_PATH = Path.home() / "drawbox-guide.html"
+SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
+
+DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
+This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
+- Black and white LINE DRAWING only
+- Thick, clean outlines (3-4px stroke)
+- NO shading, NO gradients, NO filled/solid areas
+- NO gray — pure black lines on white
+- Simple shapes, minimal fine detail
+- Large open areas for coloring with crayons
+- Friendly, fun, cute, non-scary style
+- Centered, filling most of the space
+- Style: children's coloring book page
+- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
+- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
+- If the request is ambiguous, default to the most innocent interpretation"""
+
+# ── SAFETY BLOCKLIST ─────────────────────────────
+BLOCKED_WORDS = {
+    "kill", "murder", "dead", "death", "die", "dying", "corpse",
+    "blood", "bloody", "gore", "gory", "wound", "stab", "shoot",
+    "gun", "guns", "rifle", "pistol", "shotgun", "weapon", "knife",
+    "bomb", "explode", "explosion", "grenade", "missile", "nuke",
+    "sex", "sexy", "sexual", "nude", "naked", "porn", "hentai",
+    "penis", "dick", "cock", "vagina", "pussy", "boob", "breast",
+    "nipple", "butt", "ass", "anus", "genital", "erotic", "orgasm",
+    "fuck", "shit", "damn", "bitch", "bastard", "crap", "piss",
+    "whore", "slut", "hooker", "prostitute", "stripper",
+    "drug", "drugs", "cocaine", "heroin", "meth", "weed", "marijuana",
+    "alcohol", "beer", "wine", "vodka", "drunk", "cigarette", "smoke",
+    "devil", "satan", "demon", "hell", "torture", "horror", "zombie",
+    "vampire", "skeleton", "skull", "coffin", "grave", "creepy",
+    "scary", "nightmare", "terror", "evil", "wicked", "curse",
+    "hate", "racist", "racism", "nazi", "hitler", "slavery", "slave",
+    "suicide", "hanging", "noose", "drown", "poison", "overdose",
+    "rape", "molest", "abuse", "kidnap", "assault", "victim",
+    "war", "soldier", "army", "military", "combat", "battle",
+    "thong", "lingerie", "bikini", "underwear",
+    "poop", "pee", "fart", "vomit", "snot",
+}
+
+def is_safe(text):
+    words = text.lower()
+    return not any(w in words for w in BLOCKED_WORDS)
+
+# ── SETTINGS ─────────────────────────────────────
+def load_settings():
+    if SETTINGS_FILE.exists():
+        try:
+            return json.loads(SETTINGS_FILE.read_text())
+        except Exception:
+            pass
+    return {"coloring_prompt": DEFAULT_COLORING_PROMPT,
+            "tts_voice": "nova", "record_seconds": 10}
+
+def save_settings(data):
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+
+# ── IMAGE GENERATION & PRINTING ──────────────────
+client = OpenAI(api_key=OPENAI_API_KEY)
+is_generating = False
+last_image_b64 = None
+
+def generate_image(desc):
+    settings = load_settings()
+    prompt = settings.get("coloring_prompt", DEFAULT_COLORING_PROMPT)
+    r = client.images.generate(
+        model="gpt-image-1",
+        prompt=f"{prompt}\n\nChild requested: {desc}",
+        size="1024x1024", quality="medium")
+    img_bytes = base64.b64decode(r.data[0].b64_json)
+    img = Image.open(BytesIO(img_bytes)).convert("L")
+    img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
+    img = img.resize((1125, 1125), Image.LANCZOS)
+    canvas = Image.new("L", (1275, 1650), 255)
+    canvas.paste(img, (75, 262))
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    canvas.save(tmp.name); tmp.close()
+    return tmp.name
+
+def print_image(path):
+    subprocess.run(["lp", "-d", PRINTER_NAME,
+        "-o", "media=Letter", "-o", "fit-to-page", path], check=True)
+    os.unlink(path)
+
+# ── DIAGNOSTICS ALLOWLIST ────────────────────────
+DIAGNOSTIC_COMMANDS = {
+    "printer_status": ["lpstat", "-p", "-d"],
+    "printer_queue":  ["lpstat", "-o"],
+    "audio_inputs":   ["arecord", "-l"],
+    "audio_outputs":  ["aplay", "-l"],
+    "service_status": ["systemctl", "status", "drawbox"],
+    "web_service":    ["systemctl", "status", "drawbox-web"],
+    "disk_usage":     ["df", "-h", "/"],
+    "uptime":         ["uptime"],
+    "temperature":    ["vcgencmd", "measure_temp"],
+    "wifi_status":    ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi"],
+    "wifi_list":      ["nmcli", "dev", "wifi", "list"],
+    "rpi_connect":    ["rpi-connect", "status"],
+    "journal_errors": ["journalctl", "-u", "drawbox", "-p", "err", "-n", "20", "--no-pager"],
+    "cups_log":       ["tail", "-n", "30", "/var/log/cups/error_log"],
+}
+
+# ── FLASK APP ────────────────────────────────────
+app = Flask(__name__)
+
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawBox Dashboard</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--border:#e8e5de;--text:#1a1a1a;--muted:#666;--accent:#c0392b;--green:#27ae60;--blue:#2980b9;--amber:#f39c12;--dark:#2c2c2c;--code-bg:#1e1e1e;--code-text:#d4d4d4}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.65}
+.wrap{max-width:720px;margin:0 auto;padding:24px 20px 80px}
+.hero{background:var(--dark);color:#fff;padding:28px 28px;border-radius:14px;margin-bottom:22px;position:relative;overflow:hidden}
+.hero::after{content:'\\1F3A8';position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:64px;opacity:.12}
+.hero h1{font-size:24px;margin-bottom:4px}
+.hero p{color:#aaa;font-size:13px}
+.hero-links{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.hero-links a{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;font-size:12px;font-weight:600;background:rgba(255,255,255,.12);color:#fff;border-radius:7px;text-decoration:none;transition:background .2s}
+.hero-links a:hover{background:rgba(255,255,255,.22)}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:18px;overflow:hidden}
+.panel-h{padding:12px 18px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.panel-b{padding:16px 18px}
+.status-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.status-item{background:var(--bg);border-radius:8px;padding:10px 14px;text-align:center}
+.status-item .val{font-size:16px;font-weight:700;margin-bottom:2px}
+.status-item .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.dot-green{background:var(--green)}.dot-red{background:var(--accent)}.dot-amber{background:var(--amber)}
+.cfg-row{margin-bottom:14px}
+.cfg-row:last-child{margin-bottom:0}
+.cfg-row label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.cfg-row input,.cfg-row select,.cfg-row textarea{display:block;width:100%;padding:9px 14px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12.5px;background:var(--code-bg);color:var(--code-text);border:2px solid var(--border);border-radius:7px;outline:none;transition:border-color .2s}
+.cfg-row input:focus,.cfg-row select:focus,.cfg-row textarea:focus{border-color:var(--blue)}
+.cfg-row select{cursor:pointer;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+.cfg-row textarea{resize:vertical;min-height:120px;line-height:1.5}
+.gen-row{display:flex;gap:10px}
+.gen-row input{flex:1}
+.btn{padding:9px 20px;font-size:13px;font-weight:600;border:none;border-radius:7px;cursor:pointer;transition:background .2s,opacity .2s}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-red{background:var(--accent);color:#fff}.btn-red:hover:not(:disabled){background:#a93226}
+.btn-blue{background:var(--blue);color:#fff}.btn-blue:hover:not(:disabled){background:#2471a3}
+.btn-green{background:var(--green);color:#fff}.btn-green:hover:not(:disabled){background:#229954}
+.btn-dark{background:var(--dark);color:#fff}.btn-dark:hover:not(:disabled){background:#444}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover:not(:disabled){background:var(--bg)}
+.btn-sm{padding:6px 12px;font-size:11px}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.log-area{background:var(--code-bg);color:var(--code-text);border-radius:0 0 10px 10px;padding:14px 18px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:11.5px;line-height:1.7;height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+.diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:14px}
+.diag-out{background:var(--code-bg);color:var(--code-text);border-radius:8px;padding:14px 18px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:11.5px;line-height:1.6;min-height:60px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+.preview-img{max-width:100%;border:1px solid var(--border);border-radius:6px;margin-top:12px;display:none}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 24px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;z-index:999;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+.toast-ok{background:var(--green)}.toast-err{background:var(--accent)}
+@media(max-width:600px){
+.wrap{padding:14px 12px 60px}
+.hero{padding:20px 18px;border-radius:10px}
+.hero h1{font-size:20px}
+.gen-row{flex-direction:column}
+.status-grid{grid-template-columns:1fr 1fr}
+.diag-grid{grid-template-columns:1fr 1fr}
+.log-area{height:220px;font-size:11px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <h1>DrawBox Dashboard</h1>
+    <p>Control panel for your AI coloring page printer</p>
+    <div class="hero-links">
+      <a href="/guide" target="_blank">&#128214; Build Guide</a>
+      <a href="/simulator" target="_blank">&#127918; Simulator</a>
+      <a href="https://connect.raspberrypi.com" target="_blank" rel="noopener">&#128268; RPi Connect</a>
+    </div>
+  </div>
+
+  <!-- STATUS -->
+  <div class="panel">
+    <div class="panel-h">&#9889; Status</div>
+    <div class="panel-b">
+      <div class="status-grid" id="statusGrid">
+        <div class="status-item"><div class="val" id="svcStatus">...</div><div class="lbl">DrawBox Service</div></div>
+        <div class="status-item"><div class="val" id="piTemp">...</div><div class="lbl">Pi Temperature</div></div>
+        <div class="status-item"><div class="val" id="piUptime">...</div><div class="lbl">Uptime</div></div>
+        <div class="status-item"><div class="val" id="rpiConnect">...</div><div class="lbl">RPi Connect</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GENERATE -->
+  <div class="panel">
+    <div class="panel-h">&#127912; Generate &amp; Print</div>
+    <div class="panel-b">
+      <div class="gen-row">
+        <input type="text" id="genInput" placeholder="A happy dinosaur with flowers..." style="padding:9px 14px;font-size:14px;border:2px solid var(--border);border-radius:7px;outline:none" />
+        <button class="btn btn-red" id="genBtn" onclick="doGenerate()">Generate &amp; Print</button>
+      </div>
+      <img class="preview-img" id="previewImg" alt="Last generated coloring page" />
+    </div>
+  </div>
+
+  <!-- LOGS -->
+  <div class="panel">
+    <div class="panel-h">&#128220; Live Logs <button class="btn btn-outline btn-sm" onclick="clearLog()" style="margin-left:auto">Clear</button></div>
+    <div class="log-area" id="logArea">Connecting to log stream...\n</div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="panel">
+    <div class="panel-h">&#9881; Settings</div>
+    <div class="panel-b">
+      <div class="cfg-row">
+        <label>Coloring Prompt</label>
+        <textarea id="cfgPrompt" rows="8"></textarea>
+      </div>
+      <div class="cfg-row">
+        <label>TTS Voice</label>
+        <select id="cfgVoice">
+          <option value="nova">nova</option>
+          <option value="alloy">alloy</option>
+          <option value="echo">echo</option>
+          <option value="fable">fable</option>
+          <option value="onyx">onyx</option>
+          <option value="shimmer">shimmer</option>
+        </select>
+      </div>
+      <div class="cfg-row">
+        <label>Record Seconds</label>
+        <input type="number" id="cfgRecSec" min="3" max="30" />
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn btn-blue" onclick="saveSettings()">Save Settings</button>
+        <button class="btn btn-outline" onclick="loadSettings()">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DIAGNOSTICS -->
+  <div class="panel">
+    <div class="panel-h">&#128295; Diagnostics</div>
+    <div class="panel-b">
+      <div class="diag-grid">
+        <button class="btn btn-outline btn-sm" onclick="runDiag('printer_status')">Printer Status</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('printer_queue')">Print Queue</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('audio_inputs')">Audio Inputs</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('audio_outputs')">Audio Outputs</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('service_status')">Service Status</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('web_service')">Web Service</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('disk_usage')">Disk Usage</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('temperature')">Temperature</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('wifi_status')">WiFi Status</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('wifi_list')">WiFi Networks</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('rpi_connect')">RPi Connect</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('journal_errors')">Error Logs</button>
+        <button class="btn btn-outline btn-sm" onclick="runDiag('cups_log')">CUPS Log</button>
+      </div>
+      <div class="diag-out" id="diagOut">Click a button above to run a diagnostic command.</div>
+    </div>
+  </div>
+
+  <!-- SERVICE CONTROL -->
+  <div class="panel">
+    <div class="panel-h">&#9881; Service Control</div>
+    <div class="panel-b">
+      <div class="btn-row">
+        <button class="btn btn-green" onclick="svcAction('restart')">Restart DrawBox</button>
+        <button class="btn btn-dark" onclick="svcAction('stop')">Stop DrawBox</button>
+        <button class="btn btn-blue" onclick="svcAction('start')">Start DrawBox</button>
+        <button class="btn btn-outline" onclick="if(confirm('Reboot the entire Pi?'))rebootPi()">Reboot Pi</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $log=document.getElementById('logArea');
+const $genBtn=document.getElementById('genBtn');
+const $genInput=document.getElementById('genInput');
+const $preview=document.getElementById('previewImg');
+
+// ── TOAST ──────────────────────────────────────
+function toast(msg,ok=true){
+  const t=document.getElementById('toast');
+  t.textContent=msg;
+  t.className='toast show '+(ok?'toast-ok':'toast-err');
+  setTimeout(()=>t.classList.remove('show'),3000);
+}
+
+// ── STATUS ─────────────────────────────────────
+async function refreshStatus(){
+  try{
+    const r=await fetch('/api/status');
+    const d=await r.json();
+    document.getElementById('svcStatus').innerHTML=
+      (d.service_running?'<span class="dot dot-green"></span>Running':'<span class="dot dot-red"></span>Stopped');
+    document.getElementById('piTemp').textContent=d.temperature||'--';
+    document.getElementById('piUptime').textContent=d.uptime||'--';
+    document.getElementById('rpiConnect').innerHTML=
+      d.rpi_connect==='unknown'?'--':
+      (d.rpi_connect==='connected'?'<span class="dot dot-green"></span>Connected':
+       '<span class="dot dot-amber"></span>'+d.rpi_connect);
+  }catch(e){}
+}
+refreshStatus();
+setInterval(refreshStatus,15000);
+
+// ── GENERATE ───────────────────────────────────
+async function doGenerate(){
+  const desc=$genInput.value.trim();
+  if(!desc){toast('Type a description first',false);return;}
+  $genBtn.disabled=true;$genBtn.textContent='Generating...';
+  try{
+    const r=await fetch('/api/generate',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({description:desc})});
+    const d=await r.json();
+    if(d.ok){
+      toast('Coloring page sent to printer!');
+      if(d.image){$preview.src='data:image/png;base64,'+d.image;$preview.style.display='block';}
+      $genInput.value='';
+    }else{toast(d.error||'Generation failed',false);}
+  }catch(e){toast('Network error: '+e.message,false);}
+  $genBtn.disabled=false;$genBtn.textContent='Generate & Print';
+}
+$genInput.addEventListener('keydown',e=>{if(e.key==='Enter')doGenerate();});
+
+// ── LOGS (SSE) ─────────────────────────────────
+let evtSrc=null;
+function connectLogs(){
+  if(evtSrc)evtSrc.close();
+  evtSrc=new EventSource('/api/logs');
+  evtSrc.onmessage=e=>{
+    $log.textContent+=e.data+'\\n';
+    $log.scrollTop=$log.scrollHeight;
+  };
+  evtSrc.onerror=()=>{
+    $log.textContent+='[log stream disconnected — reconnecting...]\\n';
+  };
+}
+connectLogs();
+function clearLog(){$log.textContent='';}
+
+// ── SETTINGS ───────────────────────────────────
+async function loadSettings(){
+  try{
+    const r=await fetch('/api/settings');
+    const d=await r.json();
+    document.getElementById('cfgPrompt').value=d.coloring_prompt||'';
+    document.getElementById('cfgVoice').value=d.tts_voice||'nova';
+    document.getElementById('cfgRecSec').value=d.record_seconds||10;
+  }catch(e){}
+}
+async function saveSettings(){
+  const data={
+    coloring_prompt:document.getElementById('cfgPrompt').value,
+    tts_voice:document.getElementById('cfgVoice').value,
+    record_seconds:parseInt(document.getElementById('cfgRecSec').value)||10
+  };
+  try{
+    const r=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    const d=await r.json();
+    if(d.ok)toast('Settings saved!');
+    else toast('Save failed',false);
+  }catch(e){toast('Error: '+e.message,false);}
+}
+loadSettings();
+
+// ── DIAGNOSTICS ────────────────────────────────
+async function runDiag(cmd){
+  const out=document.getElementById('diagOut');
+  out.textContent='Running '+cmd+'...';
+  try{
+    const r=await fetch('/api/diagnostics',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({command:cmd})});
+    const d=await r.json();
+    out.textContent=d.output||d.error||'No output';
+  }catch(e){out.textContent='Error: '+e.message;}
+}
+
+// ── SERVICE CONTROL ────────────────────────────
+async function svcAction(action){
+  try{
+    const r=await fetch('/api/service/'+action,{method:'POST'});
+    const d=await r.json();
+    toast(d.message||(action+' done'));
+    setTimeout(refreshStatus,2000);
+  }catch(e){toast('Error: '+e.message,false);}
+}
+async function rebootPi(){
+  try{
+    await fetch('/api/reboot',{method:'POST'});
+    toast('Rebooting Pi...');
+  }catch(e){toast('Error: '+e.message,false);}
+}
+</script>
+</body>
+</html>"""
+
+# ── ROUTES ───────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+@app.route("/guide")
+def guide():
+    if GUIDE_PATH.exists():
+        return send_file(GUIDE_PATH)
+    return "Guide not found. Copy drawbox-guide.html to ~/", 404
+
+@app.route("/simulator")
+def simulator():
+    if SIMULATOR_PATH.exists():
+        return send_file(SIMULATOR_PATH)
+    return "Simulator not found. Copy drawbox-simulator.html to ~/", 404
+
+@app.route("/api/status")
+def api_status():
+    # Service status
+    svc = subprocess.run(["systemctl", "is-active", "drawbox"],
+                         capture_output=True, text=True)
+    running = svc.stdout.strip() == "active"
+
+    # Temperature
+    temp = "--"
+    try:
+        t = subprocess.run(["vcgencmd", "measure_temp"],
+                           capture_output=True, text=True, timeout=5)
+        temp = t.stdout.strip().replace("temp=", "")
+    except Exception:
+        pass
+
+    # Uptime
+    up = "--"
+    try:
+        u = subprocess.run(["uptime", "-p"],
+                           capture_output=True, text=True, timeout=5)
+        up = u.stdout.strip().replace("up ", "")
+    except Exception:
+        pass
+
+    # RPi Connect
+    rpi = "unknown"
+    try:
+        rc = subprocess.run(["rpi-connect", "status"],
+                            capture_output=True, text=True, timeout=5)
+        out = rc.stdout.strip().lower()
+        if "connected" in out:
+            rpi = "connected"
+        elif "not" in out or rc.returncode != 0:
+            rpi = "off"
+        else:
+            rpi = out[:20]
+    except FileNotFoundError:
+        rpi = "not installed"
+    except Exception:
+        pass
+
+    return jsonify(service_running=running, temperature=temp,
+                   uptime=up, rpi_connect=rpi)
+
+@app.route("/api/generate", methods=["POST"])
+def api_generate():
+    global is_generating, last_image_b64
+    if is_generating:
+        return jsonify(ok=False, error="Already generating — please wait.")
+
+    data = request.get_json() or {}
+    desc = (data.get("description") or "").strip()
+    if not desc:
+        return jsonify(ok=False, error="Please describe what to draw.")
+    if len(desc) > 500:
+        return jsonify(ok=False, error="Description too long (max 500 chars).")
+    if not is_safe(desc):
+        return jsonify(ok=False,
+            error="That description contains blocked words. "
+                  "Try something fun like an animal or a rainbow!")
+
+    is_generating = True
+    try:
+        path = generate_image(desc)
+        # Read image for preview before printing
+        with open(path, "rb") as f:
+            last_image_b64 = base64.b64encode(f.read()).decode()
+        print_image(path)
+        return jsonify(ok=True, image=last_image_b64)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+    finally:
+        is_generating = False
+
+@app.route("/api/logs")
+def api_logs():
+    def generate():
+        proc = subprocess.Popen(
+            ["journalctl", "-u", "drawbox", "-f", "-n", "50", "--no-pager"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            for line in proc.stdout:
+                yield f"data: {line.rstrip()}\n\n"
+        except GeneratorExit:
+            proc.kill()
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    if request.method == "GET":
+        return jsonify(load_settings())
+    data = request.get_json() or {}
+    settings = load_settings()
+    if "coloring_prompt" in data:
+        settings["coloring_prompt"] = data["coloring_prompt"][:5000]
+    if "tts_voice" in data:
+        settings["tts_voice"] = data["tts_voice"]
+    if "record_seconds" in data:
+        settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
+    save_settings(settings)
+    return jsonify(ok=True)
+
+@app.route("/api/diagnostics", methods=["POST"])
+def api_diagnostics():
+    data = request.get_json() or {}
+    cmd_key = data.get("command", "")
+    if cmd_key not in DIAGNOSTIC_COMMANDS:
+        return jsonify(error="Unknown command: " + cmd_key)
+    cmd = DIAGNOSTIC_COMMANDS[cmd_key]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        output = r.stdout
+        if r.stderr:
+            output += "\n" + r.stderr
+        return jsonify(output=output.strip() or "(no output)")
+    except FileNotFoundError:
+        return jsonify(output=f"Command not found: {cmd[0]}")
+    except subprocess.TimeoutExpired:
+        return jsonify(output="Command timed out after 15 seconds.")
+    except Exception as e:
+        return jsonify(error=str(e))
+
+@app.route("/api/service/<action>", methods=["POST"])
+def api_service(action):
+    if action not in ("restart", "stop", "start"):
+        return jsonify(ok=False, message="Invalid action"), 400
+    try:
+        subprocess.run(["sudo", "systemctl", action, "drawbox"],
+                       check=True, timeout=30)
+        return jsonify(ok=True,
+                       message=f"DrawBox service {action}ed successfully.")
+    except Exception as e:
+        return jsonify(ok=False, message=str(e))
+
+@app.route("/api/reboot", methods=["POST"])
+def api_reboot():
+    try:
+        subprocess.Popen(["sudo", "reboot"])
+        return jsonify(ok=True, message="Rebooting...")
+    except Exception as e:
+        return jsonify(ok=False, message=str(e))
+
+# ── MAIN ─────────────────────────────────────────
+if __name__ == "__main__":
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    print("DrawBox Web Dashboard starting on http://0.0.0.0:5000")
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+</pre></div>
+
+<p><strong>5. Create the systemd service:</strong></p>
+<div class="cb"><span class="ll">bash</span>sudo tee /etc/systemd/system/drawbox-web.service << 'EOF'
+[Unit]
+Description=DrawBox Web Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Environment=OPENAI_API_KEY=sk-your-actual-key-here
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/python3 /home/pi/drawbox_web.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF</div>
+
+<p><strong>6. Enable and start:</strong></p>
+<div class="cb"><span class="ll">bash</span>sudo systemctl daemon-reload
+sudo systemctl enable drawbox-web
+sudo systemctl start drawbox-web
+
+<span class="cm"># Check it's running</span>
+sudo systemctl status drawbox-web</div>
+
+</div>
+</details>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Phone access:</strong> Open <code>http://drawbox.local:5000</code> on your phone (same WiFi). You can generate coloring pages, check logs, and restart the service — all from the couch. Add it to your home screen for quick access.</div></div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>RPi Connect:</strong> If you have <a href="https://connect.raspberrypi.com" target="_blank" rel="noopener">Raspberry Pi Connect</a> configured, the dashboard shows its status and links directly to the remote access portal. You can also check its status from the Diagnostics panel.</div></div>
+<div class="al al-n"><span class="al-i">ℹ️</span><div><strong>API key:</strong> The deploy script automatically reads your key from <code>drawbox.service</code> or <code>~/.bashrc</code>. If neither exists, pass it manually: <code>./deploy-web.sh pi@drawbox.local sk-your-key</code></div></div>
+<div class="al al-t"><span class="al-i">💡</span><div><strong>Health check:</strong> Run <code>./check.sh</code> from your Mac to verify the entire Pi setup — internet, API key, mic, speaker, printer, GPIO, dependencies, script correctness, and services. It SSHes into the Pi and checks everything automatically.</div></div>
+</div></div>
+</div>
+
+<!-- ======= TROUBLESHOOTING ======= -->
+<div class="phase">
+<div class="ph"><div class="pi" style="background:#fdf0ef">🔧</div><div><h2>Troubleshooting</h2><p>Quick fixes for common issues</p></div></div>
+<table>
+<tr><th style="width:30%">Problem</th><th>Fix</th></tr>
+<tr><td><strong>Printer not detected</strong></td><td><code>lsusb</code> — Brother showing? Try different USB port. Replug. <code>sudo tail /var/log/cups/error_log</code></td></tr>
+<tr><td><strong>Mic not recording</strong></td><td><code>arecord -l</code> to list. Set device explicitly in script if multiple found.</td></tr>
+<tr><td><strong>No speaker sound</strong></td><td><code>aplay -l</code> to verify USB speaker is detected. <code>speaker-test -t wav</code>. If using Bluetooth: <code>bluetoothctl connect XX:XX:XX:XX:XX:XX</code></td></tr>
+<tr><td><strong>Button no response</strong></td><td>Test: <code>python3 -c "from gpiozero import Button; b=Button(17); print('pressed' if b.is_pressed else 'open')"</code></td></tr>
+<tr><td><strong>Images too dark</strong></td><td>Lower threshold: change 180 to 150 in script</td></tr>
+<tr><td><strong>Image generation errors</strong></td><td><code>echo $OPENAI_API_KEY</code>, check billing at platform.openai.com, <code>ping google.com</code></td></tr>
+<tr><td><strong>Service won't start</strong></td><td><code>journalctl -u drawbox -e</code> — usually wrong API key or username in service file</td></tr>
+<tr><td><strong>WiFi won't connect</strong></td><td><code>nmcli dev wifi list</code> to scan. <code>sudo nmcli dev wifi connect "SSID" password "pass"</code>. Or use phone hotspot with same SSID as home WiFi.</td></tr>
+<tr><td><strong>Service keeps crashing</strong></td><td><code>journalctl -u drawbox -e</code> to see errors. After 5 crashes in 5 min the service stops — fix the issue, then <code>sudo systemctl start drawbox</code></td></tr>
+<tr><td><strong>Need to reboot</strong></td><td>Hold the big red button for 5 seconds. DrawBox says "Rebooting now!" and restarts safely. Don't unplug — that risks SD card corruption.</td></tr>
+<tr><td><strong>Dashboard not loading</strong></td><td><code>sudo systemctl status drawbox-web</code> — is it running? <code>curl http://localhost:5000</code> from the Pi. Check Flask is installed: <code>python3 -c "import flask"</code>. Make sure you're on the same WiFi network.</td></tr>
+<tr><td><strong>SSH dies after reboot</strong></td><td>Enable both units: <code>sudo systemctl enable ssh.socket && sudo systemctl enable ssh.service</code>. Then reboot and test.</td></tr>
+<tr><td><strong>Not sure what's wrong</strong></td><td>Run <code>./check.sh</code> from your Mac — it checks everything (internet, API key, mic, speaker, printer, GPIO, dependencies, script, services) and shows ✅/❌/⚠️ for each.</td></tr>
+</table>
+</div>
+
+</div>
+
+<script>
+function togS(h){h.parentElement.classList.toggle('open')}
+function togC(el){el.closest('.step').classList.toggle('done');upd();save()}
+const _steps=document.querySelectorAll('.step');
+const _navLinks=document.querySelectorAll('.nav a[href^="#"]');
+const _navMap={};
+_navLinks.forEach(a=>{const h=a.getAttribute('href');if(h)_navMap[h.slice(1)]=a;});
+function upd(){
+let d=0;
+_steps.forEach((el,i)=>{
+const done=el.classList.contains('done');
+if(done)d++;
+if(_navLinks[i])_navLinks[i].classList.toggle('done',done);
+});
+document.getElementById('pf').style.width=Math.round(d/_steps.length*100)+'%';
+document.getElementById('pt').textContent=d+' / '+_steps.length;
+}
+function save(){
+const s={};_steps.forEach((el,i)=>s[i]=el.classList.contains('done'));
+window._state=s;
+}
+_navLinks.forEach(a=>{
+a.addEventListener('click',e=>{
+const h=a.getAttribute('href');
+if(h&&h.startsWith('#')){e.preventDefault();
+const t=document.querySelector(h);
+if(t){t.scrollIntoView({behavior:'smooth',block:'start'});
+document.querySelector('.nav').classList.remove('open')}}})});
+function updScript(){
+const v=document.getElementById('cprompt').value;
+const s=document.getElementById('prompt-in-script');
+if(s)s.textContent=v;
+}
+document.getElementById('cprompt').addEventListener('input',updScript);
+let _activeLink=null;
+let _rafPending=false;
+const obs=new IntersectionObserver(es=>{
+if(_rafPending)return;
+_rafPending=true;
+requestAnimationFrame(()=>{
+_rafPending=false;
+for(let i=es.length-1;i>=0;i--){
+if(es[i].isIntersecting){
+const l=_navMap[es[i].target.id];
+if(l&&l!==_activeLink){
+if(_activeLink)_activeLink.classList.remove('active');
+l.classList.add('active');
+_activeLink=l;
+}
+break;
+}}});
+},{rootMargin:'-20% 0px -70% 0px'});
+document.querySelectorAll('[id^="s"]').forEach(el=>obs.observe(el));
+</script>
+</body>
+</html>

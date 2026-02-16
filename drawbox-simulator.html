@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawBox Simulator</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--border:#e8e5de;--text:#1a1a1a;--muted:#666;--accent:#c0392b;--green:#27ae60;--blue:#2980b9;--amber:#f39c12;--dark:#2c2c2c;--code-bg:#1e1e1e;--code-text:#d4d4d4}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.65;min-height:100vh}
+
+/* ── LAYOUT ──────────────────────────────────── */
+.wrap{max-width:680px;margin:0 auto;padding:24px 20px 80px}
+.hero{background:var(--dark);color:#fff;padding:36px 32px;border-radius:14px;margin-bottom:28px;position:relative;overflow:hidden}
+.hero::after{content:'🎨';position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:64px;opacity:.12}
+.hero h1{font-size:26px;margin-bottom:4px}
+.hero p{color:#aaa;font-size:13px}
+
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;overflow:hidden}
+.panel-h{padding:14px 20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.panel-b{padding:16px 20px}
+
+/* ── CONFIG FORM ─────────────────────────────── */
+.cfg-row{margin-bottom:14px}
+.cfg-row:last-child{margin-bottom:0}
+.cfg-row label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.cfg-row input,.cfg-row select,.cfg-row textarea{display:block;width:100%;padding:9px 14px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12.5px;background:var(--code-bg);color:var(--code-text);border:2px solid var(--border);border-radius:7px;outline:none;transition:border-color .2s}
+.cfg-row input:focus,.cfg-row select:focus,.cfg-row textarea:focus{border-color:var(--blue)}
+.cfg-row select{cursor:pointer;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+.cfg-row textarea{resize:vertical;min-height:120px;line-height:1.5}
+.cfg-inline{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.key-wrap{position:relative}
+.key-wrap input{padding-right:40px}
+.key-tog{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px}
+
+/* ── BUTTON ──────────────────────────────────── */
+.btn-area{display:flex;flex-direction:column;align-items:center;padding:28px 20px}
+.big-btn{width:150px;height:150px;border-radius:50%;border:6px solid #8b1a1a;background:radial-gradient(circle at 35% 35%,#e74c3c,#a93226 60%,#7b241c);color:#fff;font-size:18px;font-weight:700;cursor:pointer;box-shadow:0 6px 20px rgba(192,57,43,.35),inset 0 2px 0 rgba(255,255,255,.15);transition:transform .1s,box-shadow .1s;user-select:none;-webkit-tap-highlight-color:transparent;position:relative;outline:none}
+.big-btn:active{transform:scale(.95);box-shadow:0 2px 10px rgba(192,57,43,.3),inset 0 2px 0 rgba(255,255,255,.1)}
+.big-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.big-btn.pulse{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 6px 20px rgba(192,57,43,.35),inset 0 2px 0 rgba(255,255,255,.15)}50%{box-shadow:0 6px 30px rgba(192,57,43,.6),0 0 40px rgba(192,57,43,.2),inset 0 2px 0 rgba(255,255,255,.15)}}
+.btn-hint{margin-top:14px;font-size:12px;color:var(--muted);text-align:center;line-height:1.5}
+
+/* ── STATE BADGE ─────────────────────────────── */
+.state-bar{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border)}
+.state-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.state-dot.idle{background:var(--green)}
+.state-dot.busy{background:var(--amber);animation:blink 1s ease-in-out infinite}
+.state-dot.err{background:var(--accent)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.state-label{font-size:13px;font-weight:600}
+
+/* ── LOG ─────────────────────────────────────── */
+.log-area{background:var(--code-bg);color:var(--code-text);border-radius:0 0 10px 10px;padding:14px 18px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12px;line-height:1.7;min-height:180px;max-height:360px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+.log-area .ts{color:#555}
+.log-area .err{color:#e74c3c}
+.log-area .ok{color:#27ae60}
+.log-area .info{color:#999}
+
+/* ── PRINT PREVIEW ───────────────────────────── */
+.preview-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px}
+.preview-img{max-width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;display:none}
+.preview-placeholder{width:100%;aspect-ratio:8.5/11;background:#f9f9f6;border:2px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:14px}
+.dl-btn{display:none;padding:10px 24px;font-size:13px;font-weight:600;background:var(--blue);color:#fff;border:none;border-radius:7px;cursor:pointer;transition:background .2s}
+.dl-btn:hover{background:#2471a3}
+
+/* ── RECORDING VIZ ───────────────────────────── */
+.rec-bar{height:4px;background:#333;border-radius:2px;margin:8px 0 0;overflow:hidden;display:none}
+.rec-fill{height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width .1s linear}
+.rec-bar.active{display:block}
+
+/* ── RESPONSIVE ──────────────────────────────── */
+@media(max-width:600px){
+.wrap{padding:14px 12px 60px}
+.hero{padding:24px 20px;border-radius:10px}
+.hero h1{font-size:22px}
+.big-btn{width:120px;height:120px;font-size:15px}
+.cfg-inline{grid-template-columns:1fr}
+.panel-b{padding:12px 14px}
+.log-area{min-height:140px;max-height:280px;font-size:11px}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <!-- HERO -->
+  <div class="hero">
+    <h1>DrawBox Simulator</h1>
+    <p>Test the full voice flow in your browser &mdash; no Pi required.</p>
+  </div>
+
+  <!-- CONFIG -->
+  <div class="panel">
+    <div class="panel-h">&#9881; Configuration</div>
+    <div class="panel-b">
+      <div class="cfg-row">
+        <label for="apikey">OpenAI API Key</label>
+        <div class="key-wrap">
+          <input id="apikey" type="password" placeholder="sk-..." spellcheck="false" autocomplete="off" />
+          <button class="key-tog" onclick="toggleKey()" title="Show/hide key">&#128065;</button>
+        </div>
+      </div>
+      <div class="cfg-row">
+        <label for="ttsvoice">TTS Voice</label>
+        <select id="ttsvoice">
+          <option value="nova" selected>nova</option>
+          <option value="alloy">alloy</option>
+          <option value="echo">echo</option>
+          <option value="fable">fable</option>
+          <option value="onyx">onyx</option>
+          <option value="shimmer">shimmer</option>
+        </select>
+      </div>
+      <div class="cfg-row">
+        <label for="recsec">Record Seconds</label>
+        <input id="recsec" type="number" value="10" min="3" max="30" />
+      </div>
+      <div class="cfg-row" style="margin-top:14px">
+        <label for="cprompt">Coloring Prompt</label>
+        <textarea id="cprompt" spellcheck="false">Create a simple coloring page for children ages 3-8.
+This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
+- Black and white LINE DRAWING only
+- Thick, clean outlines (3-4px stroke)
+- NO shading, NO gradients, NO filled/solid areas
+- NO gray — pure black lines on white
+- Simple shapes, minimal fine detail
+- Large open areas for coloring with crayons
+- Friendly, fun, cute, non-scary style
+- Centered, filling most of the space
+- Style: children's coloring book page
+- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
+- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
+- If the request is ambiguous, default to the most innocent interpretation</textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUTTON -->
+  <div class="panel">
+    <div class="panel-h">&#128308; Arcade Button</div>
+    <div class="btn-area">
+      <button id="bigbtn" class="big-btn pulse">PRESS</button>
+      <div class="btn-hint">
+        Press to start &nbsp;&bull;&nbsp; hold 5 s = reboot &nbsp;&bull;&nbsp; press while busy = "hold on!"
+      </div>
+    </div>
+  </div>
+
+  <!-- STATE + LOG -->
+  <div class="panel">
+    <div class="state-bar">
+      <div id="statedot" class="state-dot idle"></div>
+      <div id="statelabel" class="state-label">Ready</div>
+    </div>
+    <div class="rec-bar" id="recbar"><div class="rec-fill" id="recfill"></div></div>
+    <div class="log-area" id="logarea"></div>
+  </div>
+
+  <!-- PRINT PREVIEW -->
+  <div class="panel">
+    <div class="panel-h">&#128424; Print Preview</div>
+    <div class="preview-wrap">
+      <div class="preview-placeholder" id="placeholder">Coloring page will appear here</div>
+      <img class="preview-img" id="previewimg" alt="Coloring page preview" />
+      <button class="dl-btn" id="dlbtn" onclick="downloadImage()">&#11015;&#65039; Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── ELEMENTS ──────────────────────────────────────
+const $key     = document.getElementById('apikey');
+const $voice   = document.getElementById('ttsvoice');
+const $recSec  = document.getElementById('recsec');
+const $prompt  = document.getElementById('cprompt');
+const $btn     = document.getElementById('bigbtn');
+const $dot     = document.getElementById('statedot');
+const $label   = document.getElementById('statelabel');
+const $log     = document.getElementById('logarea');
+const $recBar  = document.getElementById('recbar');
+const $recFill = document.getElementById('recfill');
+const $img     = document.getElementById('previewimg');
+const $ph      = document.getElementById('placeholder');
+const $dl      = document.getElementById('dlbtn');
+
+// ── PERSIST CONFIG ────────────────────────────────
+(function loadCfg(){
+  const s = k => localStorage.getItem('db_'+k);
+  if(s('key'))     $key.value     = s('key');
+  if(s('voice'))   $voice.value   = s('voice');
+  if(s('recsec'))  $recSec.value  = s('recsec');
+  if(s('prompt'))  $prompt.value  = s('prompt');
+})();
+function saveCfg(){
+  const p = (k,v) => localStorage.setItem('db_'+k,v);
+  p('key',$key.value); p('voice',$voice.value);
+  p('recsec',$recSec.value); p('prompt',$prompt.value);
+}
+[$key,$voice,$recSec,$prompt].forEach(
+  el => el.addEventListener('input', saveCfg));
+$voice.addEventListener('change', saveCfg);
+
+function toggleKey(){
+  $key.type = $key.type==='password' ? 'text' : 'password';
+}
+
+// ── SAFETY BLOCKLIST ──────────────────────────────
+const BLOCKED_WORDS = [
+  "kill","murder","dead","death","die","dying","corpse",
+  "blood","bloody","gore","gory","wound","stab","shoot",
+  "gun","guns","rifle","pistol","shotgun","weapon","knife",
+  "bomb","explode","explosion","grenade","missile","nuke",
+  "sex","sexy","sexual","nude","naked","porn","hentai",
+  "penis","dick","cock","vagina","pussy","boob","breast",
+  "nipple","butt","ass","anus","genital","erotic","orgasm",
+  "fuck","shit","damn","bitch","bastard","crap","piss",
+  "whore","slut","hooker","prostitute","stripper",
+  "drug","drugs","cocaine","heroin","meth","weed","marijuana",
+  "alcohol","beer","wine","vodka","drunk","cigarette","smoke",
+  "devil","satan","demon","hell","torture","horror","zombie",
+  "vampire","skeleton","skull","coffin","grave","creepy",
+  "scary","nightmare","terror","evil","wicked","curse",
+  "hate","racist","racism","nazi","hitler","slavery","slave",
+  "suicide","hanging","noose","drown","poison","overdose",
+  "rape","molest","abuse","kidnap","assault","victim",
+  "war","soldier","army","military","combat","battle",
+  "thong","lingerie","bikini","underwear",
+  "poop","pee","fart","vomit","snot",
+];
+const SAFE_REJECT_MSG = "Hmm, I can't draw that. How about something fun like an animal or a rainbow?";
+
+function isSafe(text){
+  const lower = text.toLowerCase();
+  return !BLOCKED_WORDS.some(w => lower.includes(w));
+}
+
+// ── STATE ─────────────────────────────────────────
+let state = 'IDLE';
+let isBusy = false;
+let currentAudio = null;
+
+function setState(s, label){
+  state = s;
+  $label.textContent = label || s;
+  $dot.className = 'state-dot ' + (s==='IDLE' ? 'idle' : s==='ERROR' ? 'err' : 'busy');
+  if(s==='IDLE'){
+    $btn.disabled = false;
+    $btn.classList.add('pulse');
+    $btn.textContent = 'PRESS';
+  } else {
+    $btn.disabled = false; // always enabled for busy feedback
+    $btn.classList.remove('pulse');
+    $btn.textContent = '...';
+  }
+}
+
+// ── LOGGING ───────────────────────────────────────
+function log(msg, cls){
+  const t = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="ts">[${t}]</span> <span class="${cls||''}">${esc(msg)}</span>`;
+  $log.appendChild(line);
+  $log.scrollTop = $log.scrollHeight;
+}
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── BEEP (Web Audio API) ──────────────────────────
+function beep(freq=440, dur=0.2){
+  return new Promise(resolve => {
+    try {
+      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      gain.gain.value = 0.3;
+      osc.start();
+      osc.stop(ctx.currentTime + dur);
+      setTimeout(()=>{ ctx.close(); resolve(); }, dur*1000 + 50);
+    } catch(e){
+      log('Beep failed: '+e.message,'err');
+      resolve();
+    }
+  });
+}
+
+function soundReady(){
+  return beep(523,.1).then(()=>beep(659,.1)).then(()=>beep(784,.2));
+}
+
+// ── VOICE LINES ──────────────────────────────────
+const VOICE_LINES = {
+  ready:     "Ready! Press the button and tell me what to draw!",
+  listening: "I'm listening!",
+  thinking:  [
+    "Ooh, great idea! Let me draw that for you!",
+    "That sounds awesome! Drawing it now!",
+    "Cool! Give me a moment...",
+    "Love it! One coloring page coming right up!",
+    "Nice choice! Let me work on that!",
+  ],
+  printing:  "Here it comes!",
+  done:      "All done! Press the button when you want another one!",
+  error:     "Oops, something went wrong. Try again!",
+  too_short: "I didn't catch that. Press the button and tell me what you want to draw!",
+  busy:      "Hold on, I'm still working on your picture! Almost done...",
+  blocked:   "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
+  reboot:    "Rebooting now! See you in a moment.",
+};
+
+// ── TTS CACHE ────────────────────────────────────
+// Caches TTS audio blobs in memory (and IndexedDB for persistence)
+const ttsCache = new Map();
+
+async function warmUpCache(){
+  log('Warming up voice cache...','info');
+  const apiKey = $key.value.trim();
+  if(!apiKey){ log('No API key — skipping cache warm-up','info'); return; }
+  const all = [];
+  for(const [key,val] of Object.entries(VOICE_LINES)){
+    const lines = Array.isArray(val) ? val : [val];
+    for(const line of lines) all.push(line);
+  }
+  let cached = 0;
+  for(const text of all){
+    if(ttsCache.has(text)) { cached++; continue; }
+    try {
+      const blob = await fetchTTS(text, apiKey);
+      if(blob){ ttsCache.set(text, blob); cached++; }
+    } catch(e){ log('Cache miss: '+text.slice(0,40)+'...','info'); }
+  }
+  log(`Voice cache ready (${cached}/${all.length} lines)`,'ok');
+}
+
+async function fetchTTS(text, apiKey){
+  const resp = await fetch('https://api.openai.com/v1/audio/speech',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+    body:JSON.stringify({model:'tts-1', voice:$voice.value, input:text})
+  });
+  if(!resp.ok) throw new Error('TTS '+resp.status);
+  return await resp.blob();
+}
+
+// ── SPEAK ────────────────────────────────────────
+async function speakLine(key){
+  const val = VOICE_LINES[key];
+  const text = Array.isArray(val) ? val[Math.floor(Math.random()*val.length)] : val;
+  return speak(text);
+}
+
+async function speak(text){
+  log('Speaking: '+text);
+  // Try cache first
+  let blob = ttsCache.get(text);
+  if(!blob){
+    const apiKey = $key.value.trim();
+    if(!apiKey) return speakFallback(text);
+    try {
+      blob = await fetchTTS(text, apiKey);
+      ttsCache.set(text, blob);
+    } catch(e){
+      log('TTS error: '+e.message,'err');
+      return speakFallback(text);
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  currentAudio = audio;
+  await new Promise(r => setTimeout(r, 500)); // let speaker wake up
+  audio.play();
+  await new Promise((res)=>{
+    audio.onended = ()=>{ URL.revokeObjectURL(url); currentAudio=null; res(); };
+    audio.onerror = ()=>{ URL.revokeObjectURL(url); currentAudio=null; res(); };
+  });
+}
+
+function speakFallback(text){
+  return new Promise(resolve => {
+    if(!window.speechSynthesis){ log('No TTS available','err'); resolve(); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    u.onend = resolve;
+    u.onerror = ()=>{ log('Browser TTS error','err'); resolve(); };
+    speechSynthesis.speak(u);
+  });
+}
+
+// ── RECORD (MediaRecorder API) ────────────────────
+async function recordAudio(){
+  const sec = parseInt($recSec.value)||10;
+  log('Recording for '+sec+'s...');
+  setState('RECORDING','Recording '+sec+'s...');
+  $recBar.classList.add('active');
+  $recFill.style.width = '0%';
+  $recFill.style.transition = 'none';
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  } catch(e){
+    log('Mic access denied: '+e.message,'err');
+    $recBar.classList.remove('active');
+    return null;
+  }
+
+  return new Promise(resolve => {
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
+    recorder.onstop = ()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      $recBar.classList.remove('active');
+      if(!chunks.length){ resolve(null); return; }
+      resolve(new Blob(chunks,{type:'audio/webm'}));
+    };
+    recorder.start(250); // collect in 250ms chunks
+
+    // Animate progress bar
+    requestAnimationFrame(()=>{
+      $recFill.style.transition = 'width '+sec+'s linear';
+      $recFill.style.width = '100%';
+    });
+
+    setTimeout(()=>{
+      if(recorder.state==='recording') recorder.stop();
+    }, sec*1000);
+  });
+}
+
+// ── TRANSCRIBE (Whisper API) ──────────────────────
+async function transcribe(audioBlob){
+  log('Transcribing...');
+  setState('TRANSCRIBING','Transcribing...');
+  const apiKey = $key.value.trim();
+  if(!apiKey) throw new Error('No API key');
+  const form = new FormData();
+  form.append('file', audioBlob, 'recording.webm');
+  form.append('model','whisper-1');
+  const resp = await fetch('https://api.openai.com/v1/audio/transcriptions',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+apiKey},
+    body:form
+  });
+  if(!resp.ok){
+    const err = await resp.text();
+    throw new Error('Whisper API '+resp.status+': '+err.slice(0,200));
+  }
+  const data = await resp.json();
+  log('Heard: "'+data.text+'"','ok');
+  return data.text;
+}
+
+// ── GENERATE IMAGE (GPT Image API) ───────────────
+async function generateImage(desc){
+  log('Generating: '+desc);
+  setState('GENERATING','Generating image...');
+  const apiKey = $key.value.trim();
+  if(!apiKey) throw new Error('No API key');
+  const prompt = $prompt.value.trim() + '\n\nChild requested: ' + desc;
+  const resp = await fetch('https://api.openai.com/v1/images/generations',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'gpt-image-1',
+      prompt: prompt,
+      size:'1024x1024',
+      quality:'medium'
+    })
+  });
+  if(!resp.ok){
+    const err = await resp.text();
+    throw new Error('Image API '+resp.status+': '+err.slice(0,200));
+  }
+  const data = await resp.json();
+  const b64 = data.data[0].b64_json;
+  log('Image generated, post-processing...','ok');
+  return postProcess(b64);
+}
+
+// ── POST-PROCESS (matches Python Pillow pipeline) ─
+function postProcess(b64){
+  return new Promise((resolve,reject) => {
+    const img = new Image();
+    img.onload = ()=>{
+      try {
+        // Convert to grayscale, threshold, resize to letter page
+        const src = document.createElement('canvas');
+        src.width = img.width; src.height = img.height;
+        const sctx = src.getContext('2d');
+        sctx.drawImage(img,0,0);
+        const sd = sctx.getImageData(0,0,src.width,src.height);
+        // Grayscale
+        for(let i=0;i<sd.data.length;i+=4){
+          const g = sd.data[i]*0.299 + sd.data[i+1]*0.587 + sd.data[i+2]*0.114;
+          const v = g < 180 ? 0 : 255; // threshold
+          sd.data[i]=sd.data[i+1]=sd.data[i+2]=v;
+        }
+        sctx.putImageData(sd,0,0);
+
+        // Resize to 1125x1125
+        const rsz = document.createElement('canvas');
+        rsz.width = 1125; rsz.height = 1125;
+        const rctx = rsz.getContext('2d');
+        rctx.imageSmoothingEnabled = true;
+        rctx.imageSmoothingQuality = 'high';
+        rctx.drawImage(src,0,0,1125,1125);
+
+        // Place on letter canvas (1275x1650) with margins
+        const out = document.createElement('canvas');
+        out.width = 1275; out.height = 1650;
+        const octx = out.getContext('2d');
+        octx.fillStyle = '#fff';
+        octx.fillRect(0,0,1275,1650);
+        octx.drawImage(rsz,75,262);
+
+        resolve(out.toDataURL('image/png'));
+      } catch(e){ reject(e); }
+    };
+    img.onerror = ()=> reject(new Error('Failed to load generated image'));
+    img.src = 'data:image/png;base64,'+b64;
+  });
+}
+
+// ── SHOW IMAGE ────────────────────────────────────
+let lastImageURL = null;
+function showImage(dataUrl){
+  lastImageURL = dataUrl;
+  $img.src = dataUrl;
+  $img.style.display = 'block';
+  $ph.style.display = 'none';
+  $dl.style.display = 'inline-block';
+}
+function downloadImage(){
+  if(!lastImageURL) return;
+  const a = document.createElement('a');
+  a.href = lastImageURL;
+  a.download = 'drawbox-coloring-'+Date.now()+'.png';
+  a.click();
+}
+
+// ── BUTTON (long-press reboot detection) ─────────
+const REBOOT_HOLD_SEC = 5;
+let holdTimer = null;
+let holdStart = 0;
+let holdInterval = null;
+let isHolding = false;
+
+function onButtonDown(e){
+  e.preventDefault();
+  if(isHolding) return;
+  isHolding = true;
+  holdStart = Date.now();
+
+  // Update button text every 100ms to show countdown
+  holdInterval = setInterval(()=>{
+    const held = (Date.now() - holdStart) / 1000;
+    if(held >= REBOOT_HOLD_SEC){
+      clearInterval(holdInterval);
+      holdInterval = null;
+      isHolding = false;
+      simulateReboot();
+    } else if(held >= 0.5){
+      // Show countdown after half second (intentional hold)
+      $btn.textContent = Math.ceil(REBOOT_HOLD_SEC - held) + 's';
+    }
+  }, 100);
+}
+
+function onButtonUp(e){
+  e.preventDefault();
+  if(!isHolding) return;
+  isHolding = false;
+  if(holdInterval){ clearInterval(holdInterval); holdInterval = null; }
+
+  const held = (Date.now() - holdStart) / 1000;
+  // Restore button text
+  $btn.textContent = state === 'IDLE' ? 'PRESS' : '...';
+
+  // If held less than reboot threshold, treat as normal press
+  if(held < REBOOT_HOLD_SEC){
+    handlePress();
+  }
+}
+
+function handlePress(){
+  if(isBusy){
+    speakLine('busy');
+    log('Button pressed while busy — ignored','info');
+    return;
+  }
+  if(state==='IDLE'){
+    runFlow();
+  }
+}
+
+async function simulateReboot(){
+  log('🔄 Reboot requested (5s hold)','ok');
+  setState('REBOOTING','Rebooting...');
+  $btn.textContent = '🔄';
+  $btn.disabled = true;
+  await speakLine('reboot');
+  // Simulate reboot: show rebooting state, then reset after a few seconds
+  log('Simulated reboot — resetting in 3 seconds...','info');
+  await new Promise(r => setTimeout(r, 3000));
+  // Reset everything
+  isBusy = false;
+  ttsCache.clear();
+  $btn.disabled = false;
+  setState('IDLE','Ready');
+  log('DrawBox Simulator rebooted!','ok');
+  soundReady();
+  if($key.value.trim()) warmUpCache();
+}
+
+// Attach press/release listeners (mouse + touch)
+$btn.addEventListener('mousedown', onButtonDown);
+$btn.addEventListener('mouseup', onButtonUp);
+$btn.addEventListener('mouseleave', onButtonUp);
+$btn.addEventListener('touchstart', onButtonDown, {passive:false});
+$btn.addEventListener('touchend', onButtonUp, {passive:false});
+$btn.addEventListener('touchcancel', onButtonUp, {passive:false});
+
+// ── MAIN FLOW ─────────────────────────────────────
+async function runFlow(){
+  const apiKey = $key.value.trim();
+  if(!apiKey){
+    log('Please enter your OpenAI API key first.','err');
+    return;
+  }
+
+  isBusy = true;
+  try {
+    // LISTENING
+    setState('LISTENING','Listening...');
+    await speakLine('listening');
+    const audioBlob = await recordAudio();
+
+    if(!audioBlob){
+      await speakLine('too_short');
+      setState('IDLE','Ready');
+      return;
+    }
+
+    // TRANSCRIBE
+    let text;
+    try {
+      text = await transcribe(audioBlob);
+    } catch(e){
+      log('Transcription error: '+e.message,'err');
+      await speakLine('error');
+      setState('IDLE','Ready');
+      return;
+    }
+
+    if(!text || text.trim().length < 2){
+      await speakLine('too_short');
+      setState('IDLE','Ready');
+      return;
+    }
+
+    // SAFETY CHECK
+    if(!isSafe(text)){
+      log('Blocked: '+text,'err');
+      await speakLine('blocked');
+      setState('IDLE','Ready');
+      return;
+    }
+
+    // THINKING (random variation)
+    setState('THINKING','Generating...');
+    await speakLine('thinking');
+    let dataUrl;
+    try {
+      dataUrl = await generateImage(text);
+    } catch(e){
+      log('Image generation error: '+e.message,'err');
+      await speakLine('error');
+      setState('ERROR','Error');
+      setTimeout(()=> setState('IDLE','Ready'), 3000);
+      return;
+    }
+
+    // PRINTING
+    setState('PRINTING','Printing...');
+    await speakLine('printing');
+    showImage(dataUrl);
+    log('Coloring page ready!','ok');
+
+    // DONE
+    await speakLine('done');
+    setState('IDLE','Ready');
+
+  } catch(e){
+    log('Error: '+e.message,'err');
+    await speakLine('error');
+    setState('ERROR','Error');
+    setTimeout(()=> setState('IDLE','Ready'), 3000);
+  } finally {
+    isBusy = false;
+  }
+}
+
+// ── INIT ──────────────────────────────────────────
+log('DrawBox Simulator ready!','ok');
+log('Enter your OpenAI API key and press the red button to start.','info');
+soundReady();
+// Warm up voice cache once API key is present
+$key.addEventListener('change', ()=>{ if($key.value.trim()) warmUpCache(); });
+if($key.value.trim()) warmUpCache();
+</script>
+</body>
+</html>

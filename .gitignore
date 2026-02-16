@@ -1,0 +1,16 @@
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Voice cache (generated at runtime)
+voice_cache/
