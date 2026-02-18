@@ -6,6 +6,7 @@ Hardware: Pi 5, Brother HL-L2405W (USB), EG STARTS 100mm button,
 """
 
 import os, time, tempfile, subprocess, random, hashlib, threading
+from concurrent.futures import ThreadPoolExecutor
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
@@ -25,6 +26,7 @@ RECORD_SECONDS = 10
 REBOOT_HOLD_SEC = 5           # hold button 5s to reboot
 TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
 CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
+PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 
 # ── SAFETY BLOCKLIST ────────────────────────────
 BLOCKED_WORDS = {
@@ -53,6 +55,15 @@ BLOCKED_WORDS = {
 def is_safe(text):
     words = text.lower()
     return not any(w in words for w in BLOCKED_WORDS)
+
+def please_mode_enabled():
+    return PLEASE_MODE_FILE.exists()
+
+def has_please(text):
+    t = text.lower()
+    return any(w in t for w in (
+        "please", "s'il vous plait", "s'il te plait",
+        "s'il vous plaît", "s'il te plaît", "svp"))
 
 COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
 This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
@@ -92,8 +103,64 @@ VOICE_LINES = {
                   "Almost done..."),
     "blocked":   ("Hmm, I can't draw that. How about something "
                   "fun like an animal or a rainbow?"),
+    "say_please": ("Oops! Don't forget to say please! "
+                   "Try again and say the magic word!"),
     "reboot":    "Rebooting now! See you in a moment.",
 }
+
+# ── KIDS JOKES (told while generating) ─────────
+KIDS_JOKES = [
+    "Why did the teddy bear say no to dessert? Because she was already stuffed!",
+    "What do you call a sleeping dinosaur? A dino-snore!",
+    "What do you call a fish without eyes? A fsh!",
+    "Why do cows wear bells? Because their horns don't work!",
+    "What do you call a bear with no teeth? A gummy bear!",
+    "Why did the banana go to the doctor? Because it wasn't peeling well!",
+    "What do you call a dog that does magic tricks? A Labracadabrador!",
+    "Why can't you give Elsa a balloon? Because she will let it go!",
+    "What do you call a dinosaur that crashes their car? Tyrannosaurus Wrecks!",
+    "Why did the cookie go to the hospital? Because it felt crummy!",
+    "What do cats eat for breakfast? Mice Krispies!",
+    "What animal is always at a baseball game? A bat!",
+    "Why are ghosts bad at lying? Because you can see right through them!",
+    "What did the ocean say to the beach? Nothing, it just waved!",
+    "Why did the math book look so sad? Because it had too many problems!",
+    "What do you call a funny mountain? Hill-arious!",
+    "What do you call cheese that isn't yours? Nacho cheese!",
+    "Why did the student eat his homework? Because the teacher told him it was a piece of cake!",
+    "What has ears but cannot hear? A cornfield!",
+    "What do you call a pig that does karate? A pork chop!",
+    "Why did the bicycle fall over? Because it was two tired!",
+    "What did the big flower say to the little flower? Hi, bud!",
+    "What do elves learn in school? The elf-abet!",
+    "Why do bees have sticky hair? Because they use honeycombs!",
+    "What do you call a boomerang that won't come back? A stick!",
+    "Why did the golfer bring two pairs of pants? In case he got a hole in one!",
+    "What do you call a snowman with a six-pack? An abdominal snowman!",
+    "What did the left eye say to the right eye? Between you and me, something smells!",
+    "What do you call a train that sneezes? Achoo-choo train!",
+    "Why are elephants so wrinkly? Because you can't iron them!",
+    "What did one wall say to the other wall? I'll meet you at the corner!",
+    "What do you get when you cross a snowman and a vampire? Frostbite!",
+    "Why don't scientists trust atoms? Because they make up everything!",
+    "What kind of tree fits in your hand? A palm tree!",
+    "What do you call a lazy kangaroo? A pouch potato!",
+    "Why did the scarecrow win an award? Because he was outstanding in his field!",
+    "What do you call a duck that gets all A's? A wise quacker!",
+    "Why can't a leopard hide? Because he's always spotted!",
+    "What did the traffic light say to the car? Don't look, I'm about to change!",
+    "What do you call a cat sitting on the beach on Christmas Eve? Sandy Claws!",
+    "Why did the tomato turn red? Because it saw the salad dressing!",
+    "What do you get when you cross a centipede and a parrot? A walkie talkie!",
+    "What did the stamp say to the envelope? Stick with me and we'll go places!",
+    "Why are fish so smart? Because they live in schools!",
+    "What do you call a sleeping bull? A bulldozer!",
+    "What did the zero say to the eight? Nice belt!",
+    "Why did the kid bring a ladder to school? Because she wanted to go to high school!",
+    "What do you call a fairy that hasn't taken a bath? Stinker Bell!",
+    "What do you get when you cross a rabbit with shellfish? An oyster bunny!",
+    "Why was the broom late? It over-swept!",
+]
 
 class VoiceFeedback:
     """Pre-generates TTS lines and caches them as .mp3 files."""
@@ -136,6 +203,15 @@ class VoiceFeedback:
             else:
                 p = self._generate_one(val)
                 if p: self._cache[key] = p
+        # Cache jokes (parallel for speed on first run)
+        print("   🃏 Caching jokes...")
+        uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
+        if uncached:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(self._generate_one, uncached))
+        self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
+                            if self._tts_path(j).exists()]
+        print(f"   🃏 Jokes cached: {len(self._joke_paths)}/{len(KIDS_JOKES)}")
         print("   ✅ Voice cache ready")
 
     def play(self, key, block=True):
@@ -193,6 +269,29 @@ class VoiceFeedback:
             print(f"   TTS error: {e}")
             subprocess.run(["espeak", text], check=False)
 
+    def play_jokes_until_done(self, thread, pause_between=1.5):
+        """Play random jokes until the given thread completes."""
+        jokes = list(self._joke_paths)
+        if not jokes:
+            thread.join()
+            return
+        random.shuffle(jokes)
+        idx = 0
+        while thread.is_alive():
+            if idx >= len(jokes):
+                random.shuffle(jokes)
+                idx = 0
+            if not thread.is_alive():
+                break
+            print(f"   🃏 Telling joke {idx + 1}...")
+            self._play_file(jokes[idx])
+            idx += 1
+            # Brief pause between jokes, checking if generation is done
+            waited = 0.0
+            while waited < pause_between and thread.is_alive():
+                time.sleep(0.1)
+                waited += 0.1
+
 # ── BEEP FALLBACK ──────────────────────────────
 def beep(freq=440, dur=0.2):
     t = np.linspace(0, dur, int(SAMPLE_RATE * dur), False)
@@ -235,7 +334,7 @@ def generate_image(desc):
     r = client.images.generate(
         model="gpt-image-1",
         prompt=f"{COLORING_PROMPT}\n\nChild requested: {desc}",
-        size="1024x1024", quality="medium")
+        size="1024x1024", quality="low")
     img_bytes = base64.b64decode(r.data[0].b64_json)
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
@@ -303,10 +402,26 @@ def main():
                 elif not is_safe(text):
                     print(f"🚫 Blocked: {text}")
                     voice.play("blocked")
+                elif please_mode_enabled() and not has_please(text):
+                    print(f"🙏 No please: {text}")
+                    voice.play("say_please")
                 else:
                     # THINKING (random variation)
                     voice.play("thinking")
-                    img = generate_image(text)
+
+                    # Generate in background, tell jokes while waiting
+                    gen_result = [None]
+                    gen_error = [None]
+                    def gen_worker():
+                        try: gen_result[0] = generate_image(text)
+                        except Exception as e: gen_error[0] = e
+                    gen_thread = threading.Thread(
+                        target=gen_worker, daemon=True)
+                    gen_thread.start()
+                    voice.play_jokes_until_done(gen_thread)
+                    if gen_error[0]:
+                        raise gen_error[0]
+                    img = gen_result[0]
 
                     # PRINTING
                     voice.play("printing")

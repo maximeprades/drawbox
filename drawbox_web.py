@@ -12,6 +12,7 @@ from PIL import Image
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 PRINTER_NAME = "drawbox-printer"
 SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
+PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
 
@@ -83,7 +84,7 @@ def generate_image(desc):
     r = client.images.generate(
         model="gpt-image-1",
         prompt=f"{prompt}\n\nChild requested: {desc}",
-        size="1024x1024", quality="medium")
+        size="1024x1024", quality="low")
     img_bytes = base64.b64decode(r.data[0].b64_json)
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
@@ -251,6 +252,11 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
         <label>Record Seconds</label>
         <input type="number" id="cfgRecSec" min="3" max="30" />
       </div>
+      <div class="cfg-row">
+        <label>&ldquo;Please&rdquo; Mode</label>
+        <button class="btn btn-outline" id="pleaseBtn" onclick="togglePlease()">...</button>
+        <span style="font-size:11px;color:var(--muted);margin-top:4px;display:block">When enabled, kids must say &ldquo;please&rdquo; to get a drawing</span>
+      </div>
       <div class="btn-row" style="margin-top:14px">
         <button class="btn btn-blue" onclick="saveSettings()">Save Settings</button>
         <button class="btn btn-outline" onclick="loadSettings()">Reset</button>
@@ -391,6 +397,29 @@ async function saveSettings(){
   }catch(e){toast('Error: '+e.message,false);}
 }
 loadSettings();
+
+// ── PLEASE MODE ───────────────────────────────
+async function loadPleaseMode(){
+  try{
+    const r=await fetch('/api/please-mode');
+    const d=await r.json();
+    const b=document.getElementById('pleaseBtn');
+    b.textContent=d.enabled?'ON (required)':'OFF';
+    b.className='btn '+(d.enabled?'btn-green':'btn-outline');
+  }catch(e){}
+}
+async function togglePlease(){
+  try{
+    const r=await fetch('/api/please-mode');
+    const d=await r.json();
+    await fetch('/api/please-mode',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:!d.enabled})});
+    loadPleaseMode();
+    toast(d.enabled?'"Please" mode disabled':'"Please" mode enabled!');
+  }catch(e){toast('Error: '+e.message,false);}
+}
+loadPleaseMode();
 
 // ── DIAGNOSTICS ────────────────────────────────
 async function runDiag(cmd){
@@ -546,6 +575,18 @@ def api_settings():
         settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
     save_settings(settings)
     return jsonify(ok=True)
+
+@app.route("/api/please-mode", methods=["GET", "POST"])
+def api_please_mode():
+    if request.method == "GET":
+        return jsonify(enabled=PLEASE_MODE_FILE.exists())
+    data = request.get_json() or {}
+    if data.get("enabled"):
+        PLEASE_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PLEASE_MODE_FILE.touch()
+    else:
+        PLEASE_MODE_FILE.unlink(missing_ok=True)
+    return jsonify(ok=True, enabled=PLEASE_MODE_FILE.exists())
 
 @app.route("/api/diagnostics", methods=["POST"])
 def api_diagnostics():
