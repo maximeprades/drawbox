@@ -648,5 +648,11 @@ def api_reboot():
 # ── MAIN ─────────────────────────────────────────
 if __name__ == "__main__":
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not OPENAI_API_KEY:
+        print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
+        exit(1)
+    if not os.environ.get("REPLICATE_API_TOKEN"):
+        print("❌ REPLICATE_API_TOKEN not set. Export it or add to your service file.")
+        exit(1)
     print("DrawBox Web Dashboard starting on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

@@ -314,23 +314,23 @@ function soundReady(){
 
 // ── VOICE LINES ──────────────────────────────────
 const VOICE_LINES = {
-  ready:     "... Ready! Press the button and tell me what to draw!",
-  listening: "... I'm listening!",
+  ready:     "Ready! Press the button and tell me what to draw!",
+  listening: "I'm listening!",
   thinking:  [
-    "... Ooh, great idea! Let me draw that for you!",
-    "... That sounds awesome! Drawing it now!",
-    "... Cool! Give me a moment...",
-    "... Love it! One coloring page coming right up!",
-    "... Nice choice! Let me work on that!",
+    "Ooh, great idea! Let me draw that for you!",
+    "That sounds awesome! Drawing it now!",
+    "Cool! Give me a moment...",
+    "Love it! One coloring page coming right up!",
+    "Nice choice! Let me work on that!",
   ],
-  printing:  "... Here it comes!",
-  done:      "... All done! Press the button when you want another one!",
-  error:     "... Oops, something went wrong. Try again!",
-  too_short: "... I didn't catch that. Press the button and tell me what you want to draw!",
-  busy:      "... Hold on, I'm still working on your picture! Almost done...",
-  blocked:   "... Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
-  say_please: "... Oops! Don't forget to say please! Try again and say the magic word!",
-  reboot:    "... Rebooting now! See you in a moment.",
+  printing:  "Here it comes!",
+  done:      "All done! Press the button when you want another one!",
+  error:     "Oops, something went wrong. Try again!",
+  too_short: "I didn't catch that. Press the button and tell me what you want to draw!",
+  busy:      "Hold on, I'm still working on your picture! Almost done...",
+  blocked:   "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
+  say_please: "Oops! Don't forget to say please! Try again and say the magic word!",
+  reboot:    "Rebooting now! See you in a moment.",
 };
 
 // ── KIDS JOKES (told while generating) ──────────
@@ -412,11 +412,13 @@ async function warmUpCache(){
 }
 
 async function fetchTTS(text, apiKey){
+  if(!apiKey) throw new Error('No OpenAI API key — enter it in Configuration above');
   const resp = await fetch('https://api.openai.com/v1/audio/speech',{
     method:'POST',
     headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
     body:JSON.stringify({model:'tts-1', voice:$voice.value, input:text})
   });
+  if(resp.status === 401) throw new Error('Invalid OpenAI API key (401)');
   if(!resp.ok) throw new Error('TTS '+resp.status);
   return await resp.blob();
 }
@@ -511,7 +513,7 @@ async function transcribe(audioBlob){
   log('Transcribing...');
   setState('TRANSCRIBING','Transcribing...');
   const apiKey = $key.value.trim();
-  if(!apiKey) throw new Error('No API key');
+  if(!apiKey) throw new Error('No OpenAI API key — enter it in Configuration above');
   const form = new FormData();
   form.append('file', audioBlob, 'recording.webm');
   form.append('model','whisper-1');
@@ -520,6 +522,7 @@ async function transcribe(audioBlob){
     headers:{'Authorization':'Bearer '+apiKey},
     body:form
   });
+  if(resp.status === 401) throw new Error('Invalid OpenAI API key (401)');
   if(!resp.ok){
     const err = await resp.text();
     throw new Error('Whisper API '+resp.status+': '+err.slice(0,200));

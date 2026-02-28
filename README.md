@@ -8,9 +8,9 @@ Your kid presses a big red button, says what they want to draw, and a coloring p
   <img src="docs/drawbox.jpg" alt="DrawBox" width="500">
 </p>
 
-Built with a Raspberry Pi 5, OpenAI APIs, and a cardboard box with googly eyes.
+Built with a Raspberry Pi 5, OpenAI (voice) + FLUX Schnell (images), and a cardboard box with googly eyes.
 
-**~3 hours to build | ~$135 in parts + printer | ~$0.06 per page**
+**~3 hours to build | ~$135 in parts + printer | ~$0.02 per page**
 
 ---
 
@@ -21,14 +21,14 @@ Kid presses button → "I'm listening!"
     → Kid says "a happy dinosaur with flowers!"
     → Whisper transcribes speech
     → Safety filter (100-word blocklist)
-    → GPT Image generates coloring page
+    → FLUX Schnell generates coloring page
     → Pillow converts to clean line art
     → "Here it comes!"
     → Brother laser printer prints it
     → "All done! Press the button when you want another one!"
 ```
 
-The whole cycle takes ~20-30 seconds.
+The whole cycle takes ~10 seconds.
 
 ## Parts
 
@@ -90,7 +90,7 @@ Verifies: internet, API key, mic, speaker, printer, GPIO, Python deps, script co
 | `drawbox.py` | The main script — records speech, generates coloring pages, prints them |
 | `drawbox_web.py` | Flask web dashboard — generate prints, view logs, change settings, run diagnostics |
 | `drawbox-guide.html` | Complete interactive build guide — open in any browser |
-| `drawbox-simulator.html` | Browser simulator — test the full flow without a Pi (needs OpenAI key) |
+| `drawbox-simulator.html` | Browser simulator — test the full flow without a Pi (needs OpenAI + Replicate keys) |
 | `deploy-web.sh` | One-command deploy to Pi via SSH |
 | `check.sh` | Health check — verifies the entire Pi setup |
 
@@ -111,12 +111,12 @@ DrawBox talks to kids at every step:
 
 ## Cost
 
-Each coloring page costs about **$0.06**:
-- ~$0.04 image generation (GPT Image)
-- ~$0.01 voice (TTS)
+Each coloring page costs about **$0.02**:
+- ~$0.003 image generation (FLUX Schnell via Replicate)
+- ~$0.01 voice (OpenAI TTS)
 - ~$0.006 transcription (Whisper)
 
-$5 gets you ~80 pages. Set a spending limit at [platform.openai.com](https://platform.openai.com) under Billing.
+$5 gets you ~250 pages. Set spending limits at [platform.openai.com](https://platform.openai.com) and [replicate.com](https://replicate.com).
 
 ## Safety
 

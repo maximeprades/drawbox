@@ -88,27 +88,27 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ── VOICE FEEDBACK ─────────────────────────────
 # All voice lines. Keys with lists pick randomly.
 VOICE_LINES = {
-    "ready":     "... Ready! Press the button and tell me what to draw!",
-    "listening": "... I'm listening!",
+    "ready":     "Ready! Press the button and tell me what to draw!",
+    "listening": "I'm listening!",
     "thinking":  [
-        "... Ooh, great idea! Let me draw that for you!",
-        "... That sounds awesome! Drawing it now!",
-        "... Cool! Give me a moment...",
-        "... Love it! One coloring page coming right up!",
-        "... Nice choice! Let me work on that!",
+        "Ooh, great idea! Let me draw that for you!",
+        "That sounds awesome! Drawing it now!",
+        "Cool! Give me a moment...",
+        "Love it! One coloring page coming right up!",
+        "Nice choice! Let me work on that!",
     ],
-    "printing":  "... Here it comes!",
-    "done":      "... All done! Press the button when you want another one!",
-    "error":     "... Oops, something went wrong. Try again!",
-    "too_short": ("... I didn't catch that. Press the button "
+    "printing":  "Here it comes!",
+    "done":      "All done! Press the button when you want another one!",
+    "error":     "Oops, something went wrong. Try again!",
+    "too_short": ("I didn't catch that. Press the button "
                   "and tell me what you want to draw!"),
-    "busy":      ("... Hold on, I'm still working on your picture! "
+    "busy":      ("Hold on, I'm still working on your picture! "
                   "Almost done..."),
-    "blocked":   ("... Hmm, I can't draw that. How about something "
+    "blocked":   ("Hmm, I can't draw that. How about something "
                   "fun like an animal or a rainbow?"),
-    "say_please": ("... Oops! Don't forget to say please! "
+    "say_please": ("Oops! Don't forget to say please! "
                    "Try again and say the magic word!"),
-    "reboot":    "... Rebooting now! See you in a moment.",
+    "reboot":    "Rebooting now! See you in a moment.",
 }
 
 # ── KIDS JOKES (told while generating) ─────────
@@ -196,6 +196,18 @@ class VoiceFeedback:
     def _warm_up(self):
         """Pre-generate all static voice lines at startup."""
         print("🔊 Warming up voice cache...")
+        # Generate a short silence MP3 to wake the USB speaker before speech.
+        # A single comma produces ~0.3s of near-silence from the TTS engine.
+        self._silence_path = CACHE_DIR / "silence.mp3"
+        if not self._silence_path.exists():
+            print("   🔇 Generating speaker wake-up file...")
+            try:
+                resp = client.audio.speech.create(
+                    model="tts-1", voice=TTS_VOICE, input=",")
+                resp.stream_to_file(str(self._silence_path))
+            except Exception as e:
+                print(f"   ⚠️  Could not generate silence file: {e}")
+                self._silence_path = None
         for key, val in VOICE_LINES.items():
             if isinstance(val, list):
                 paths = []
@@ -208,12 +220,11 @@ class VoiceFeedback:
                 if p: self._cache[key] = p
         # Cache jokes (parallel for speed on first run)
         print("   🃏 Caching jokes...")
-        joke_texts = ["... " + j for j in KIDS_JOKES]
-        uncached = [j for j in joke_texts if not self._tts_path(j).exists()]
+        uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
         if uncached:
             with ThreadPoolExecutor(max_workers=4) as pool:
                 list(pool.map(self._generate_one, uncached))
-        self._joke_paths = [self._tts_path(j) for j in joke_texts
+        self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
                             if self._tts_path(j).exists()]
         print(f"   🃏 Jokes cached: {len(self._joke_paths)}/{len(KIDS_JOKES)}")
         print("   ✅ Voice cache ready")
@@ -250,8 +261,15 @@ class VoiceFeedback:
 
     def _play_file(self, path):
         try:
-            time.sleep(0.5)  # let USB speaker wake up
-            subprocess.run(["mpg123", "-q", str(path)], check=True)
+            # Play a short silence first to wake the USB speaker,
+            # then the actual speech. mpg123 supports multiple files.
+            if self._silence_path and self._silence_path.exists():
+                subprocess.run(
+                    ["mpg123", "-q", str(self._silence_path), str(path)],
+                    check=True)
+            else:
+                time.sleep(0.5)  # fallback: sleep if no silence file
+                subprocess.run(["mpg123", "-q", str(path)], check=True)
         except Exception:
             # Fallback to aplay if mpg123 fails
             try:
@@ -261,8 +279,6 @@ class VoiceFeedback:
 
     def _play_live(self, text):
         """Generate and play TTS on the fly (uncached)."""
-        if not text.startswith("... "):
-            text = "... " + text
         print(f"🔊 Speaking: {text}")
         try:
             resp = client.audio.speech.create(
@@ -379,6 +395,14 @@ is_busy = False
 
 def main():
     global is_busy
+
+    if not OPENAI_API_KEY:
+        print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
+        return
+    if not REPLICATE_API_TOKEN:
+        print("❌ REPLICATE_API_TOKEN not set. Export it or add to your service file.")
+        return
+
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
 
     voice = VoiceFeedback()

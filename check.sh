@@ -74,6 +74,24 @@ if [ -n "$KEY" ] && [ "$KEY" != "sk-your-actual-key-here" ] && [ "$KEY" != "sk-y
 fi
 echo ""
 
+# ── 2b. REPLICATE API TOKEN ─────────────────────
+echo "🔑 Replicate API Token"
+SVC_REP=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+BASHRC_REP=$(grep -oP 'REPLICATE_API_TOKEN="\K[^"]+' ~/.bashrc 2>/dev/null || true)
+ENV_REP="${REPLICATE_API_TOKEN:-}"
+
+if [ -n "$SVC_REP" ] && [ "$SVC_REP" != "r8_your-token-here" ]; then
+    ok "Replicate token found in drawbox.service (${SVC_REP:0:8}...)"
+elif [ -n "$BASHRC_REP" ]; then
+    ok "Replicate token found in ~/.bashrc (${BASHRC_REP:0:8}...)"
+    warn "Token not in drawbox.service — systemd won't see it. Add Environment=REPLICATE_API_TOKEN=... to the service file"
+elif [ -n "$ENV_REP" ]; then
+    ok "Replicate token found in environment (${ENV_REP:0:8}...)"
+else
+    fail "No Replicate token found. Set it in drawbox.service or ~/.bashrc"
+fi
+echo ""
+
 # ── 3. MICROPHONE ────────────────────────────────
 echo "🎙️  Microphone"
 if arecord -l 2>/dev/null | grep -qi "USB\|PnP\|CHANGE"; then
@@ -143,8 +161,8 @@ echo ""
 
 # ── 7. PYTHON DEPENDENCIES ──────────────────────
 echo "📦 Python Dependencies"
-DEPS=("openai" "sounddevice" "soundfile" "numpy" "PIL" "gpiozero")
-DEP_NAMES=("openai" "sounddevice" "soundfile" "numpy" "Pillow" "gpiozero")
+DEPS=("openai" "replicate" "sounddevice" "soundfile" "numpy" "PIL" "gpiozero")
+DEP_NAMES=("openai" "replicate" "sounddevice" "soundfile" "numpy" "Pillow" "gpiozero")
 for i in "${!DEPS[@]}"; do
     if python3 -c "import ${DEPS[$i]}" 2>/dev/null; then
         ok "${DEP_NAMES[$i]}"
