@@ -264,9 +264,9 @@ async function testReplicate(){
   $testResult.textContent = '';
   const key = $repKey.value.trim();
   if(!key){ testLog('❌ No Replicate token entered.'); return; }
-  testLog('Testing Replicate API token...');
+  testLog('Testing Replicate API token (via CORS proxy)...');
   try {
-    const r = await fetch('https://api.replicate.com/v1/account', {
+    const r = await replicateFetch('https://api.replicate.com/v1/account', {
       headers:{'Authorization':'Token '+key}
     });
     if(r.ok){
@@ -276,9 +276,8 @@ async function testReplicate(){
       testLog('❌ Replicate token invalid (HTTP '+r.status+')');
     }
   } catch(e){
-    testLog('❌ Network error: '+e.message);
-    testLog('   Replicate API blocks browser CORS — this is expected from file://');
-    testLog('   The simulator will fall back to OpenAI for image generation.');
+    testLog('❌ CORS proxy error: '+e.message);
+    testLog('   corsproxy.io may be down. Enter an OpenAI key as fallback.');
   }
 }
 
@@ -291,14 +290,14 @@ async function testGenerate(){
   testLog('');
 
   if(repKey){
-    testLog('--- Testing Replicate (FLUX Schnell) ---');
+    testLog('--- Testing Replicate (FLUX Schnell via CORS proxy) ---');
     try {
-      const r = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
+      const r = await replicateFetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
         method:'POST',
         headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
         body:JSON.stringify({input:{prompt:'a simple circle',num_outputs:1,aspect_ratio:'1:1',output_format:'png',num_inference_steps:4,go_fast:true}})
       });
-      testLog('✅ Replicate fetch succeeded (HTTP '+r.status+')');
+      testLog('✅ CORS proxy worked (HTTP '+r.status+')');
       if(r.ok){
         const d = await r.json();
         testLog('✅ Prediction created: '+d.id+' (status: '+d.status+')');
@@ -309,8 +308,8 @@ async function testGenerate(){
         testLog('❌ Replicate error: '+err.slice(0,200));
       }
     } catch(e){
-      testLog('❌ Replicate fetch failed: '+e.message);
-      testLog('   → Browser CORS blocks Replicate API. This is normal.');
+      testLog('❌ CORS proxy failed: '+e.message);
+      testLog('   corsproxy.io may be down or blocking this request.');
       testLog('');
     }
   }
@@ -702,15 +701,13 @@ async function generateImage(desc){
   const repKey = $repKey.value.trim();
   if(repKey){
     try {
-      log('Trying Replicate API (FLUX Schnell)...','info');
+      log('Trying Replicate FLUX Schnell (via CORS proxy)...','info');
       const result = await generateViaReplicate(prompt, repKey);
       return result;
     } catch(e){
-      if(e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('CORS')){
-        log('Replicate API blocked by browser CORS. Falling back to OpenAI...','info');
-      } else {
-        log('Replicate error: '+e.message+'. Falling back to OpenAI...','err');
-      }
+      log('Replicate error: '+e.message,'err');
+      const apiKey = $key.value.trim();
+      if(apiKey) log('Falling back to OpenAI...','info');
     }
   }
 
@@ -724,10 +721,17 @@ async function generateImage(desc){
   throw new Error('Image generation failed — Replicate blocked by browser CORS and no OpenAI key for fallback. Enter an OpenAI key or run the Pi version.');
 }
 
+// Replicate API blocks browser CORS, so we route through a proxy.
+// This is only used by the browser simulator; the Pi calls Replicate directly.
+function replicateFetch(url, options){
+  const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
+  return fetch(proxied, options);
+}
+
 async function generateViaReplicate(prompt, repKey){
   let createResp;
   try {
-    createResp = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
+    createResp = await replicateFetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
       method:'POST',
       headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -742,7 +746,7 @@ async function generateViaReplicate(prompt, repKey){
       })
     });
   } catch(e){
-    throw new Error('Failed to fetch (Replicate CORS blocks browser calls): '+e.message);
+    throw new Error('CORS proxy failed: '+e.message);
   }
   if(!createResp.ok){
     const err = await createResp.text();
@@ -755,11 +759,11 @@ async function generateViaReplicate(prompt, repKey){
     log('Polling... status: '+prediction.status,'info');
     let pollResp;
     try {
-      pollResp = await fetch(prediction.urls.get,{
+      pollResp = await replicateFetch(prediction.urls.get,{
         headers:{'Authorization':'Token '+repKey}
       });
     } catch(e){
-      throw new Error('Failed to fetch poll URL (CORS): '+e.message);
+      throw new Error('CORS proxy poll failed: '+e.message);
     }
     prediction = await pollResp.json();
   }
