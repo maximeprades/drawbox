@@ -44,10 +44,12 @@ echo "   ✅ Flask + gunicorn + replicate ready"
 # Clone repo for software updates (skip if already exists)
 if [ ! -d ~/drawbox-repo ]; then
     echo "   Cloning repo for software updates..."
-    git clone https://github.com/maximeprades/drawbox.git ~/drawbox-repo 2>/dev/null || {
+    if git clone https://github.com/maximeprades/drawbox.git ~/drawbox-repo 2>&1; then
+        echo "   ✅ Repo cloned to ~/drawbox-repo"
+    else
         echo "   ⚠️  Could not clone repo (no git or no network). Software Update will not work."
-    }
-    echo "   ✅ Repo cloned to ~/drawbox-repo"
+        echo "   You can clone manually later: git clone https://github.com/maximeprades/drawbox.git ~/drawbox-repo"
+    fi
 else
     echo "   ✅ Repo already exists at ~/drawbox-repo"
 fi
