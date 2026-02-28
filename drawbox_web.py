@@ -295,6 +295,14 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
         <textarea id="cfgPrompt" rows="8"></textarea>
       </div>
       <div class="cfg-row">
+        <label>Image Model</label>
+        <select id="cfgModel">
+          <option value="flux-schnell">FLUX Schnell (Replicate) — fastest</option>
+          <option value="nano-banana">Nano Banana 2 (Gemini)</option>
+          <option value="gpt-image">GPT Image (OpenAI) — slowest</option>
+        </select>
+      </div>
+      <div class="cfg-row">
         <label>TTS Voice</label>
         <select id="cfgVoice">
           <option value="nova">nova</option>
@@ -435,6 +443,7 @@ async function loadSettings(){
     const r=await fetch('/api/settings');
     const d=await r.json();
     document.getElementById('cfgPrompt').value=d.coloring_prompt||'';
+    document.getElementById('cfgModel').value=d.image_model||'flux-schnell';
     document.getElementById('cfgVoice').value=d.tts_voice||'nova';
     document.getElementById('cfgRecSec').value=d.record_seconds||10;
   }catch(e){}
@@ -442,6 +451,7 @@ async function loadSettings(){
 async function saveSettings(){
   const data={
     coloring_prompt:document.getElementById('cfgPrompt').value,
+    image_model:document.getElementById('cfgModel').value,
     tts_voice:document.getElementById('cfgVoice').value,
     record_seconds:parseInt(document.getElementById('cfgRecSec').value)||10
   };
@@ -626,6 +636,8 @@ def api_settings():
     settings = load_settings()
     if "coloring_prompt" in data:
         settings["coloring_prompt"] = data["coloring_prompt"][:5000]
+    if "image_model" in data and data["image_model"] in ("flux-schnell", "nano-banana", "gpt-image"):
+        settings["image_model"] = data["image_model"]
     if "tts_voice" in data:
         settings["tts_voice"] = data["tts_voice"]
     if "record_seconds" in data:
