@@ -96,10 +96,17 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
     <div class="panel-h">&#9881; Configuration</div>
     <div class="panel-b">
       <div class="cfg-row">
-        <label for="apikey">OpenAI API Key</label>
+        <label for="apikey">OpenAI API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for TTS voice)</span></label>
         <div class="key-wrap">
           <input id="apikey" type="password" placeholder="sk-..." spellcheck="false" autocomplete="off" />
           <button class="key-tog" onclick="toggleKey()" title="Show/hide key">&#128065;</button>
+        </div>
+      </div>
+      <div class="cfg-row">
+        <label for="repkey">Replicate API Token <span style="font-weight:400;text-transform:none;letter-spacing:0">(for image generation)</span></label>
+        <div class="key-wrap">
+          <input id="repkey" type="password" placeholder="r8_..." spellcheck="false" autocomplete="off" />
+          <button class="key-tog" onclick="toggleRepKey()" title="Show/hide key">&#128065;</button>
         </div>
       </div>
       <div class="cfg-row">
@@ -134,7 +141,8 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - Simple shapes, minimal fine detail
 - Large open areas for coloring with crayons
 - Friendly, fun, cute, non-scary style
-- Centered, filling most of the space
+- Centered with padding — the subject must NOT touch or extend to the edges
+- Leave at least 10% empty white space on all sides as margin
 - Style: children's coloring book page
 - ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
@@ -178,6 +186,7 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 <script>
 // ── ELEMENTS ──────────────────────────────────────
 const $key     = document.getElementById('apikey');
+const $repKey  = document.getElementById('repkey');
 const $voice   = document.getElementById('ttsvoice');
 const $recSec  = document.getElementById('recsec');
 const $prompt  = document.getElementById('cprompt');
@@ -195,6 +204,7 @@ const $dl      = document.getElementById('dlbtn');
 (function loadCfg(){
   const s = k => localStorage.getItem('db_'+k);
   if(s('key'))     $key.value     = s('key');
+  if(s('repkey'))  $repKey.value  = s('repkey');
   if(s('voice'))   $voice.value   = s('voice');
   if(s('recsec'))  $recSec.value  = s('recsec');
   if(s('prompt'))  $prompt.value  = s('prompt');
@@ -202,17 +212,20 @@ const $dl      = document.getElementById('dlbtn');
 })();
 function saveCfg(){
   const p = (k,v) => localStorage.setItem('db_'+k,v);
-  p('key',$key.value); p('voice',$voice.value);
+  p('key',$key.value); p('repkey',$repKey.value); p('voice',$voice.value);
   p('recsec',$recSec.value); p('prompt',$prompt.value);
   p('please',document.getElementById('pleasemode').checked);
 }
-[$key,$voice,$recSec,$prompt].forEach(
+[$key,$repKey,$voice,$recSec,$prompt].forEach(
   el => el.addEventListener('input', saveCfg));
 $voice.addEventListener('change', saveCfg);
 document.getElementById('pleasemode').addEventListener('change', saveCfg);
 
 function toggleKey(){
   $key.type = $key.type==='password' ? 'text' : 'password';
+}
+function toggleRepKey(){
+  $repKey.type = $repKey.type==='password' ? 'text' : 'password';
 }
 
 // ── SAFETY BLOCKLIST ──────────────────────────────
@@ -301,23 +314,23 @@ function soundReady(){
 
 // ── VOICE LINES ──────────────────────────────────
 const VOICE_LINES = {
-  ready:     "Ready! Press the button and tell me what to draw!",
-  listening: "I'm listening!",
+  ready:     "... Ready! Press the button and tell me what to draw!",
+  listening: "... I'm listening!",
   thinking:  [
-    "Ooh, great idea! Let me draw that for you!",
-    "That sounds awesome! Drawing it now!",
-    "Cool! Give me a moment...",
-    "Love it! One coloring page coming right up!",
-    "Nice choice! Let me work on that!",
+    "... Ooh, great idea! Let me draw that for you!",
+    "... That sounds awesome! Drawing it now!",
+    "... Cool! Give me a moment...",
+    "... Love it! One coloring page coming right up!",
+    "... Nice choice! Let me work on that!",
   ],
-  printing:  "Here it comes!",
-  done:      "All done! Press the button when you want another one!",
-  error:     "Oops, something went wrong. Try again!",
-  too_short: "I didn't catch that. Press the button and tell me what you want to draw!",
-  busy:      "Hold on, I'm still working on your picture! Almost done...",
-  blocked:   "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
-  say_please: "Oops! Don't forget to say please! Try again and say the magic word!",
-  reboot:    "Rebooting now! See you in a moment.",
+  printing:  "... Here it comes!",
+  done:      "... All done! Press the button when you want another one!",
+  error:     "... Oops, something went wrong. Try again!",
+  too_short: "... I didn't catch that. Press the button and tell me what you want to draw!",
+  busy:      "... Hold on, I'm still working on your picture! Almost done...",
+  blocked:   "... Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
+  say_please: "... Oops! Don't forget to say please! Try again and say the magic word!",
+  reboot:    "... Rebooting now! See you in a moment.",
 };
 
 // ── KIDS JOKES (told while generating) ──────────
@@ -516,74 +529,94 @@ async function transcribe(audioBlob){
   return data.text;
 }
 
-// ── GENERATE IMAGE (GPT Image API) ───────────────
+// ── GENERATE IMAGE (FLUX Schnell via Replicate) ──
 async function generateImage(desc){
   log('Generating: '+desc);
   setState('GENERATING','Generating image...');
-  const apiKey = $key.value.trim();
-  if(!apiKey) throw new Error('No API key');
+  const repKey = $repKey.value.trim();
+  if(!repKey) throw new Error('No Replicate API token');
   const prompt = $prompt.value.trim() + '\n\nChild requested: ' + desc;
-  const resp = await fetch('https://api.openai.com/v1/images/generations',{
+  // Create prediction
+  const createResp = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
     method:'POST',
-    headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+    headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
     body:JSON.stringify({
-      model:'gpt-image-1',
-      prompt: prompt,
-      size:'1024x1024',
-      quality:'low'
+      input:{
+        prompt: prompt,
+        num_outputs: 1,
+        aspect_ratio: '3:4',
+        output_format: 'png',
+        num_inference_steps: 4,
+        go_fast: true,
+      }
     })
   });
-  if(!resp.ok){
-    const err = await resp.text();
-    throw new Error('Image API '+resp.status+': '+err.slice(0,200));
+  if(!createResp.ok){
+    const err = await createResp.text();
+    throw new Error('Replicate API '+createResp.status+': '+err.slice(0,200));
   }
-  const data = await resp.json();
-  const b64 = data.data[0].b64_json;
+  let prediction = await createResp.json();
+  // Poll until complete
+  while(prediction.status !== 'succeeded' && prediction.status !== 'failed'){
+    await new Promise(r => setTimeout(r, 500));
+    const pollResp = await fetch(prediction.urls.get,{
+      headers:{'Authorization':'Token '+repKey}
+    });
+    prediction = await pollResp.json();
+  }
+  if(prediction.status === 'failed'){
+    throw new Error('Image generation failed: '+(prediction.error||'unknown'));
+  }
+  const imageUrl = prediction.output[0];
   log('Image generated, post-processing...','ok');
-  return postProcess(b64);
+  return postProcess(imageUrl);
 }
 
 // ── POST-PROCESS (matches Python Pillow pipeline) ─
-function postProcess(b64){
+function postProcess(imageUrl){
   return new Promise((resolve,reject) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = ()=>{
       try {
-        // Convert to grayscale, threshold, resize to letter page
+        // Convert to grayscale + threshold
         const src = document.createElement('canvas');
         src.width = img.width; src.height = img.height;
         const sctx = src.getContext('2d');
         sctx.drawImage(img,0,0);
         const sd = sctx.getImageData(0,0,src.width,src.height);
-        // Grayscale
         for(let i=0;i<sd.data.length;i+=4){
           const g = sd.data[i]*0.299 + sd.data[i+1]*0.587 + sd.data[i+2]*0.114;
-          const v = g < 180 ? 0 : 255; // threshold
+          const v = g < 180 ? 0 : 255;
           sd.data[i]=sd.data[i+1]=sd.data[i+2]=v;
         }
         sctx.putImageData(sd,0,0);
 
-        // Resize to 1125x1125
+        // Fit portrait image onto letter canvas preserving aspect ratio
+        const canvasW=1275, canvasH=1650, margin=75;
+        const maxW=canvasW-2*margin, maxH=canvasH-2*margin;
+        const scale=Math.min(maxW/img.width, maxH/img.height);
+        const newW=Math.round(img.width*scale), newH=Math.round(img.height*scale);
+
         const rsz = document.createElement('canvas');
-        rsz.width = 1125; rsz.height = 1125;
+        rsz.width = newW; rsz.height = newH;
         const rctx = rsz.getContext('2d');
         rctx.imageSmoothingEnabled = true;
         rctx.imageSmoothingQuality = 'high';
-        rctx.drawImage(src,0,0,1125,1125);
+        rctx.drawImage(src,0,0,newW,newH);
 
-        // Place on letter canvas (1275x1650) with margins
         const out = document.createElement('canvas');
-        out.width = 1275; out.height = 1650;
+        out.width = canvasW; out.height = canvasH;
         const octx = out.getContext('2d');
         octx.fillStyle = '#fff';
-        octx.fillRect(0,0,1275,1650);
-        octx.drawImage(rsz,75,262);
+        octx.fillRect(0,0,canvasW,canvasH);
+        octx.drawImage(rsz, Math.round((canvasW-newW)/2), Math.round((canvasH-newH)/2));
 
         resolve(out.toDataURL('image/png'));
       } catch(e){ reject(e); }
     };
     img.onerror = ()=> reject(new Error('Failed to load generated image'));
-    img.src = 'data:image/png;base64,'+b64;
+    img.src = imageUrl;
   });
 }
 
@@ -689,8 +722,9 @@ $btn.addEventListener('touchcancel', onButtonUp, {passive:false});
 // ── MAIN FLOW ─────────────────────────────────────
 async function runFlow(){
   const apiKey = $key.value.trim();
-  if(!apiKey){
-    log('Please enter your OpenAI API key first.','err');
+  const repKey = $repKey.value.trim();
+  if(!apiKey || !repKey){
+    log('Please enter both your OpenAI API key (for TTS) and Replicate token (for images).','err');
     return;
   }
 
@@ -796,7 +830,7 @@ async function runFlow(){
 
 // ── INIT ──────────────────────────────────────────
 log('DrawBox Simulator ready!','ok');
-log('Enter your OpenAI API key and press the red button to start.','info');
+log('Enter your OpenAI API key (for TTS) and Replicate token (for images), then press the red button.','info');
 soundReady();
 // Warm up voice cache once API key is present
 $key.addEventListener('change', ()=>{ if($key.value.trim()) warmUpCache(); });

@@ -11,6 +11,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 from gpiozero import Button as GpioButton
+import replicate
 from openai import OpenAI
 from PIL import Image
 import base64
@@ -19,6 +20,7 @@ from pathlib import Path
 
 # ── CONFIG ──────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100
 PRINTER_NAME = "drawbox-printer"
@@ -74,7 +76,8 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - Simple shapes, minimal fine detail
 - Large open areas for coloring with crayons
 - Friendly, fun, cute, non-scary style
-- Centered, filling most of the space
+- Centered with padding — the subject must NOT touch or extend to the edges
+- Leave at least 10% empty white space on all sides as margin
 - Style: children's coloring book page
 - ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
@@ -85,27 +88,27 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ── VOICE FEEDBACK ─────────────────────────────
 # All voice lines. Keys with lists pick randomly.
 VOICE_LINES = {
-    "ready":     "Ready! Press the button and tell me what to draw!",
-    "listening": "I'm listening!",
+    "ready":     "... Ready! Press the button and tell me what to draw!",
+    "listening": "... I'm listening!",
     "thinking":  [
-        "Ooh, great idea! Let me draw that for you!",
-        "That sounds awesome! Drawing it now!",
-        "Cool! Give me a moment...",
-        "Love it! One coloring page coming right up!",
-        "Nice choice! Let me work on that!",
+        "... Ooh, great idea! Let me draw that for you!",
+        "... That sounds awesome! Drawing it now!",
+        "... Cool! Give me a moment...",
+        "... Love it! One coloring page coming right up!",
+        "... Nice choice! Let me work on that!",
     ],
-    "printing":  "Here it comes!",
-    "done":      "All done! Press the button when you want another one!",
-    "error":     "Oops, something went wrong. Try again!",
-    "too_short": ("I didn't catch that. Press the button "
+    "printing":  "... Here it comes!",
+    "done":      "... All done! Press the button when you want another one!",
+    "error":     "... Oops, something went wrong. Try again!",
+    "too_short": ("... I didn't catch that. Press the button "
                   "and tell me what you want to draw!"),
-    "busy":      ("Hold on, I'm still working on your picture! "
+    "busy":      ("... Hold on, I'm still working on your picture! "
                   "Almost done..."),
-    "blocked":   ("Hmm, I can't draw that. How about something "
+    "blocked":   ("... Hmm, I can't draw that. How about something "
                   "fun like an animal or a rainbow?"),
-    "say_please": ("Oops! Don't forget to say please! "
+    "say_please": ("... Oops! Don't forget to say please! "
                    "Try again and say the magic word!"),
-    "reboot":    "Rebooting now! See you in a moment.",
+    "reboot":    "... Rebooting now! See you in a moment.",
 }
 
 # ── KIDS JOKES (told while generating) ─────────
@@ -205,11 +208,12 @@ class VoiceFeedback:
                 if p: self._cache[key] = p
         # Cache jokes (parallel for speed on first run)
         print("   🃏 Caching jokes...")
-        uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
+        joke_texts = ["... " + j for j in KIDS_JOKES]
+        uncached = [j for j in joke_texts if not self._tts_path(j).exists()]
         if uncached:
             with ThreadPoolExecutor(max_workers=4) as pool:
                 list(pool.map(self._generate_one, uncached))
-        self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
+        self._joke_paths = [self._tts_path(j) for j in joke_texts
                             if self._tts_path(j).exists()]
         print(f"   🃏 Jokes cached: {len(self._joke_paths)}/{len(KIDS_JOKES)}")
         print("   ✅ Voice cache ready")
@@ -257,6 +261,8 @@ class VoiceFeedback:
 
     def _play_live(self, text):
         """Generate and play TTS on the fly (uncached)."""
+        if not text.startswith("... "):
+            text = "... " + text
         print(f"🔊 Speaking: {text}")
         try:
             resp = client.audio.speech.create(
@@ -331,16 +337,31 @@ def transcribe(path):
 # ── GENERATE ────────────────────────────────────
 def generate_image(desc):
     print(f"🎨 Generating: {desc}")
-    r = client.images.generate(
-        model="gpt-image-1",
-        prompt=f"{COLORING_PROMPT}\n\nChild requested: {desc}",
-        size="1024x1024", quality="low")
-    img_bytes = base64.b64decode(r.data[0].b64_json)
+    output = replicate.run(
+        "black-forest-labs/flux-schnell",
+        input={
+            "prompt": f"{COLORING_PROMPT}\n\nChild requested: {desc}",
+            "num_outputs": 1,
+            "aspect_ratio": "3:4",
+            "output_format": "png",
+            "num_inference_steps": 4,
+            "go_fast": True,
+        })
+    img_bytes = output[0].read()
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    img = img.resize((1125, 1125), Image.LANCZOS)
-    canvas = Image.new("L", (1275, 1650), 255)
-    canvas.paste(img, (75, 262))
+    # Fit portrait image onto letter canvas preserving aspect ratio
+    iw, ih = img.size
+    canvas_w, canvas_h = 1275, 1650
+    margin = 75  # 0.5" at 150dpi
+    max_w = canvas_w - 2 * margin  # 1125
+    max_h = canvas_h - 2 * margin  # 1500
+    scale = min(max_w / iw, max_h / ih)
+    new_w = int(iw * scale)
+    new_h = int(ih * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("L", (canvas_w, canvas_h), 255)
+    canvas.paste(img, ((canvas_w - new_w) // 2, (canvas_h - new_h) // 2))
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     canvas.save(tmp.name); tmp.close()
     return tmp.name

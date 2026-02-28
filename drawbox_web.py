@@ -5,6 +5,7 @@ import os, json, tempfile, subprocess, base64
 from pathlib import Path
 from io import BytesIO
 from flask import Flask, request, jsonify, Response, render_template_string, send_file
+import replicate
 from openai import OpenAI
 from PIL import Image
 
@@ -25,7 +26,8 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - Simple shapes, minimal fine detail
 - Large open areas for coloring with crayons
 - Friendly, fun, cute, non-scary style
-- Centered, filling most of the space
+- Centered with padding — the subject must NOT touch or extend to the edges
+- Leave at least 10% empty white space on all sides as margin
 - Style: children's coloring book page
 - ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
@@ -81,16 +83,31 @@ last_image_b64 = None
 def generate_image(desc):
     settings = load_settings()
     prompt = settings.get("coloring_prompt", DEFAULT_COLORING_PROMPT)
-    r = client.images.generate(
-        model="gpt-image-1",
-        prompt=f"{prompt}\n\nChild requested: {desc}",
-        size="1024x1024", quality="low")
-    img_bytes = base64.b64decode(r.data[0].b64_json)
+    output = replicate.run(
+        "black-forest-labs/flux-schnell",
+        input={
+            "prompt": f"{prompt}\n\nChild requested: {desc}",
+            "num_outputs": 1,
+            "aspect_ratio": "3:4",
+            "output_format": "png",
+            "num_inference_steps": 4,
+            "go_fast": True,
+        })
+    img_bytes = output[0].read()
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    img = img.resize((1125, 1125), Image.LANCZOS)
-    canvas = Image.new("L", (1275, 1650), 255)
-    canvas.paste(img, (75, 262))
+    # Fit portrait image onto letter canvas preserving aspect ratio
+    iw, ih = img.size
+    canvas_w, canvas_h = 1275, 1650
+    margin = 75  # 0.5" at 150dpi
+    max_w = canvas_w - 2 * margin  # 1125
+    max_h = canvas_h - 2 * margin  # 1500
+    scale = min(max_w / iw, max_h / ih)
+    new_w = int(iw * scale)
+    new_h = int(ih * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("L", (canvas_w, canvas_h), 255)
+    canvas.paste(img, ((canvas_w - new_w) // 2, (canvas_h - new_h) // 2))
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     canvas.save(tmp.name); tmp.close()
     return tmp.name
