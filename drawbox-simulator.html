@@ -151,6 +151,17 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
     </div>
   </div>
 
+  <!-- API TEST -->
+  <div class="panel">
+    <div class="panel-h">&#128295; API Test</div>
+    <div class="panel-b" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="testOpenAI()" style="padding:6px 14px;border-radius:6px;border:1px solid #ccc;cursor:pointer">Test OpenAI</button>
+      <button onclick="testReplicate()" style="padding:6px 14px;border-radius:6px;border:1px solid #ccc;cursor:pointer">Test Replicate</button>
+      <button onclick="testGenerate()" style="padding:6px 14px;border-radius:6px;border:1px solid #4CAF50;color:white;background:#4CAF50;cursor:pointer;font-weight:600">Test Image Generation</button>
+      <div id="testresult" style="width:100%;margin-top:6px;font-size:12px;font-family:monospace;white-space:pre-wrap;color:#333"></div>
+    </div>
+  </div>
+
   <!-- BUTTON -->
   <div class="panel">
     <div class="panel-h">&#128308; Arcade Button</div>
@@ -226,6 +237,116 @@ function toggleKey(){
 }
 function toggleRepKey(){
   $repKey.type = $repKey.type==='password' ? 'text' : 'password';
+}
+
+// ── API TESTS ─────────────────────────────────────
+const $testResult = document.getElementById('testresult');
+function testLog(msg){ $testResult.textContent += msg + '\n'; }
+
+async function testOpenAI(){
+  $testResult.textContent = '';
+  const key = $key.value.trim();
+  if(!key){ testLog('❌ No OpenAI key entered.'); return; }
+  testLog('Testing OpenAI API key...');
+  try {
+    const r = await fetch('https://api.openai.com/v1/models', {
+      headers:{'Authorization':'Bearer '+key}
+    });
+    if(r.ok) testLog('✅ OpenAI key valid (HTTP '+r.status+')');
+    else testLog('❌ OpenAI key invalid (HTTP '+r.status+')');
+  } catch(e){
+    testLog('❌ Network error: '+e.message);
+    testLog('   (If "Failed to fetch" — try serving this page from localhost, not file://)');
+  }
+}
+
+async function testReplicate(){
+  $testResult.textContent = '';
+  const key = $repKey.value.trim();
+  if(!key){ testLog('❌ No Replicate token entered.'); return; }
+  testLog('Testing Replicate API token...');
+  try {
+    const r = await fetch('https://api.replicate.com/v1/account', {
+      headers:{'Authorization':'Token '+key}
+    });
+    if(r.ok){
+      const d = await r.json();
+      testLog('✅ Replicate token valid (user: '+d.username+')');
+    } else {
+      testLog('❌ Replicate token invalid (HTTP '+r.status+')');
+    }
+  } catch(e){
+    testLog('❌ Network error: '+e.message);
+    testLog('   Replicate API blocks browser CORS — this is expected from file://');
+    testLog('   The simulator will fall back to OpenAI for image generation.');
+  }
+}
+
+async function testGenerate(){
+  $testResult.textContent = '';
+  const repKey = $repKey.value.trim();
+  const apiKey = $key.value.trim();
+  testLog('Keys present: OpenAI='+(apiKey?'YES':'NO')+', Replicate='+(repKey?'YES':'NO'));
+  testLog('Protocol: '+window.location.protocol);
+  testLog('');
+
+  if(repKey){
+    testLog('--- Testing Replicate (FLUX Schnell) ---');
+    try {
+      const r = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
+        method:'POST',
+        headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
+        body:JSON.stringify({input:{prompt:'a simple circle',num_outputs:1,aspect_ratio:'1:1',output_format:'png',num_inference_steps:4,go_fast:true}})
+      });
+      testLog('✅ Replicate fetch succeeded (HTTP '+r.status+')');
+      if(r.ok){
+        const d = await r.json();
+        testLog('✅ Prediction created: '+d.id+' (status: '+d.status+')');
+        testLog('✅ Replicate WORKS from this browser!');
+        return;
+      } else {
+        const err = await r.text();
+        testLog('❌ Replicate error: '+err.slice(0,200));
+      }
+    } catch(e){
+      testLog('❌ Replicate fetch failed: '+e.message);
+      testLog('   → Browser CORS blocks Replicate API. This is normal.');
+      testLog('');
+    }
+  }
+
+  if(apiKey){
+    testLog('--- Testing OpenAI (gpt-image-1) ---');
+    try {
+      const r = await fetch('https://api.openai.com/v1/images/generations',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+        body:JSON.stringify({model:'gpt-image-1',prompt:'a simple circle, black line on white background',size:'1024x1024',quality:'low'})
+      });
+      testLog('Fetch completed (HTTP '+r.status+')');
+      if(r.ok){
+        const d = await r.json();
+        testLog('✅ OpenAI image generated! ('+d.data[0].b64_json.length+' chars base64)');
+        testLog('✅ OpenAI image generation WORKS!');
+      } else {
+        const err = await r.text();
+        testLog('❌ OpenAI error: '+err.slice(0,300));
+      }
+    } catch(e){
+      testLog('❌ OpenAI fetch failed: '+e.message);
+      if(window.location.protocol === 'file:'){
+        testLog('');
+        testLog('⚠️  You are running from file:// — some browsers block API calls.');
+        testLog('   Fix: run a local server instead:');
+        testLog('   cd '+window.location.pathname.replace(/\/[^/]+$/,'')+' && python3 -m http.server 8080');
+        testLog('   Then open: http://localhost:8080/drawbox-simulator.html');
+      }
+    }
+  }
+
+  if(!repKey && !apiKey){
+    testLog('❌ No API keys entered. Enter at least one key above.');
+  }
 }
 
 // ── SAFETY BLOCKLIST ──────────────────────────────
@@ -604,20 +725,25 @@ async function generateImage(desc){
 }
 
 async function generateViaReplicate(prompt, repKey){
-  const createResp = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
-    method:'POST',
-    headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
-    body:JSON.stringify({
-      input:{
-        prompt: prompt,
-        num_outputs: 1,
-        aspect_ratio: '3:4',
-        output_format: 'png',
-        num_inference_steps: 4,
-        go_fast: true,
-      }
-    })
-  });
+  let createResp;
+  try {
+    createResp = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
+      method:'POST',
+      headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        input:{
+          prompt: prompt,
+          num_outputs: 1,
+          aspect_ratio: '3:4',
+          output_format: 'png',
+          num_inference_steps: 4,
+          go_fast: true,
+        }
+      })
+    });
+  } catch(e){
+    throw new Error('Failed to fetch (Replicate CORS blocks browser calls): '+e.message);
+  }
   if(!createResp.ok){
     const err = await createResp.text();
     throw new Error('Replicate API '+createResp.status+': '+err.slice(0,200));
@@ -627,9 +753,14 @@ async function generateViaReplicate(prompt, repKey){
   while(prediction.status !== 'succeeded' && prediction.status !== 'failed'){
     await new Promise(r => setTimeout(r, 500));
     log('Polling... status: '+prediction.status,'info');
-    const pollResp = await fetch(prediction.urls.get,{
-      headers:{'Authorization':'Token '+repKey}
-    });
+    let pollResp;
+    try {
+      pollResp = await fetch(prediction.urls.get,{
+        headers:{'Authorization':'Token '+repKey}
+      });
+    } catch(e){
+      throw new Error('Failed to fetch poll URL (CORS): '+e.message);
+    }
     prediction = await pollResp.json();
   }
   if(prediction.status === 'failed'){
@@ -641,24 +772,31 @@ async function generateViaReplicate(prompt, repKey){
 }
 
 async function generateViaOpenAI(prompt, apiKey){
-  const resp = await fetch('https://api.openai.com/v1/images/generations',{
-    method:'POST',
-    headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
-    body:JSON.stringify({
-      model:'gpt-image-1',
-      prompt: prompt,
-      size:'1024x1536',
-      quality:'low'
-    })
-  });
+  let resp;
+  try {
+    log('Calling OpenAI gpt-image-1 API...','info');
+    resp = await fetch('https://api.openai.com/v1/images/generations',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'gpt-image-1',
+        prompt: prompt,
+        size:'1024x1536',
+        quality:'low'
+      })
+    });
+  } catch(e){
+    throw new Error('Network error calling OpenAI: '+e.message+(window.location.protocol==='file:'?' (try http://localhost instead of file://)':''));
+  }
+  log('OpenAI responded: HTTP '+resp.status,'info');
   if(resp.status === 401) throw new Error('Invalid OpenAI API key (401)');
   if(!resp.ok){
     const err = await resp.text();
-    throw new Error('OpenAI Image API '+resp.status+': '+err.slice(0,200));
+    throw new Error('OpenAI Image API '+resp.status+': '+err.slice(0,300));
   }
   const data = await resp.json();
   const b64 = data.data[0].b64_json;
-  log('OpenAI image ready, post-processing...','ok');
+  log('OpenAI image ready ('+Math.round(b64.length/1024)+'KB), post-processing...','ok');
   return postProcess('data:image/png;base64,'+b64);
 }
 
