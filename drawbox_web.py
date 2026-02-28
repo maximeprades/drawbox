@@ -879,26 +879,27 @@ body {
   <div class="page" id="page-update">
     <div class="page-header">
       <h1 class="page-title">Software Update</h1>
-      <p class="page-desc">Check for and deploy updates from GitHub</p>
+      <p class="page-desc">Pull the latest code from GitHub and apply it to this DrawBox</p>
     </div>
     <div class="card">
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
         <div>
           <div class="card-title">Current Version</div>
-          <div class="card-desc" id="updateSha">Loading...</div>
+          <div class="card-desc" id="updateSha">Not checked yet</div>
         </div>
         <button class="btn btn-outline btn-sm" id="updateCheckBtn" onclick="checkUpdate()">Check for Updates</button>
       </div>
       <div class="card-content">
         <div id="updateStatus" style="margin-bottom:12px">
-          <span class="badge badge-default">Click check to see if updates are available</span>
+          <span class="badge badge-default">Press "Check for Updates" to see if a newer version is available</span>
         </div>
         <div id="updateDetails" style="display:none">
           <div id="updateCommits" style="font-size:14px;margin-bottom:12px"></div>
           <button class="btn btn-primary" id="deployBtn" onclick="deployUpdate()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-            Deploy Update
+            Install Update &amp; Restart
           </button>
+          <div class="form-hint" style="margin-top:8px">Downloads the latest code, copies files, and restarts both services. The dashboard will reload automatically.</div>
         </div>
         <div class="diag-out" id="updateLog" style="display:none;margin-top:12px;height:200px"></div>
       </div>
@@ -1275,10 +1276,10 @@ async function checkUpdate() {
 }
 
 async function deployUpdate() {
-  if (!confirm('Deploy the update? This will restart the web dashboard.')) return;
+  if (!confirm('Install the update and restart DrawBox services? The dashboard will reload automatically when ready.')) return;
   const btn = $('deployBtn');
   const log = $('updateLog');
-  btn.disabled = true; btn.textContent = 'Deploying...';
+  btn.disabled = true; btn.textContent = 'Installing...';
   log.style.display = 'block';
   log.textContent = 'Starting deployment...\\n';
   try {
@@ -1289,7 +1290,7 @@ async function deployUpdate() {
       pollUntilAlive();
     } else {
       log.textContent += 'ERROR: ' + (d.error || 'Unknown error') + '\\n';
-      btn.disabled = false; btn.textContent = 'Deploy Update';
+      btn.disabled = false; btn.textContent = 'Install Update & Restart';
     }
   } catch(e) {
     log.textContent += 'Connection lost (expected during restart).\\nWaiting for service to come back...\\n';
@@ -1628,7 +1629,7 @@ def api_analytics():
 @app.route("/api/update/check")
 def api_update_check():
     if not REPO_DIR.exists():
-        return jsonify(error=f"No repo found at {REPO_DIR}. Clone it first: git clone <url> {REPO_DIR}",
+        return jsonify(error="Software updates not set up yet. Re-run deploy-web.sh from your Mac to set it up.",
                        has_update=False)
     try:
         subprocess.run(["git", "fetch", "origin"], cwd=str(REPO_DIR),
