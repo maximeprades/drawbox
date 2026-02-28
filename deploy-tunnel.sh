@@ -96,18 +96,19 @@ INSTALL
 # ── 4. Copy credentials to Pi ────────────────
 echo ""
 echo "4. Copying tunnel credentials to Pi..."
-ssh "$PI" "mkdir -p ~/.cloudflared"
-scp "$CRED_FILE" "${PI}:~/.cloudflared/${TUNNEL_ID}.json"
-echo "   ✅ Credentials copied"
+ssh "$PI" "sudo mkdir -p /etc/cloudflared"
+scp "$CRED_FILE" "${PI}:/tmp/tunnel-creds.json"
+ssh "$PI" "sudo mv /tmp/tunnel-creds.json /etc/cloudflared/${TUNNEL_ID}.json && sudo chmod 600 /etc/cloudflared/${TUNNEL_ID}.json"
+echo "   ✅ Credentials copied to /etc/cloudflared/"
 
 # ── 5. Create config on Pi ───────────────────
 echo ""
 echo "5. Creating tunnel config on Pi..."
 ssh "$PI" bash -s << EOF
 set -e
-cat > ~/.cloudflared/config.yml << 'YAML'
+sudo tee /etc/cloudflared/config.yml > /dev/null << 'YAML'
 tunnel: ${TUNNEL_ID}
-credentials-file: /home/pi/.cloudflared/${TUNNEL_ID}.json
+credentials-file: /etc/cloudflared/${TUNNEL_ID}.json
 
 ingress:
   - hostname: ${DASHBOARD_HOST}
@@ -116,7 +117,7 @@ ingress:
     service: ssh://localhost:22
   - service: http_status:404
 YAML
-echo "   ✅ Config created at ~/.cloudflared/config.yml"
+echo "   ✅ Config created at /etc/cloudflared/config.yml"
 EOF
 
 # ── 6. Install and start service ─────────────
@@ -124,13 +125,14 @@ echo ""
 echo "6. Installing cloudflared as systemd service..."
 ssh "$PI" bash -s << 'SERVICE'
 set -e
-# Stop existing service if running
+# Stop and uninstall existing service if present
 sudo systemctl stop cloudflared 2>/dev/null || true
-# Install service
-sudo cloudflared service install 2>/dev/null || true
+sudo cloudflared service uninstall 2>/dev/null || true
+# Install service (reads /etc/cloudflared/config.yml)
+sudo cloudflared service install
 sudo systemctl enable cloudflared
-sudo systemctl restart cloudflared
-sleep 2
+sudo systemctl start cloudflared
+sleep 3
 if systemctl is-active cloudflared > /dev/null 2>&1; then
     echo "   ✅ cloudflared service running"
 else

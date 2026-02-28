@@ -8,7 +8,7 @@ Your kid presses a big red button, says what they want to draw, and a coloring p
   <img src="docs/drawbox.jpg" alt="DrawBox" width="500">
 </p>
 
-Built with a Raspberry Pi 5, OpenAI (voice) + FLUX Schnell (images), and a cardboard box with googly eyes.
+Built with a Raspberry Pi 5, OpenAI (voice), and your choice of image model — all in a cardboard box with googly eyes.
 
 **~3 hours to build | ~$135 in parts + printer | ~$0.02 per page**
 
@@ -21,7 +21,7 @@ Kid presses button → "I'm listening!"
     → Kid says "a happy dinosaur with flowers!"
     → Whisper transcribes speech
     → Safety filter (100-word blocklist)
-    → FLUX Schnell generates coloring page
+    → Image model generates coloring page
     → Pillow converts to clean line art
     → "Here it comes!"
     → Brother laser printer prints it
@@ -29,6 +29,18 @@ Kid presses button → "I'm listening!"
 ```
 
 The whole cycle takes ~10 seconds.
+
+## Image Models
+
+DrawBox supports three image generation backends. Set `IMAGE_MODEL` in your service file:
+
+| Model | Env Value | Speed | Cost | Notes |
+|-------|-----------|-------|------|-------|
+| **FLUX Schnell** | `flux-schnell` | ~3s | ~$0.003 | Default. Via Replicate. Fastest. |
+| **Nano Banana 2** | `nano-banana` | ~5s | Free (quota) | Google Gemini 2.5 Flash Image generation |
+| **GPT Image** | `gpt-image` | ~15s | ~$0.02 | OpenAI. Best quality, slowest. |
+
+You can switch models from the web dashboard's Settings panel without restarting.
 
 ## Parts
 
@@ -73,7 +85,7 @@ Open `drawbox-guide.html` in any browser. It's a single self-contained HTML file
 ./deploy-web.sh
 ```
 
-One command copies everything to the Pi, installs Flask, creates the systemd service, and starts the dashboard at `http://drawbox.local:5000`.
+One command copies everything to the Pi, installs Flask + gunicorn, creates the systemd service, and starts the dashboard at `http://drawbox.local:5000`.
 
 ### 4. Run the Health Check
 
@@ -83,6 +95,26 @@ One command copies everything to the Pi, installs Flask, creates the systemd ser
 
 Verifies: internet, API key, mic, speaker, printer, GPIO, Python deps, script correctness, services, and voice cache.
 
+## Remote Access (Optional)
+
+Access your DrawBox from anywhere using a Cloudflare Tunnel — no open ports, no dynamic DNS, $0/month on Cloudflare's free tier.
+
+```bash
+./deploy-tunnel.sh pi@drawbox.local mybox yourdomain.com
+```
+
+This creates:
+- `https://mybox.yourdomain.com` — web dashboard (protected by Cloudflare Access)
+- `https://mybox-ssh.yourdomain.com` — browser-based SSH terminal
+
+**Prerequisites:** [cloudflared CLI](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) installed on your Mac, logged in (`cloudflared tunnel login`), and a domain on Cloudflare.
+
+After deploying, set up [Cloudflare Access](https://one.dash.cloudflare.com) to protect your tunnel with email OTP or another identity provider.
+
+### Hub Page
+
+`drawbox-hub.html` is a standalone page for monitoring multiple DrawBox Pis from one place. Open it locally or host it on Cloudflare Pages. It shows each Pi's status, temperature, uptime, and lets you toggle settings remotely.
+
 ## What's In This Repo
 
 | File | Description |
@@ -90,9 +122,26 @@ Verifies: internet, API key, mic, speaker, printer, GPIO, Python deps, script co
 | `drawbox.py` | The main script — records speech, generates coloring pages, prints them |
 | `drawbox_web.py` | Flask web dashboard — generate prints, view logs, change settings, run diagnostics |
 | `drawbox-guide.html` | Complete interactive build guide — open in any browser |
-| `drawbox-simulator.html` | Browser simulator — test the full flow without a Pi (needs OpenAI + Replicate keys) |
+| `drawbox-simulator.html` | Browser simulator — test the full flow without a Pi (needs API keys) |
+| `drawbox-hub.html` | Multi-Pi management hub — monitor and configure multiple DrawBoxes |
 | `deploy-web.sh` | One-command deploy to Pi via SSH |
+| `deploy-tunnel.sh` | One-command Cloudflare Tunnel setup for remote access |
 | `check.sh` | Health check — verifies the entire Pi setup |
+
+## Web Dashboard
+
+The dashboard (`drawbox_web.py`) runs on the Pi and provides:
+
+- **Generate & Print** — type a description, generate and print from any browser
+- **Live Logs** — streaming service logs via SSE
+- **Settings** — coloring prompt, image model, TTS voice, record duration
+- **"Please" Mode** — require kids to say "please" to get a drawing
+- **Safety Filter** — toggle the word blocklist on/off (the AI prompt always instructs child-safe output)
+- **WiFi Management** — scan and connect to WiFi networks from the dashboard
+- **Diagnostics** — printer status, audio devices, disk usage, temperature, error logs
+- **Service Control** — restart/stop/start DrawBox, reboot Pi
+
+The dashboard uses gunicorn as a production WSGI server for reliable performance behind reverse proxies like Cloudflare Tunnel.
 
 ## Voice Lines
 
@@ -111,12 +160,12 @@ DrawBox talks to kids at every step:
 
 ## Cost
 
-Each coloring page costs about **$0.02**:
+Each coloring page costs about **$0.02** (with FLUX Schnell):
 - ~$0.003 image generation (FLUX Schnell via Replicate)
 - ~$0.01 voice (OpenAI TTS)
 - ~$0.006 transcription (Whisper)
 
-$5 gets you ~250 pages. Set spending limits at [platform.openai.com](https://platform.openai.com) and [replicate.com](https://replicate.com).
+$5 gets you ~250 pages. Nano Banana 2 (Gemini) is free within Google's quota. Set spending limits at [platform.openai.com](https://platform.openai.com) and [replicate.com](https://replicate.com).
 
 ## Safety
 
@@ -125,6 +174,7 @@ This is used by young children, so safety is built in at multiple layers:
 - **Word blocklist** — ~100 blocked words covering violence, sexual content, profanity, drugs, horror, and hate speech
 - **Hardened prompt** — The image generation prompt explicitly instructs safe-only output
 - **Friendly rejection** — "Hmm, I can't draw that. How about something fun like an animal or a rainbow?"
+- **Safety toggle** — Admins can toggle the word filter from the dashboard. Even when off, the AI prompt still requires child-safe output (useful for false positives like "skeleton" for Halloween).
 
 ## Troubleshooting
 
@@ -137,6 +187,7 @@ This is used by young children, so safety is built in at multiple layers:
 | Images too dark | Lower threshold from 180 to 150 in `drawbox.py` |
 | Service won't start | `journalctl -u drawbox -e` — usually wrong API key |
 | Dashboard not loading | `sudo systemctl status drawbox-web` |
+| Tunnel not connecting | `sudo systemctl status cloudflared` and check `/etc/cloudflared/config.yml` |
 | Need to reboot | Hold the big red button for 5 seconds |
 
 ## Pi 5 Gotchas

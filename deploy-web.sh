@@ -26,19 +26,20 @@ echo "🔧 Setting up on Pi..."
 ssh "$PI" bash -s << 'REMOTE'
 set -e
 
-# Install Flask if missing
+# Install Flask, gunicorn, replicate if missing
 python3 -c "import flask" 2>/dev/null || {
     echo "   Installing Flask..."
     sudo pip3 install --break-system-packages flask
 }
-echo "   ✅ Flask ready"
-
-# Install replicate if missing
+python3 -c "import gunicorn" 2>/dev/null || {
+    echo "   Installing gunicorn..."
+    sudo pip3 install --break-system-packages gunicorn
+}
 python3 -c "import replicate" 2>/dev/null || {
     echo "   Installing replicate..."
     sudo pip3 install --break-system-packages replicate
 }
-echo "   ✅ Replicate ready"
+echo "   ✅ Flask + gunicorn + replicate ready"
 
 # Sudoers for service control (idempotent)
 sudo tee /etc/sudoers.d/drawbox-web > /dev/null << 'SUDOERS'
@@ -102,9 +103,9 @@ Environment=OPENAI_API_KEY=$OPENAI_KEY
 Environment=REPLICATE_API_TOKEN=$REP_KEY
 Environment=GEMINI_API_KEY=$GEM_KEY
 WorkingDirectory=/home/pi
-ExecStart=/usr/bin/python3 /home/pi/drawbox_web.py
-Restart=on-failure
-RestartSec=10
+ExecStart=/usr/local/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 drawbox_web:app
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

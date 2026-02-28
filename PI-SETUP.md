@@ -186,4 +186,14 @@ If you prefer, the deploy script handles everything automatically from your Mac:
 ./deploy-web.sh
 ```
 
-This copies files to the Pi, installs dependencies, and restarts the web dashboard service. You'll still need to manually add `REPLICATE_API_TOKEN` to the main `drawbox.service` file (Step 6).
+This copies files to the Pi, installs dependencies (Flask, gunicorn, replicate), and restarts the web dashboard service. You'll still need to manually add `REPLICATE_API_TOKEN` to the main `drawbox.service` file (Step 6).
+
+## Remote Access with Cloudflare Tunnel (Optional)
+
+To access your DrawBox dashboard and SSH from anywhere:
+
+```bash
+./deploy-tunnel.sh pi@drawbox.local mybox yourdomain.com
+```
+
+This creates a Cloudflare Tunnel exposing the dashboard and SSH. See the [README](README.md#remote-access-optional) for details and prerequisites.

@@ -177,7 +177,9 @@ DIAGNOSTIC_COMMANDS = {
 }
 
 # ── FLASK APP ────────────────────────────────────
+from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # CORS: allow requests from the cloud hub dashboard
 @app.after_request
@@ -857,12 +859,13 @@ def api_reboot():
     except Exception as e:
         return jsonify(ok=False, message=str(e))
 
-# ── MAIN ─────────────────────────────────────────
+# ── INIT ─────────────────────────────────────────
+SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+# Safety mode ON by default (create sentinel file if missing)
+if not SAFETY_MODE_FILE.exists():
+    SAFETY_MODE_FILE.touch()
+
 if __name__ == "__main__":
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Safety mode ON by default (create sentinel file if missing)
-    if not SAFETY_MODE_FILE.exists():
-        SAFETY_MODE_FILE.touch()
     if not OPENAI_API_KEY:
         print("⚠️  OPENAI_API_KEY not set. Voice features won't work.")
     print(f"   Image model: {IMAGE_MODEL}")
