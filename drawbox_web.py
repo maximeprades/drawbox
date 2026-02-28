@@ -4,6 +4,7 @@
 import os, json, tempfile, subprocess, base64
 from pathlib import Path
 from io import BytesIO
+from urllib.request import Request, urlopen
 from flask import Flask, request, jsonify, Response, render_template_string, send_file
 import replicate
 from openai import OpenAI
@@ -11,6 +12,8 @@ from PIL import Image
 
 # ── CONFIG ───────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
 PRINTER_NAME = "drawbox-printer"
 SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
@@ -83,25 +86,62 @@ last_image_b64 = None
 def generate_image(desc):
     settings = load_settings()
     prompt = settings.get("coloring_prompt", DEFAULT_COLORING_PROMPT)
+    full_prompt = f"{prompt}\n\nChild requested: {desc}"
+    model = settings.get("image_model", IMAGE_MODEL)
+    if model == "nano-banana":
+        img_bytes = _generate_nano_banana(full_prompt)
+    elif model == "gpt-image":
+        img_bytes = _generate_gpt_image(full_prompt)
+    else:
+        img_bytes = _generate_flux_schnell(full_prompt)
+    return _postprocess(img_bytes)
+
+
+def _generate_flux_schnell(prompt):
     output = replicate.run(
         "black-forest-labs/flux-schnell",
         input={
-            "prompt": f"{prompt}\n\nChild requested: {desc}",
-            "num_outputs": 1,
-            "aspect_ratio": "3:4",
-            "output_format": "png",
-            "num_inference_steps": 4,
-            "go_fast": True,
+            "prompt": prompt, "num_outputs": 1, "aspect_ratio": "3:4",
+            "output_format": "png", "num_inference_steps": 4, "go_fast": True,
         })
-    img_bytes = output[0].read()
+    return output[0].read()
+
+
+def _generate_nano_banana(prompt):
+    url = (f"https://generativelanguage.googleapis.com/v1beta/"
+           f"models/gemini-2.5-flash-image:generateContent"
+           f"?key={GEMINI_API_KEY}")
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {"aspectRatio": "3:4"},
+        },
+    }).encode()
+    req = Request(url, data=body, headers={"Content-Type": "application/json"})
+    resp = urlopen(req, timeout=60)
+    data = json.loads(resp.read())
+    for part in data["candidates"][0]["content"]["parts"]:
+        if "inlineData" in part:
+            return base64.b64decode(part["inlineData"]["data"])
+    raise RuntimeError("No image in Gemini response")
+
+
+def _generate_gpt_image(prompt):
+    r = client.images.generate(
+        model="gpt-image-1", prompt=prompt,
+        size="1024x1536", quality="low")
+    return base64.b64decode(r.data[0].b64_json)
+
+
+def _postprocess(img_bytes):
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    # Fit portrait image onto letter canvas preserving aspect ratio
     iw, ih = img.size
     canvas_w, canvas_h = 1275, 1650
-    margin = 75  # 0.5" at 150dpi
-    max_w = canvas_w - 2 * margin  # 1125
-    max_h = canvas_h - 2 * margin  # 1500
+    margin = 75
+    max_w = canvas_w - 2 * margin
+    max_h = canvas_h - 2 * margin
     scale = min(max_w / iw, max_h / ih)
     new_w = int(iw * scale)
     new_h = int(ih * scale)
@@ -649,10 +689,7 @@ def api_reboot():
 if __name__ == "__main__":
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not OPENAI_API_KEY:
-        print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
-        exit(1)
-    if not os.environ.get("REPLICATE_API_TOKEN"):
-        print("❌ REPLICATE_API_TOKEN not set. Export it or add to your service file.")
-        exit(1)
+        print("⚠️  OPENAI_API_KEY not set. Voice features won't work.")
+    print(f"   Image model: {IMAGE_MODEL}")
     print("DrawBox Web Dashboard starting on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

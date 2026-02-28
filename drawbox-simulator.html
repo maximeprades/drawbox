@@ -103,11 +103,26 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
         </div>
       </div>
       <div class="cfg-row">
-        <label for="repkey">Replicate API Token <span style="font-weight:400;text-transform:none;letter-spacing:0">(for image generation)</span></label>
+        <label for="repkey">Replicate API Token <span style="font-weight:400;text-transform:none;letter-spacing:0">(FLUX Schnell)</span></label>
         <div class="key-wrap">
           <input id="repkey" type="password" placeholder="r8_..." spellcheck="false" autocomplete="off" />
           <button class="key-tog" onclick="toggleRepKey()" title="Show/hide key">&#128065;</button>
         </div>
+      </div>
+      <div class="cfg-row">
+        <label for="gemkey">Gemini API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(Nano Banana 2)</span></label>
+        <div class="key-wrap">
+          <input id="gemkey" type="password" placeholder="AIza..." spellcheck="false" autocomplete="off" />
+          <button class="key-tog" onclick="toggleGemKey()" title="Show/hide key">&#128065;</button>
+        </div>
+      </div>
+      <div class="cfg-row">
+        <label for="imgmodel">Image Model</label>
+        <select id="imgmodel">
+          <option value="flux-schnell">FLUX Schnell (Replicate)</option>
+          <option value="nano-banana">Nano Banana 2 (Gemini)</option>
+          <option value="gpt-image">GPT Image (OpenAI)</option>
+        </select>
       </div>
       <div class="cfg-row">
         <label for="ttsvoice">TTS Voice</label>
@@ -157,6 +172,7 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
     <div class="panel-b" style="display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="testOpenAI()" style="padding:6px 14px;border-radius:6px;border:1px solid #ccc;cursor:pointer">Test OpenAI</button>
       <button onclick="testReplicate()" style="padding:6px 14px;border-radius:6px;border:1px solid #ccc;cursor:pointer">Test Replicate</button>
+      <button onclick="testGemini()" style="padding:6px 14px;border-radius:6px;border:1px solid #ccc;cursor:pointer">Test Gemini</button>
       <button onclick="testGenerate()" style="padding:6px 14px;border-radius:6px;border:1px solid #4CAF50;color:white;background:#4CAF50;cursor:pointer;font-weight:600">Test Image Generation</button>
       <div id="testresult" style="width:100%;margin-top:6px;font-size:12px;font-family:monospace;white-space:pre-wrap;color:#333"></div>
     </div>
@@ -198,6 +214,8 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 // ── ELEMENTS ──────────────────────────────────────
 const $key     = document.getElementById('apikey');
 const $repKey  = document.getElementById('repkey');
+const $gemKey  = document.getElementById('gemkey');
+const $imgModel= document.getElementById('imgmodel');
 const $voice   = document.getElementById('ttsvoice');
 const $recSec  = document.getElementById('recsec');
 const $prompt  = document.getElementById('cprompt');
@@ -216,6 +234,8 @@ const $dl      = document.getElementById('dlbtn');
   const s = k => localStorage.getItem('db_'+k);
   if(s('key'))     $key.value     = s('key');
   if(s('repkey'))  $repKey.value  = s('repkey');
+  if(s('gemkey'))  $gemKey.value  = s('gemkey');
+  if(s('imgmodel')) $imgModel.value = s('imgmodel');
   if(s('voice'))   $voice.value   = s('voice');
   if(s('recsec'))  $recSec.value  = s('recsec');
   if(s('prompt'))  $prompt.value  = s('prompt');
@@ -223,17 +243,22 @@ const $dl      = document.getElementById('dlbtn');
 })();
 function saveCfg(){
   const p = (k,v) => localStorage.setItem('db_'+k,v);
-  p('key',$key.value); p('repkey',$repKey.value); p('voice',$voice.value);
+  p('key',$key.value); p('repkey',$repKey.value); p('gemkey',$gemKey.value);
+  p('imgmodel',$imgModel.value); p('voice',$voice.value);
   p('recsec',$recSec.value); p('prompt',$prompt.value);
   p('please',document.getElementById('pleasemode').checked);
 }
-[$key,$repKey,$voice,$recSec,$prompt].forEach(
+[$key,$repKey,$gemKey,$voice,$recSec,$prompt].forEach(
   el => el.addEventListener('input', saveCfg));
 $voice.addEventListener('change', saveCfg);
+$imgModel.addEventListener('change', saveCfg);
 document.getElementById('pleasemode').addEventListener('change', saveCfg);
 
 function toggleKey(){
   $key.type = $key.type==='password' ? 'text' : 'password';
+}
+function toggleGemKey(){
+  $gemKey.type = $gemKey.type==='password' ? 'text' : 'password';
 }
 function toggleRepKey(){
   $repKey.type = $repKey.type==='password' ? 'text' : 'password';
@@ -281,13 +306,63 @@ async function testReplicate(){
   }
 }
 
+async function testGemini(){
+  $testResult.textContent = '';
+  const key = $gemKey.value.trim();
+  if(!key){ testLog('❌ No Gemini key entered.'); return; }
+  testLog('Testing Gemini API key (via CORS proxy)...');
+  try {
+    const r = await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models?key='+key, {});
+    if(r.ok){
+      testLog('✅ Gemini key valid (HTTP '+r.status+')');
+    } else {
+      testLog('❌ Gemini key invalid (HTTP '+r.status+')');
+    }
+  } catch(e){
+    testLog('❌ CORS proxy error: '+e.message);
+    testLog('   corsproxy.io may be down. Try another model as fallback.');
+  }
+}
+
 async function testGenerate(){
   $testResult.textContent = '';
   const repKey = $repKey.value.trim();
+  const gemKey = $gemKey.value.trim();
   const apiKey = $key.value.trim();
-  testLog('Keys present: OpenAI='+(apiKey?'YES':'NO')+', Replicate='+(repKey?'YES':'NO'));
+  testLog('Keys present: OpenAI='+(apiKey?'YES':'NO')+', Replicate='+(repKey?'YES':'NO')+', Gemini='+(gemKey?'YES':'NO'));
   testLog('Protocol: '+window.location.protocol);
   testLog('');
+
+  if(gemKey){
+    testLog('--- Testing Gemini (Nano Banana 2 via CORS proxy) ---');
+    try {
+      const r = await geminiFetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key='+gemKey,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({contents:[{parts:[{text:'a simple circle, black line on white background'}]}],generationConfig:{responseModalities:['IMAGE'],imageConfig:{aspectRatio:'1:1'}}})
+      });
+      testLog('CORS proxy responded (HTTP '+r.status+')');
+      if(r.ok){
+        const d = await r.json();
+        const parts = d.candidates[0].content.parts;
+        const imgPart = parts.find(p => p.inlineData);
+        if(imgPart){
+          testLog('✅ Gemini image generated! ('+Math.round(imgPart.inlineData.data.length/1024)+'KB base64)');
+          testLog('✅ Gemini WORKS from this browser!');
+          return;
+        } else {
+          testLog('⚠️  Gemini responded but no image in output');
+        }
+      } else {
+        const err = await r.text();
+        testLog('❌ Gemini error: '+err.slice(0,200));
+      }
+    } catch(e){
+      testLog('❌ CORS proxy failed: '+e.message);
+      testLog('   corsproxy.io may be down or blocking this request.');
+      testLog('');
+    }
+  }
 
   if(repKey){
     testLog('--- Testing Replicate (FLUX Schnell via CORS proxy) ---');
@@ -297,7 +372,7 @@ async function testGenerate(){
         headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
         body:JSON.stringify({input:{prompt:'a simple circle',num_outputs:1,aspect_ratio:'1:1',output_format:'png',num_inference_steps:4,go_fast:true}})
       });
-      testLog('✅ CORS proxy worked (HTTP '+r.status+')');
+      testLog('CORS proxy responded (HTTP '+r.status+')');
       if(r.ok){
         const d = await r.json();
         testLog('✅ Prediction created: '+d.id+' (status: '+d.status+')');
@@ -343,7 +418,7 @@ async function testGenerate(){
     }
   }
 
-  if(!repKey && !apiKey){
+  if(!repKey && !gemKey && !apiKey){
     testLog('❌ No API keys entered. Enter at least one key above.');
   }
 }
@@ -690,35 +765,36 @@ function listenWithWebSpeech(){
 }
 
 // ── GENERATE IMAGE ────────────────────────────────
-// Tries Replicate (fast, ~2s) first, falls back to OpenAI (slower, ~15-30s).
-// Replicate API blocks browser CORS, so OpenAI is the reliable browser fallback.
+// Uses the selected model. Replicate/Gemini go through CORS proxy.
+// Falls back to other available models if selected one fails.
 async function generateImage(desc){
   log('Generating: '+desc);
   setState('GENERATING','Generating image...');
   const prompt = $prompt.value.trim() + '\n\nChild requested: ' + desc;
-
-  // Try Replicate first (FLUX Schnell — fast but may fail due to CORS in browser)
+  const model = $imgModel.value;
   const repKey = $repKey.value.trim();
-  if(repKey){
+  const gemKey = $gemKey.value.trim();
+  const apiKey = $key.value.trim();
+
+  // Build ordered list: selected model first, then fallbacks
+  const attempts = [];
+  if(model === 'nano-banana' && gemKey) attempts.push({name:'Nano Banana 2 (Gemini)', fn:()=>generateViaGemini(prompt,gemKey)});
+  if(model === 'flux-schnell' && repKey) attempts.push({name:'FLUX Schnell (Replicate)', fn:()=>generateViaReplicate(prompt,repKey)});
+  if(model === 'gpt-image' && apiKey) attempts.push({name:'GPT Image (OpenAI)', fn:()=>generateViaOpenAI(prompt,apiKey)});
+  // Fallbacks: try other available models
+  if(gemKey && model !== 'nano-banana') attempts.push({name:'Nano Banana 2 (fallback)', fn:()=>generateViaGemini(prompt,gemKey)});
+  if(repKey && model !== 'flux-schnell') attempts.push({name:'FLUX Schnell (fallback)', fn:()=>generateViaReplicate(prompt,repKey)});
+  if(apiKey && model !== 'gpt-image') attempts.push({name:'GPT Image (fallback)', fn:()=>generateViaOpenAI(prompt,apiKey)});
+
+  for(const attempt of attempts){
     try {
-      log('Trying Replicate FLUX Schnell (via CORS proxy)...','info');
-      const result = await generateViaReplicate(prompt, repKey);
-      return result;
+      log('Trying '+attempt.name+'...','info');
+      return await attempt.fn();
     } catch(e){
-      log('Replicate error: '+e.message,'err');
-      const apiKey = $key.value.trim();
-      if(apiKey) log('Falling back to OpenAI...','info');
+      log(attempt.name+' failed: '+e.message,'err');
     }
   }
-
-  // Fallback: OpenAI gpt-image-1 (works from browser, slower)
-  const apiKey = $key.value.trim();
-  if(apiKey){
-    log('Using OpenAI gpt-image-1 (may take 15-30s)...','info');
-    return await generateViaOpenAI(prompt, apiKey);
-  }
-
-  throw new Error('Image generation failed — Replicate blocked by browser CORS and no OpenAI key for fallback. Enter an OpenAI key or run the Pi version.');
+  throw new Error('All image models failed. Check your API keys.');
 }
 
 // Replicate API blocks browser CORS, so we route through a proxy.
@@ -802,6 +878,49 @@ async function generateViaOpenAI(prompt, apiKey){
   const b64 = data.data[0].b64_json;
   log('OpenAI image ready ('+Math.round(b64.length/1024)+'KB), post-processing...','ok');
   return postProcess('data:image/png;base64,'+b64);
+}
+
+// Gemini API also blocks browser CORS, so route through proxy.
+function geminiFetch(url, options){
+  const proxied = 'https://corsproxy.io/?' + encodeURIComponent(url);
+  return fetch(proxied, options);
+}
+
+async function generateViaGemini(prompt, gemKey){
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key='+gemKey;
+  let resp;
+  try {
+    log('Calling Gemini API (Nano Banana 2)...','info');
+    resp = await geminiFetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        contents:[{parts:[{text:prompt}]}],
+        generationConfig:{
+          responseModalities:['IMAGE'],
+          imageConfig:{aspectRatio:'3:4'},
+        }
+      })
+    });
+  } catch(e){
+    throw new Error('Network/CORS error calling Gemini: '+e.message);
+  }
+  log('Gemini responded: HTTP '+resp.status,'info');
+  if(!resp.ok){
+    const err = await resp.text();
+    throw new Error('Gemini API '+resp.status+': '+err.slice(0,300));
+  }
+  const data = await resp.json();
+  // Find image part in response
+  const parts = data.candidates[0].content.parts;
+  for(const part of parts){
+    if(part.inlineData){
+      const b64 = part.inlineData.data;
+      log('Nano Banana 2 image ready ('+Math.round(b64.length/1024)+'KB), post-processing...','ok');
+      return postProcess('data:image/png;base64,'+b64);
+    }
+  }
+  throw new Error('No image in Gemini response');
 }
 
 // ── POST-PROCESS (matches Python Pillow pipeline) ─
@@ -954,20 +1073,15 @@ $btn.addEventListener('touchcancel', onButtonUp, {passive:false});
 // ── MAIN FLOW ─────────────────────────────────────
 async function runFlow(){
   const repKey = $repKey.value.trim();
+  const gemKey = $gemKey.value.trim();
   const apiKey = $key.value.trim();
-  if(!repKey && !apiKey){
-    log('Enter at least one API key: Replicate token (fast) or OpenAI key (reliable from browser).','err');
+  if(!repKey && !gemKey && !apiKey){
+    log('Enter at least one API key above (Replicate, Gemini, or OpenAI).','err');
     return;
   }
-  if(!apiKey){
-    log('No OpenAI key — using browser speech + Web Speech API for voice.','info');
-  }
-  if(repKey){
-    log('Replicate token found — will try FLUX Schnell (fast, but may be blocked by browser CORS).','info');
-  }
-  if(apiKey){
-    log('OpenAI key found — '+(repKey ? 'available as image fallback.' : 'using for images + voice.'),'info');
-  }
+  const model = $imgModel.value;
+  log('Image model: '+model,'info');
+  if(!apiKey) log('No OpenAI key — using browser speech + Web Speech API.','info');
 
   isBusy = true;
   const hasOpenAI = !!$key.value.trim();
@@ -1083,7 +1197,7 @@ async function runFlow(){
 
 // ── INIT ──────────────────────────────────────────
 log('DrawBox Simulator ready!','ok');
-log('Enter an API key and press the button. Replicate = fast images. OpenAI = voice + image fallback. Both = best experience.','info');
+log('Enter at least one image API key: Replicate (FLUX Schnell), Gemini (Nano Banana 2), or OpenAI (GPT Image). OpenAI also enables voice.','info');
 soundReady();
 // Warm up voice cache once API key is present
 $key.addEventListener('change', ()=>{ if($key.value.trim()) warmUpCache(); });

@@ -5,8 +5,9 @@ Hardware: Pi 5, Brother HL-L2405W (USB), EG STARTS 100mm button,
           CHANGEEK USB mic, USB speaker
 """
 
-import os, time, tempfile, subprocess, random, hashlib, threading
+import os, time, tempfile, subprocess, random, hashlib, threading, json
 from concurrent.futures import ThreadPoolExecutor
+from urllib.request import Request, urlopen
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
@@ -21,6 +22,9 @@ from pathlib import Path
 # ── CONFIG ──────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Image model: "flux-schnell" (Replicate), "nano-banana" (Gemini), "gpt-image" (OpenAI)
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100
 PRINTER_NAME = "drawbox-printer"
@@ -352,26 +356,70 @@ def transcribe(path):
 
 # ── GENERATE ────────────────────────────────────
 def generate_image(desc):
-    print(f"🎨 Generating: {desc}")
+    prompt = f"{COLORING_PROMPT}\n\nChild requested: {desc}"
+    print(f"🎨 Generating ({IMAGE_MODEL}): {desc}")
+    if IMAGE_MODEL == "nano-banana":
+        img_bytes = _generate_nano_banana(prompt)
+    elif IMAGE_MODEL == "gpt-image":
+        img_bytes = _generate_gpt_image(prompt)
+    else:  # flux-schnell (default)
+        img_bytes = _generate_flux_schnell(prompt)
+    return _postprocess(img_bytes)
+
+
+def _generate_flux_schnell(prompt):
     output = replicate.run(
         "black-forest-labs/flux-schnell",
         input={
-            "prompt": f"{COLORING_PROMPT}\n\nChild requested: {desc}",
+            "prompt": prompt,
             "num_outputs": 1,
             "aspect_ratio": "3:4",
             "output_format": "png",
             "num_inference_steps": 4,
             "go_fast": True,
         })
-    img_bytes = output[0].read()
+    return output[0].read()
+
+
+def _generate_nano_banana(prompt):
+    """Generate via Google Gemini API (Nano Banana 2). No extra deps needed."""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/"
+           f"models/gemini-2.5-flash-image:generateContent"
+           f"?key={GEMINI_API_KEY}")
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {"aspectRatio": "3:4"},
+        },
+    }).encode()
+    req = Request(url, data=body,
+                  headers={"Content-Type": "application/json"})
+    resp = urlopen(req, timeout=60)
+    data = json.loads(resp.read())
+    # Find the image part in the response
+    for part in data["candidates"][0]["content"]["parts"]:
+        if "inlineData" in part:
+            return base64.b64decode(part["inlineData"]["data"])
+    raise RuntimeError("No image in Gemini response")
+
+
+def _generate_gpt_image(prompt):
+    r = client.images.generate(
+        model="gpt-image-1", prompt=prompt,
+        size="1024x1536", quality="low")
+    return base64.b64decode(r.data[0].b64_json)
+
+
+def _postprocess(img_bytes):
+    """Convert to B&W line art and fit onto letter-size canvas."""
     img = Image.open(BytesIO(img_bytes)).convert("L")
     img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    # Fit portrait image onto letter canvas preserving aspect ratio
     iw, ih = img.size
     canvas_w, canvas_h = 1275, 1650
     margin = 75  # 0.5" at 150dpi
-    max_w = canvas_w - 2 * margin  # 1125
-    max_h = canvas_h - 2 * margin  # 1500
+    max_w = canvas_w - 2 * margin
+    max_h = canvas_h - 2 * margin
     scale = min(max_w / iw, max_h / ih)
     new_w = int(iw * scale)
     new_h = int(ih * scale)
@@ -399,9 +447,13 @@ def main():
     if not OPENAI_API_KEY:
         print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
         return
-    if not REPLICATE_API_TOKEN:
-        print("❌ REPLICATE_API_TOKEN not set. Export it or add to your service file.")
+    if IMAGE_MODEL == "flux-schnell" and not REPLICATE_API_TOKEN:
+        print("❌ REPLICATE_API_TOKEN not set (needed for flux-schnell). Export it or add to your service file.")
         return
+    if IMAGE_MODEL == "nano-banana" and not GEMINI_API_KEY:
+        print("❌ GEMINI_API_KEY not set (needed for nano-banana). Export it or add to your service file.")
+        return
+    print(f"   Image model: {IMAGE_MODEL}")
 
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
 

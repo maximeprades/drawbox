@@ -74,6 +74,20 @@ if [ -z "$REP_KEY" ]; then
     REP_KEY="r8_your-token-here"
 fi
 
+# Figure out the Gemini API key
+GEM_KEY=""
+GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+if [ -z "$GEM_KEY" ]; then
+    GEM_KEY=$(grep -oP 'GEMINI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
+fi
+if [ -z "$GEM_KEY" ]; then
+    GEM_KEY="${GEMINI_API_KEY:-}"
+fi
+if [ -z "$GEM_KEY" ]; then
+    echo "   ⚠️  No Gemini API key found (optional — needed for Nano Banana 2 model)"
+    GEM_KEY=""
+fi
+
 # Create systemd service
 sudo tee /etc/systemd/system/drawbox-web.service > /dev/null << EOF
 [Unit]
@@ -86,6 +100,7 @@ Type=simple
 User=pi
 Environment=OPENAI_API_KEY=$OPENAI_KEY
 Environment=REPLICATE_API_TOKEN=$REP_KEY
+Environment=GEMINI_API_KEY=$GEM_KEY
 WorkingDirectory=/home/pi
 ExecStart=/usr/bin/python3 /home/pi/drawbox_web.py
 Restart=on-failure

@@ -92,6 +92,24 @@ else
 fi
 echo ""
 
+# ── 2c. GEMINI API KEY (optional) ─────────────────
+echo "🔑 Gemini API Key (optional — for Nano Banana 2)"
+SVC_GEM=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+BASHRC_GEM=$(grep -oP 'GEMINI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
+ENV_GEM="${GEMINI_API_KEY:-}"
+
+if [ -n "$SVC_GEM" ] && [ "$SVC_GEM" != "" ]; then
+    ok "Gemini key found in drawbox.service (${SVC_GEM:0:8}...)"
+elif [ -n "$BASHRC_GEM" ]; then
+    ok "Gemini key found in ~/.bashrc (${BASHRC_GEM:0:8}...)"
+    warn "Key not in drawbox.service — systemd won't see it. Add Environment=GEMINI_API_KEY=... to the service file"
+elif [ -n "$ENV_GEM" ]; then
+    ok "Gemini key found in environment (${ENV_GEM:0:8}...)"
+else
+    warn "No Gemini key found (optional — only needed if IMAGE_MODEL=nano-banana)"
+fi
+echo ""
+
 # ── 3. MICROPHONE ────────────────────────────────
 echo "🎙️  Microphone"
 if arecord -l 2>/dev/null | grep -qi "USB\|PnP\|CHANGE"; then

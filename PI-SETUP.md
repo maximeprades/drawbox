@@ -85,7 +85,7 @@ The DrawBox systemd services need environment variables. Edit the main service:
 sudo nano /etc/systemd/system/drawbox.service
 ```
 
-Find the `[Service]` section and add the `REPLICATE_API_TOKEN` line. It should look like:
+Find the `[Service]` section and add the API token lines. It should look like:
 
 ```ini
 [Service]
@@ -93,11 +93,15 @@ Type=simple
 User=pi
 Environment=OPENAI_API_KEY=sk-your-openai-key-here
 Environment=REPLICATE_API_TOKEN=r8_your-replicate-token-here
+Environment=GEMINI_API_KEY=AIza-your-gemini-key-here
+Environment=IMAGE_MODEL=flux-schnell
 WorkingDirectory=/home/pi
 ExecStart=/usr/bin/python3 /home/pi/drawbox.py
 Restart=on-failure
 RestartSec=10
 ```
+
+**`IMAGE_MODEL`** controls which image generator to use. Options: `flux-schnell` (default, fastest), `nano-banana` (Gemini), `gpt-image` (OpenAI). You only need the API key for the model you're using.
 
 Save: `Ctrl+O`, `Enter`, `Ctrl+X`
 
@@ -107,7 +111,7 @@ Now do the same for the web dashboard service:
 sudo nano /etc/systemd/system/drawbox-web.service
 ```
 
-Add the same `Environment=REPLICATE_API_TOKEN=r8_your-replicate-token-here` line under `[Service]`.
+Add the same `Environment=` lines under `[Service]`.
 
 ## 7. Reload and Restart Services
 
