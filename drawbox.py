@@ -34,6 +34,7 @@ TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
 CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
+PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
 
 # ── SAFETY BLOCKLIST ────────────────────────────
 BLOCKED_WORDS = {
@@ -74,6 +75,23 @@ def has_please(text):
     return any(w in t for w in (
         "please", "s'il vous plait", "s'il te plait",
         "s'il vous plaît", "s'il te plaît", "svp"))
+
+def log_print_event(prompt, model, duration_s):
+    """Append a print event to the analytics log."""
+    from datetime import datetime
+    entry = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "prompt": prompt[:200],
+        "model": model,
+        "duration_s": round(duration_s, 2),
+        "source": "button",
+    }
+    try:
+        PRINT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(PRINT_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
 This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
@@ -519,6 +537,7 @@ def main():
                     # Generate in background, tell jokes while waiting
                     gen_result = [None]
                     gen_error = [None]
+                    gen_t0 = time.time()
                     def gen_worker():
                         try: gen_result[0] = generate_image(text)
                         except Exception as e: gen_error[0] = e
@@ -526,6 +545,7 @@ def main():
                         target=gen_worker, daemon=True)
                     gen_thread.start()
                     voice.play_jokes_until_done(gen_thread)
+                    gen_duration = time.time() - gen_t0
                     if gen_error[0]:
                         raise gen_error[0]
                     img = gen_result[0]
@@ -533,6 +553,7 @@ def main():
                     # PRINTING
                     voice.play("printing")
                     print_image(img)
+                    log_print_event(text, IMAGE_MODEL, gen_duration)
 
                     # DONE
                     voice.play("done")

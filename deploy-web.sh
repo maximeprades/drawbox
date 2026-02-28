@@ -41,6 +41,17 @@ python3 -c "import replicate" 2>/dev/null || {
 }
 echo "   ✅ Flask + gunicorn + replicate ready"
 
+# Clone repo for software updates (skip if already exists)
+if [ ! -d ~/drawbox-repo ]; then
+    echo "   Cloning repo for software updates..."
+    git clone https://github.com/maximeprades/drawbox.git ~/drawbox-repo 2>/dev/null || {
+        echo "   ⚠️  Could not clone repo (no git or no network). Software Update will not work."
+    }
+    echo "   ✅ Repo cloned to ~/drawbox-repo"
+else
+    echo "   ✅ Repo already exists at ~/drawbox-repo"
+fi
+
 # Sudoers for service control (idempotent)
 sudo tee /etc/sudoers.d/drawbox-web > /dev/null << 'SUDOERS'
 pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart drawbox, /usr/bin/systemctl stop drawbox, /usr/bin/systemctl start drawbox, /usr/bin/systemctl restart drawbox-web, /usr/bin/systemctl stop drawbox-web, /usr/sbin/reboot, /usr/bin/nmcli dev wifi connect *
