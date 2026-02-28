@@ -569,14 +569,41 @@ function listenWithWebSpeech(){
   });
 }
 
-// ── GENERATE IMAGE (FLUX Schnell via Replicate) ──
+// ── GENERATE IMAGE ────────────────────────────────
+// Tries Replicate (fast, ~2s) first, falls back to OpenAI (slower, ~15-30s).
+// Replicate API blocks browser CORS, so OpenAI is the reliable browser fallback.
 async function generateImage(desc){
   log('Generating: '+desc);
   setState('GENERATING','Generating image...');
-  const repKey = $repKey.value.trim();
-  if(!repKey) throw new Error('No Replicate API token');
   const prompt = $prompt.value.trim() + '\n\nChild requested: ' + desc;
-  // Create prediction
+
+  // Try Replicate first (FLUX Schnell — fast but may fail due to CORS in browser)
+  const repKey = $repKey.value.trim();
+  if(repKey){
+    try {
+      log('Trying Replicate API (FLUX Schnell)...','info');
+      const result = await generateViaReplicate(prompt, repKey);
+      return result;
+    } catch(e){
+      if(e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('CORS')){
+        log('Replicate API blocked by browser CORS. Falling back to OpenAI...','info');
+      } else {
+        log('Replicate error: '+e.message+'. Falling back to OpenAI...','err');
+      }
+    }
+  }
+
+  // Fallback: OpenAI gpt-image-1 (works from browser, slower)
+  const apiKey = $key.value.trim();
+  if(apiKey){
+    log('Using OpenAI gpt-image-1 (may take 15-30s)...','info');
+    return await generateViaOpenAI(prompt, apiKey);
+  }
+
+  throw new Error('Image generation failed — Replicate blocked by browser CORS and no OpenAI key for fallback. Enter an OpenAI key or run the Pi version.');
+}
+
+async function generateViaReplicate(prompt, repKey){
   const createResp = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions',{
     method:'POST',
     headers:{'Authorization':'Token '+repKey,'Content-Type':'application/json'},
@@ -596,9 +623,10 @@ async function generateImage(desc){
     throw new Error('Replicate API '+createResp.status+': '+err.slice(0,200));
   }
   let prediction = await createResp.json();
-  // Poll until complete
+  log('Prediction created: '+prediction.id+' (status: '+prediction.status+')','info');
   while(prediction.status !== 'succeeded' && prediction.status !== 'failed'){
     await new Promise(r => setTimeout(r, 500));
+    log('Polling... status: '+prediction.status,'info');
     const pollResp = await fetch(prediction.urls.get,{
       headers:{'Authorization':'Token '+repKey}
     });
@@ -608,8 +636,30 @@ async function generateImage(desc){
     throw new Error('Image generation failed: '+(prediction.error||'unknown'));
   }
   const imageUrl = prediction.output[0];
-  log('Image generated, post-processing...','ok');
+  log('FLUX Schnell image ready, post-processing...','ok');
   return postProcess(imageUrl);
+}
+
+async function generateViaOpenAI(prompt, apiKey){
+  const resp = await fetch('https://api.openai.com/v1/images/generations',{
+    method:'POST',
+    headers:{'Authorization':'Bearer '+apiKey,'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'gpt-image-1',
+      prompt: prompt,
+      size:'1024x1536',
+      quality:'low'
+    })
+  });
+  if(resp.status === 401) throw new Error('Invalid OpenAI API key (401)');
+  if(!resp.ok){
+    const err = await resp.text();
+    throw new Error('OpenAI Image API '+resp.status+': '+err.slice(0,200));
+  }
+  const data = await resp.json();
+  const b64 = data.data[0].b64_json;
+  log('OpenAI image ready, post-processing...','ok');
+  return postProcess('data:image/png;base64,'+b64);
 }
 
 // ── POST-PROCESS (matches Python Pillow pipeline) ─
@@ -762,12 +812,19 @@ $btn.addEventListener('touchcancel', onButtonUp, {passive:false});
 // ── MAIN FLOW ─────────────────────────────────────
 async function runFlow(){
   const repKey = $repKey.value.trim();
-  if(!repKey){
-    log('Please enter your Replicate API token (for image generation).','err');
+  const apiKey = $key.value.trim();
+  if(!repKey && !apiKey){
+    log('Enter at least one API key: Replicate token (fast) or OpenAI key (reliable from browser).','err');
     return;
   }
-  if(!$key.value.trim()){
-    log('No OpenAI key — using browser speech synthesis + Web Speech API.','info');
+  if(!apiKey){
+    log('No OpenAI key — using browser speech + Web Speech API for voice.','info');
+  }
+  if(repKey){
+    log('Replicate token found — will try FLUX Schnell (fast, but may be blocked by browser CORS).','info');
+  }
+  if(apiKey){
+    log('OpenAI key found — '+(repKey ? 'available as image fallback.' : 'using for images + voice.'),'info');
   }
 
   isBusy = true;
@@ -884,7 +941,7 @@ async function runFlow(){
 
 // ── INIT ──────────────────────────────────────────
 log('DrawBox Simulator ready!','ok');
-log('Enter your Replicate token (required for images). OpenAI key is optional (enables higher-quality voice).','info');
+log('Enter an API key and press the button. Replicate = fast images. OpenAI = voice + image fallback. Both = best experience.','info');
 soundReady();
 // Warm up voice cache once API key is present
 $key.addEventListener('change', ()=>{ if($key.value.trim()) warmUpCache(); });
