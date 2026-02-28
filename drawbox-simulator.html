@@ -532,6 +532,43 @@ async function transcribe(audioBlob){
   return data.text;
 }
 
+// ── LISTEN WITH WEB SPEECH API (no OpenAI key needed) ─
+function listenWithWebSpeech(){
+  const sec = parseInt($recSec.value)||10;
+  log('Listening with Web Speech API for '+sec+'s...');
+  setState('RECORDING','Listening '+sec+'s...');
+  $recBar.classList.add('active');
+  $recFill.style.transition = 'none';
+  requestAnimationFrame(()=>{
+    $recFill.style.transition = 'width '+sec+'s linear';
+    $recFill.style.width = '100%';
+  });
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SpeechRecognition) return Promise.reject(new Error('Web Speech API not supported — use Chrome or enter an OpenAI key'));
+  return new Promise((resolve, reject) => {
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    let result = '';
+    recognition.onresult = (e) => {
+      result = e.results[0][0].transcript;
+    };
+    recognition.onerror = (e) => {
+      $recBar.classList.remove('active');
+      if(e.error === 'no-speech') resolve('');
+      else reject(new Error('Speech recognition: '+e.error));
+    };
+    recognition.onend = () => {
+      $recBar.classList.remove('active');
+      if(result) log('Heard: "'+result+'"','ok');
+      resolve(result);
+    };
+    recognition.start();
+    setTimeout(() => { try { recognition.stop(); } catch(e){} }, sec*1000);
+  });
+}
+
 // ── GENERATE IMAGE (FLUX Schnell via Replicate) ──
 async function generateImage(desc){
   log('Generating: '+desc);
@@ -724,35 +761,49 @@ $btn.addEventListener('touchcancel', onButtonUp, {passive:false});
 
 // ── MAIN FLOW ─────────────────────────────────────
 async function runFlow(){
-  const apiKey = $key.value.trim();
   const repKey = $repKey.value.trim();
-  if(!apiKey || !repKey){
-    log('Please enter both your OpenAI API key (for TTS) and Replicate token (for images).','err');
+  if(!repKey){
+    log('Please enter your Replicate API token (for image generation).','err');
     return;
+  }
+  if(!$key.value.trim()){
+    log('No OpenAI key — using browser speech synthesis + Web Speech API.','info');
   }
 
   isBusy = true;
+  const hasOpenAI = !!$key.value.trim();
   try {
     // LISTENING
     setState('LISTENING','Listening...');
     await speakLine('listening');
-    const audioBlob = await recordAudio();
 
-    if(!audioBlob){
-      await speakLine('too_short');
-      setState('IDLE','Ready');
-      return;
-    }
-
-    // TRANSCRIBE
     let text;
-    try {
-      text = await transcribe(audioBlob);
-    } catch(e){
-      log('Transcription error: '+e.message,'err');
-      await speakLine('error');
-      setState('IDLE','Ready');
-      return;
+    if(hasOpenAI){
+      // Record audio blob, then transcribe via Whisper API
+      const audioBlob = await recordAudio();
+      if(!audioBlob){
+        await speakLine('too_short');
+        setState('IDLE','Ready');
+        return;
+      }
+      try {
+        text = await transcribe(audioBlob);
+      } catch(e){
+        log('Transcription error: '+e.message,'err');
+        await speakLine('error');
+        setState('IDLE','Ready');
+        return;
+      }
+    } else {
+      // Use Web Speech API (no OpenAI key needed)
+      try {
+        text = await listenWithWebSpeech();
+      } catch(e){
+        log('Speech recognition error: '+e.message,'err');
+        await speakLine('error');
+        setState('IDLE','Ready');
+        return;
+      }
     }
 
     if(!text || text.trim().length < 2){
@@ -833,7 +884,7 @@ async function runFlow(){
 
 // ── INIT ──────────────────────────────────────────
 log('DrawBox Simulator ready!','ok');
-log('Enter your OpenAI API key (for TTS) and Replicate token (for images), then press the red button.','info');
+log('Enter your Replicate token (required for images). OpenAI key is optional (enables higher-quality voice).','info');
 soundReady();
 // Warm up voice cache once API key is present
 $key.addEventListener('change', ()=>{ if($key.value.trim()) warmUpCache(); });
