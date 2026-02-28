@@ -33,6 +33,7 @@ REBOOT_HOLD_SEC = 5           # hold button 5s to reboot
 TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
 CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
+SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
 
 # ── SAFETY BLOCKLIST ────────────────────────────
 BLOCKED_WORDS = {
@@ -61,6 +62,9 @@ BLOCKED_WORDS = {
 def is_safe(text):
     words = text.lower()
     return not any(w in words for w in BLOCKED_WORDS)
+
+def safety_mode_enabled():
+    return SAFETY_MODE_FILE.exists()
 
 def please_mode_enabled():
     return PLEASE_MODE_FILE.exists()
@@ -455,6 +459,12 @@ def main():
         return
     print(f"   Image model: {IMAGE_MODEL}")
 
+    # Safety mode ON by default (create sentinel file if missing)
+    SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not SAFETY_MODE_FILE.exists():
+        SAFETY_MODE_FILE.touch()
+    print(f"   Safety filter: {'ON' if safety_mode_enabled() else 'OFF'}")
+
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
 
     voice = VoiceFeedback()
@@ -496,7 +506,7 @@ def main():
                     voice.play("too_short")
                 elif not (text := transcribe(path)) or len(text.strip()) < 2:
                     voice.play("too_short")
-                elif not is_safe(text):
+                elif safety_mode_enabled() and not is_safe(text):
                     print(f"🚫 Blocked: {text}")
                     voice.play("blocked")
                 elif please_mode_enabled() and not has_please(text):

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawBox Hub</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--border:#e8e5de;--text:#1a1a1a;--muted:#666;--accent:#c0392b;--green:#27ae60;--blue:#2980b9;--amber:#f39c12;--dark:#2c2c2c;--code-bg:#1e1e1e;--code-text:#d4d4d4}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.65;min-height:100vh}
+
+.wrap{max-width:800px;margin:0 auto;padding:24px 20px 80px}
+.hero{background:var(--dark);color:#fff;padding:32px 28px;border-radius:14px;margin-bottom:24px;position:relative;overflow:hidden}
+.hero::after{content:'\1F3A8';position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:64px;opacity:.12}
+.hero h1{font-size:24px;margin-bottom:4px}
+.hero p{color:#aaa;font-size:13px}
+
+.pi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-bottom:24px}
+.pi-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:box-shadow .2s}
+.pi-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}
+.pi-header{padding:16px 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.pi-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.pi-dot.online{background:var(--green)}
+.pi-dot.offline{background:#ccc}
+.pi-dot.loading{background:var(--amber);animation:blink 1s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.pi-name{font-size:15px;font-weight:600;flex:1}
+.pi-status-tag{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:4px;color:#fff}
+.pi-status-tag.online{background:var(--green)}
+.pi-status-tag.offline{background:#ccc;color:var(--muted)}
+
+.pi-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border)}
+.pi-stat{background:var(--card);padding:10px 14px;text-align:center}
+.pi-stat .val{font-size:14px;font-weight:700;margin-bottom:1px}
+.pi-stat .lbl{font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+
+.pi-actions{padding:12px 18px;display:flex;gap:8px;flex-wrap:wrap}
+.btn{padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:background .2s;text-decoration:none;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{filter:brightness(.9)}
+.btn-blue{background:var(--blue);color:#fff}
+.btn-dark{background:var(--dark);color:#fff}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn-outline:hover{background:var(--bg)}
+.btn-green{background:var(--green);color:#fff}
+
+.pi-settings{padding:0 18px 14px;display:none}
+.pi-settings.open{display:block}
+.pi-settings .setting-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.pi-settings .setting-row:last-child{border:none}
+.setting-label{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.setting-val{font-weight:500}
+
+.toggle-btn{padding:4px 12px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:var(--card)}
+.toggle-btn.on{background:var(--green);color:#fff;border-color:var(--green)}
+
+select.model-select{padding:4px 24px 4px 8px;font-size:12px;border:1px solid var(--border);border-radius:5px;background:var(--card);-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 6px center;cursor:pointer}
+
+/* ── CONFIG PANEL ──────────────────── */
+.config-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:24px;overflow:hidden}
+.config-header{padding:14px 18px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;cursor:pointer}
+.config-header:hover{background:var(--bg)}
+.config-body{padding:16px 18px;display:none}
+.config-body.open{display:block}
+.config-note{font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px}
+.config-json{width:100%;min-height:140px;padding:12px 14px;font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:12px;background:var(--code-bg);color:var(--code-text);border:2px solid var(--border);border-radius:7px;resize:vertical;line-height:1.6;outline:none}
+.config-json:focus{border-color:var(--blue)}
+
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 24px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;z-index:999;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+.toast-ok{background:var(--green)}.toast-err{background:var(--accent)}
+
+@media(max-width:600px){
+.wrap{padding:14px 12px 60px}
+.hero{padding:20px 18px;border-radius:10px}
+.hero h1{font-size:20px}
+.pi-grid{grid-template-columns:1fr}
+.pi-stats{grid-template-columns:repeat(3,1fr)}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>DrawBox Hub</h1>
+    <p>Manage your DrawBox printers from anywhere</p>
+  </div>
+
+  <div class="pi-grid" id="piGrid"></div>
+
+  <!-- CONFIG -->
+  <div class="config-panel">
+    <div class="config-header" onclick="toggleConfig()">&#9881; Pi Registry <span style="margin-left:auto;font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">click to edit</span></div>
+    <div class="config-body" id="configBody">
+      <div class="config-note">
+        Add your DrawBox Pis below. Each Pi needs a Cloudflare Tunnel URL pointing to its Flask dashboard (port 5000) and an SSH tunnel URL.<br>
+        Changes are saved to localStorage automatically.
+      </div>
+      <textarea class="config-json" id="configJson" spellcheck="false"></textarea>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn btn-blue" onclick="saveConfig()">Save &amp; Reload</button>
+        <button class="btn btn-outline" onclick="resetConfig()">Reset to Default</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── DEFAULT PI CONFIG ────────────────────────
+const DEFAULT_PIES = [
+  {
+    id: "kitchen",
+    name: "Kitchen DrawBox",
+    url: "https://kitchen.drawbox.example.com",
+    ssh: "https://kitchen-ssh.drawbox.example.com"
+  }
+];
+
+// ── LOAD CONFIG ──────────────────────────────
+function loadPiConfig(){
+  const saved = localStorage.getItem('drawbox_hub_pis');
+  if(saved){
+    try { return JSON.parse(saved); } catch(e){}
+  }
+  return DEFAULT_PIES;
+}
+
+function savePiConfig(pis){
+  localStorage.setItem('drawbox_hub_pis', JSON.stringify(pis));
+}
+
+// ── TOAST ────────────────────────────────────
+function toast(msg, ok=true){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show '+(ok ? 'toast-ok' : 'toast-err');
+  setTimeout(()=> t.classList.remove('show'), 3000);
+}
+
+// ── RENDER PI CARDS ──────────────────────────
+const pis = loadPiConfig();
+
+function renderCards(){
+  const grid = document.getElementById('piGrid');
+  grid.innerHTML = pis.map((pi, i) => `
+    <div class="pi-card" id="card-${pi.id}">
+      <div class="pi-header">
+        <div class="pi-dot loading" id="dot-${pi.id}"></div>
+        <div class="pi-name">${pi.name}</div>
+        <span class="pi-status-tag offline" id="tag-${pi.id}">checking...</span>
+      </div>
+      <div class="pi-stats">
+        <div class="pi-stat"><div class="val" id="temp-${pi.id}">--</div><div class="lbl">Temperature</div></div>
+        <div class="pi-stat"><div class="val" id="uptime-${pi.id}">--</div><div class="lbl">Uptime</div></div>
+        <div class="pi-stat"><div class="val" id="printer-${pi.id}">--</div><div class="lbl">Printer</div></div>
+      </div>
+      <div class="pi-actions">
+        <a href="${pi.url}" target="_blank" class="btn btn-blue">&#128214; Dashboard</a>
+        <a href="${pi.ssh}" target="_blank" class="btn btn-dark">&#128187; Terminal</a>
+        <button class="btn btn-outline" onclick="toggleSettings('${pi.id}')">&#9881; Quick Settings</button>
+        <button class="btn btn-outline" onclick="refreshPi('${pi.id}')">&#8635; Refresh</button>
+      </div>
+      <div class="pi-settings" id="settings-${pi.id}">
+        <div class="setting-row">
+          <span class="setting-label">Image Model</span>
+          <select class="model-select" id="model-${pi.id}" onchange="updateModel('${pi.id}')">
+            <option value="flux-schnell">FLUX Schnell</option>
+            <option value="nano-banana">Nano Banana 2</option>
+            <option value="gpt-image">GPT Image</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Please Mode</span>
+          <button class="toggle-btn" id="please-${pi.id}" onclick="togglePiSetting('${pi.id}','please')">--</button>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Safety Filter</span>
+          <button class="toggle-btn" id="safety-${pi.id}" onclick="togglePiSetting('${pi.id}','safety')">--</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+renderCards();
+
+// ── FETCH PI STATUS ──────────────────────────
+async function fetchPiStatus(pi){
+  const dot = document.getElementById('dot-'+pi.id);
+  const tag = document.getElementById('tag-'+pi.id);
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(()=> controller.abort(), 8000);
+    const r = await fetch(pi.url+'/api/status', {signal: controller.signal});
+    clearTimeout(timeout);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+
+    dot.className = 'pi-dot online';
+    tag.className = 'pi-status-tag online';
+    tag.textContent = 'online';
+
+    document.getElementById('temp-'+pi.id).textContent = d.temperature || '--';
+    document.getElementById('uptime-'+pi.id).textContent = (d.uptime || '--').replace('up ','');
+
+    // Fetch printer status
+    try {
+      const pr = await fetch(pi.url+'/api/diagnostics', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({command:'printer_status'})
+      });
+      const pd = await pr.json();
+      const out = pd.output || '';
+      if(out.includes('idle')) document.getElementById('printer-'+pi.id).textContent = 'Idle';
+      else if(out.includes('not found')) document.getElementById('printer-'+pi.id).textContent = 'Not found';
+      else document.getElementById('printer-'+pi.id).textContent = 'Active';
+    } catch(e){
+      document.getElementById('printer-'+pi.id).textContent = '--';
+    }
+
+    // Fetch settings
+    try {
+      const sr = await fetch(pi.url+'/api/settings');
+      const sd = await sr.json();
+      const sel = document.getElementById('model-'+pi.id);
+      if(sel && sd.image_model) sel.value = sd.image_model;
+    } catch(e){}
+
+    // Fetch please mode
+    try {
+      const pr = await fetch(pi.url+'/api/please-mode');
+      const pd = await pr.json();
+      const btn = document.getElementById('please-'+pi.id);
+      btn.textContent = pd.enabled ? 'ON' : 'OFF';
+      btn.className = 'toggle-btn'+(pd.enabled ? ' on' : '');
+    } catch(e){}
+
+    // Fetch safety mode
+    try {
+      const sr = await fetch(pi.url+'/api/safety-mode');
+      const sd = await sr.json();
+      const btn = document.getElementById('safety-'+pi.id);
+      btn.textContent = sd.enabled ? 'ON' : 'OFF';
+      btn.className = 'toggle-btn'+(sd.enabled ? ' on' : '');
+    } catch(e){}
+
+  } catch(e){
+    dot.className = 'pi-dot offline';
+    tag.className = 'pi-status-tag offline';
+    tag.textContent = 'offline';
+  }
+}
+
+function refreshPi(piId){
+  const pi = pis.find(p => p.id === piId);
+  if(pi){
+    const dot = document.getElementById('dot-'+piId);
+    dot.className = 'pi-dot loading';
+    document.getElementById('tag-'+piId).textContent = 'checking...';
+    fetchPiStatus(pi);
+  }
+}
+
+// Fetch all on load
+pis.forEach(pi => fetchPiStatus(pi));
+
+// ── QUICK SETTINGS ──────────────────────────
+function toggleSettings(piId){
+  const el = document.getElementById('settings-'+piId);
+  el.classList.toggle('open');
+}
+
+async function updateModel(piId){
+  const pi = pis.find(p => p.id === piId);
+  const model = document.getElementById('model-'+piId).value;
+  try {
+    const r = await fetch(pi.url+'/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({image_model: model})
+    });
+    const d = await r.json();
+    if(d.ok) toast('Model updated to '+model);
+    else toast('Failed to update model', false);
+  } catch(e){ toast('Error: '+e.message, false); }
+}
+
+async function togglePiSetting(piId, setting){
+  const pi = pis.find(p => p.id === piId);
+  const endpoint = setting === 'please' ? '/api/please-mode' : '/api/safety-mode';
+  try {
+    const r = await fetch(pi.url+endpoint);
+    const d = await r.json();
+    const newVal = !d.enabled;
+    if(setting === 'safety' && d.enabled && !confirm('Turn OFF the safety filter?')) return;
+    await fetch(pi.url+endpoint, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled: newVal})
+    });
+    const btn = document.getElementById(setting+'-'+piId);
+    btn.textContent = newVal ? 'ON' : 'OFF';
+    btn.className = 'toggle-btn'+(newVal ? ' on' : '');
+    toast(setting+' mode '+(newVal ? 'enabled' : 'disabled'));
+  } catch(e){ toast('Error: '+e.message, false); }
+}
+
+// ── CONFIG PANEL ────────────────────────────
+function toggleConfig(){
+  const body = document.getElementById('configBody');
+  body.classList.toggle('open');
+  if(body.classList.contains('open')){
+    document.getElementById('configJson').value = JSON.stringify(loadPiConfig(), null, 2);
+  }
+}
+
+function saveConfig(){
+  try {
+    const parsed = JSON.parse(document.getElementById('configJson').value);
+    if(!Array.isArray(parsed)) throw new Error('Must be a JSON array');
+    savePiConfig(parsed);
+    toast('Config saved! Reloading...');
+    setTimeout(()=> location.reload(), 500);
+  } catch(e){
+    toast('Invalid JSON: '+e.message, false);
+  }
+}
+
+function resetConfig(){
+  if(!confirm('Reset to default config?')) return;
+  localStorage.removeItem('drawbox_hub_pis');
+  toast('Config reset! Reloading...');
+  setTimeout(()=> location.reload(), 500);
+}
+</script>
+</body>
+</html>

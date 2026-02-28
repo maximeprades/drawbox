@@ -42,7 +42,7 @@ echo "   ✅ Replicate ready"
 
 # Sudoers for service control (idempotent)
 sudo tee /etc/sudoers.d/drawbox-web > /dev/null << 'SUDOERS'
-pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart drawbox, /usr/bin/systemctl stop drawbox, /usr/bin/systemctl start drawbox, /usr/bin/systemctl restart drawbox-web, /usr/bin/systemctl stop drawbox-web, /usr/sbin/reboot
+pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart drawbox, /usr/bin/systemctl stop drawbox, /usr/bin/systemctl start drawbox, /usr/bin/systemctl restart drawbox-web, /usr/bin/systemctl stop drawbox-web, /usr/sbin/reboot, /usr/bin/nmcli dev wifi connect *
 SUDOERS
 sudo chmod 440 /etc/sudoers.d/drawbox-web
 echo "   ✅ Sudoers configured"

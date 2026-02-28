@@ -17,6 +17,7 @@ IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
 PRINTER_NAME = "drawbox-printer"
 SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
+SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
 
@@ -178,6 +179,20 @@ DIAGNOSTIC_COMMANDS = {
 # ── FLASK APP ────────────────────────────────────
 app = Flask(__name__)
 
+# CORS: allow requests from the cloud hub dashboard
+@app.after_request
+def add_cors(response):
+    origin = request.headers.get("Origin", "")
+    if origin and (".drawbox." in origin or origin.endswith(".pages.dev")):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
+    return response
+
+@app.route("/api/<path:path>", methods=["OPTIONS"])
+def cors_preflight(path):
+    return "", 204
+
 HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -322,6 +337,11 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
         <button class="btn btn-outline" id="pleaseBtn" onclick="togglePlease()">...</button>
         <span style="font-size:11px;color:var(--muted);margin-top:4px;display:block">When enabled, kids must say &ldquo;please&rdquo; to get a drawing</span>
       </div>
+      <div class="cfg-row">
+        <label>Safety Filter</label>
+        <button class="btn btn-outline" id="safetyBtn" onclick="toggleSafety()">...</button>
+        <span style="font-size:11px;color:var(--muted);margin-top:4px;display:block">Word blocklist filter. When off, the AI prompt still instructs child-safe output.</span>
+      </div>
       <div class="btn-row" style="margin-top:14px">
         <button class="btn btn-blue" onclick="saveSettings()">Save Settings</button>
         <button class="btn btn-outline" onclick="loadSettings()">Reset</button>
@@ -349,6 +369,25 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
         <button class="btn btn-outline btn-sm" onclick="runDiag('cups_log')">CUPS Log</button>
       </div>
       <div class="diag-out" id="diagOut">Click a button above to run a diagnostic command.</div>
+    </div>
+  </div>
+
+  <!-- WIFI -->
+  <div class="panel">
+    <div class="panel-h">&#128246; WiFi</div>
+    <div class="panel-b">
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" onclick="loadWifi()">Scan Networks</button>
+        <span id="wifiCurrent" style="font-size:12px;color:var(--muted);line-height:28px;margin-left:8px"></span>
+      </div>
+      <div id="wifiList" style="display:none;margin-bottom:10px;max-height:200px;overflow-y:auto"></div>
+      <div id="wifiConnect" style="display:none">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">Connect to: <span id="wifiSSID"></span></div>
+        <div class="gen-row">
+          <input type="password" id="wifiPass" placeholder="Password (leave empty for open networks)" style="padding:9px 14px;font-size:13px;border:2px solid var(--border);border-radius:7px;outline:none" />
+          <button class="btn btn-blue btn-sm" onclick="connectWifi()">Connect</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -488,6 +527,74 @@ async function togglePlease(){
 }
 loadPleaseMode();
 
+// ── SAFETY MODE ───────────────────────────────
+async function loadSafetyMode(){
+  try{
+    const r=await fetch('/api/safety-mode');
+    const d=await r.json();
+    const b=document.getElementById('safetyBtn');
+    b.textContent=d.enabled?'ON (filtering)':'OFF (bypassed)';
+    b.className='btn '+(d.enabled?'btn-green':'btn-outline');
+  }catch(e){}
+}
+async function toggleSafety(){
+  try{
+    const r=await fetch('/api/safety-mode');
+    const d=await r.json();
+    if(d.enabled && !confirm('Turn OFF the safety word filter? The AI prompt still instructs child-safe output, but blocked words will be allowed.')) return;
+    await fetch('/api/safety-mode',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:!d.enabled})});
+    loadSafetyMode();
+    toast(d.enabled?'Safety filter disabled':'Safety filter enabled!');
+  }catch(e){toast('Error: '+e.message,false);}
+}
+loadSafetyMode();
+
+// ── WIFI ──────────────────────────────────────
+let wifiTarget='';
+async function loadWifi(){
+  document.getElementById('wifiCurrent').textContent='Scanning...';
+  try{
+    // Get current connection
+    const sr=await fetch('/api/diagnostics',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({command:'wifi_status'})});
+    const sd=await sr.json();
+    const cur=(sd.output||'').split('\\n').find(l=>l.startsWith('yes'));
+    document.getElementById('wifiCurrent').textContent=cur?'Connected: '+cur.split(':')[1]:'Not connected';
+    // Get network list
+    const r=await fetch('/api/wifi/networks');
+    const d=await r.json();
+    const $list=document.getElementById('wifiList');
+    if(!d.networks||d.networks.length===0){$list.innerHTML='<div style=\"font-size:12px;color:var(--muted)\">No networks found</div>';$list.style.display='block';return;}
+    $list.innerHTML=d.networks.map(n=>'<div style=\"display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer\" onclick=\"selectWifi(\\''+n.ssid.replace(/'/g,\"\\\\'\")+'\\')\">'
+      +'<span style=\"font-size:13px;font-weight:500\">'+n.ssid+'</span>'
+      +'<span style=\"font-size:11px;color:var(--muted);margin-left:auto\">'+n.signal+'% &middot; '+n.security+'</span>'
+      +'</div>').join('');
+    $list.style.display='block';
+  }catch(e){document.getElementById('wifiCurrent').textContent='Error: '+e.message;}
+}
+function selectWifi(ssid){
+  wifiTarget=ssid;
+  document.getElementById('wifiSSID').textContent=ssid;
+  document.getElementById('wifiConnect').style.display='block';
+  document.getElementById('wifiPass').value='';
+  document.getElementById('wifiPass').focus();
+}
+async function connectWifi(){
+  if(!wifiTarget) return;
+  toast('Connecting to '+wifiTarget+'...');
+  try{
+    const r=await fetch('/api/wifi/connect',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ssid:wifiTarget,password:document.getElementById('wifiPass').value})});
+    const d=await r.json();
+    if(d.ok){toast('Connected to '+wifiTarget);document.getElementById('wifiConnect').style.display='none';loadWifi();}
+    else toast(d.error||'Failed to connect',false);
+  }catch(e){toast('Error: '+e.message,false);}
+}
+
 // ── DIAGNOSTICS ────────────────────────────────
 async function runDiag(cmd){
   const out=document.getElementById('diagOut');
@@ -595,7 +702,7 @@ def api_generate():
         return jsonify(ok=False, error="Please describe what to draw.")
     if len(desc) > 500:
         return jsonify(ok=False, error="Description too long (max 500 chars).")
-    if not is_safe(desc):
+    if SAFETY_MODE_FILE.exists() and not is_safe(desc):
         return jsonify(ok=False,
             error="That description contains blocked words. "
                   "Try something fun like an animal or a rainbow!")
@@ -657,6 +764,59 @@ def api_please_mode():
         PLEASE_MODE_FILE.unlink(missing_ok=True)
     return jsonify(ok=True, enabled=PLEASE_MODE_FILE.exists())
 
+@app.route("/api/safety-mode", methods=["GET", "POST"])
+def api_safety_mode():
+    if request.method == "GET":
+        return jsonify(enabled=SAFETY_MODE_FILE.exists())
+    data = request.get_json() or {}
+    if data.get("enabled"):
+        SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SAFETY_MODE_FILE.touch()
+    else:
+        SAFETY_MODE_FILE.unlink(missing_ok=True)
+    return jsonify(ok=True, enabled=SAFETY_MODE_FILE.exists())
+
+@app.route("/api/wifi/networks")
+def api_wifi_networks():
+    try:
+        r = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"],
+            capture_output=True, text=True, timeout=15)
+        networks = []
+        seen = set()
+        for line in r.stdout.strip().splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[0] and parts[0] not in seen:
+                seen.add(parts[0])
+                networks.append({
+                    "ssid": parts[0],
+                    "signal": int(parts[1]) if parts[1].isdigit() else 0,
+                    "security": parts[2] or "Open"
+                })
+        networks.sort(key=lambda n: n["signal"], reverse=True)
+        return jsonify(networks=networks)
+    except Exception as e:
+        return jsonify(networks=[], error=str(e))
+
+@app.route("/api/wifi/connect", methods=["POST"])
+def api_wifi_connect():
+    data = request.get_json() or {}
+    ssid = (data.get("ssid") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not ssid:
+        return jsonify(ok=False, error="SSID required")
+    try:
+        cmd = ["sudo", "nmcli", "dev", "wifi", "connect", ssid]
+        if password:
+            cmd += ["password", password]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return jsonify(ok=True, message=f"Connected to {ssid}")
+        else:
+            return jsonify(ok=False, error=r.stderr.strip() or r.stdout.strip())
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
 @app.route("/api/diagnostics", methods=["POST"])
 def api_diagnostics():
     data = request.get_json() or {}
@@ -700,8 +860,12 @@ def api_reboot():
 # ── MAIN ─────────────────────────────────────────
 if __name__ == "__main__":
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Safety mode ON by default (create sentinel file if missing)
+    if not SAFETY_MODE_FILE.exists():
+        SAFETY_MODE_FILE.touch()
     if not OPENAI_API_KEY:
         print("⚠️  OPENAI_API_KEY not set. Voice features won't work.")
     print(f"   Image model: {IMAGE_MODEL}")
+    print(f"   Safety filter: {'ON' if SAFETY_MODE_FILE.exists() else 'OFF'}")
     print("DrawBox Web Dashboard starting on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

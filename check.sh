@@ -278,6 +278,17 @@ else
     warn "drawbox-web.service not installed (web dashboard not deployed)"
 fi
 
+# Cloudflare Tunnel
+if command -v cloudflared > /dev/null 2>&1; then
+    if systemctl is-active cloudflared > /dev/null 2>&1; then
+        ok "cloudflared tunnel is running"
+    else
+        warn "cloudflared installed but service not running"
+    fi
+else
+    warn "cloudflared not installed (optional — for remote access)"
+fi
+
 # SSH
 if systemctl is-enabled ssh.service > /dev/null 2>&1 && systemctl is-enabled ssh.socket > /dev/null 2>&1; then
     ok "SSH service and socket both enabled"
