@@ -13,17 +13,44 @@ from openai import OpenAI
 from PIL import Image
 
 # ── CONFIG ───────────────────────────────────────
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
 PRINTER_NAME = "drawbox-printer"
 SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
 PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
+API_KEYS_FILE = Path.home() / ".drawbox" / "api_keys.json"
 REPO_DIR = Path.home() / "drawbox-repo"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
+
+# ── API KEYS (file > env var) ────────────────────
+def _load_api_keys():
+    """Load API keys from file, fall back to environment variables."""
+    keys = {}
+    if API_KEYS_FILE.exists():
+        try:
+            keys = json.loads(API_KEYS_FILE.read_text())
+        except Exception:
+            pass
+    return {
+        "openai": keys.get("openai") or os.environ.get("OPENAI_API_KEY") or "",
+        "replicate": keys.get("replicate") or os.environ.get("REPLICATE_API_TOKEN") or "",
+        "gemini": keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or "",
+    }
+
+def _apply_api_keys():
+    """Apply loaded keys to module globals and environment."""
+    global OPENAI_API_KEY, GEMINI_API_KEY, client
+    keys = _load_api_keys()
+    OPENAI_API_KEY = keys["openai"]
+    GEMINI_API_KEY = keys["gemini"]
+    if keys["replicate"]:
+        os.environ["REPLICATE_API_TOKEN"] = keys["replicate"]
+    if OPENAI_API_KEY:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+_apply_api_keys()
 
 DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
 This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
@@ -101,7 +128,7 @@ def log_print_event(prompt, model, duration_s, source="web"):
         pass
 
 # ── IMAGE GENERATION & PRINTING ──────────────────
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = None  # initialized by _apply_api_keys()
 is_generating = False
 last_image_b64 = None
 
@@ -812,6 +839,29 @@ body {
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-header"><div class="card-title">API Keys</div></div>
+      <div class="card-content">
+        <div class="form-hint" style="margin-bottom:12px">Keys are stored on the Pi in ~/.drawbox/api_keys.json. Leave a field empty to keep the current key.</div>
+        <div class="form-group">
+          <label class="form-label">OpenAI API Key</label>
+          <input class="input" type="password" id="keyOpenai" placeholder="sk-..." autocomplete="off" />
+          <div class="form-hint" id="keyOpenaiHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Replicate API Token</label>
+          <input class="input" type="password" id="keyReplicate" placeholder="r8_..." autocomplete="off" />
+          <div class="form-hint" id="keyReplicateHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Gemini API Key</label>
+          <input class="input" type="password" id="keyGemini" placeholder="AI..." autocomplete="off" />
+          <div class="form-hint" id="keyGeminiHint"></div>
+        </div>
+        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
+      </div>
+    </div>
+
     <div class="btn-row" style="margin-top:16px">
       <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
       <button class="btn btn-outline" onclick="loadSettings()">Reset</button>
@@ -958,7 +1008,7 @@ function showPage(page) {
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('show');
   if (page === 'overview') loadAnalytics();
-  if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); }
+  if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadApiKeys(); }
 }
 
 function toggleSidebar() {
@@ -1125,6 +1175,38 @@ async function saveSettings() {
     });
     const d = await r.json();
     if (d.ok) toast('Settings saved!');
+    else toast('Save failed', false);
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+// ── API KEYS ──────────────────────────────────
+async function loadApiKeys() {
+  try {
+    const r = await fetch('/api/keys');
+    const d = await r.json();
+    $('keyOpenaiHint').textContent = d.openai ? 'Current: ' + d.openai : 'Not set';
+    $('keyReplicateHint').textContent = d.replicate ? 'Current: ' + d.replicate : 'Not set';
+    $('keyGeminiHint').textContent = d.gemini ? 'Current: ' + d.gemini : 'Not set';
+    $('keyOpenai').value = '';
+    $('keyReplicate').value = '';
+    $('keyGemini').value = '';
+  } catch(e) {}
+}
+
+async function saveApiKeys() {
+  const data = {};
+  if ($('keyOpenai').value.trim()) data.openai = $('keyOpenai').value.trim();
+  if ($('keyReplicate').value.trim()) data.replicate = $('keyReplicate').value.trim();
+  if ($('keyGemini').value.trim()) data.gemini = $('keyGemini').value.trim();
+  if (!Object.keys(data).length) { toast('No keys entered', false); return; }
+  try {
+    const r = await fetch('/api/keys', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const d = await r.json();
+    if (d.ok) { toast('API keys saved!'); loadApiKeys(); }
     else toast('Save failed', false);
   } catch(e) { toast('Error: ' + e.message, false); }
 }
@@ -1336,6 +1418,7 @@ loadAnalytics();
 loadSettings();
 loadPleaseMode();
 loadSafetyMode();
+loadApiKeys();
 </script>
 </body>
 </html>"""
@@ -1493,6 +1576,30 @@ def api_safety_mode():
     else:
         SAFETY_MODE_FILE.unlink(missing_ok=True)
     return jsonify(ok=True, enabled=SAFETY_MODE_FILE.exists())
+
+@app.route("/api/keys", methods=["GET", "POST"])
+def api_keys():
+    if request.method == "GET":
+        keys = _load_api_keys()
+        # Return masked versions so we don't expose full keys in the browser
+        return jsonify({
+            k: ("" if not v else v[:4] + "..." + v[-4:] if len(v) > 12 else "****")
+            for k, v in keys.items()
+        })
+    data = request.get_json() or {}
+    # Load existing keys, only update the ones that were sent
+    try:
+        existing = json.loads(API_KEYS_FILE.read_text()) if API_KEYS_FILE.exists() else {}
+    except Exception:
+        existing = {}
+    for k in ("openai", "replicate", "gemini"):
+        val = data.get(k, "").strip()
+        if val:  # only overwrite if a new value was provided
+            existing[k] = val
+    API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    API_KEYS_FILE.write_text(json.dumps(existing, indent=2))
+    _apply_api_keys()
+    return jsonify(ok=True)
 
 @app.route("/api/wifi/networks")
 def api_wifi_networks():

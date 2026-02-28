@@ -61,49 +61,36 @@ SUDOERS
 sudo chmod 440 /etc/sudoers.d/drawbox-web
 echo "   ✅ Sudoers configured"
 
-# Figure out the OpenAI API key
-OPENAI_KEY=""
-OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-if [ -z "$OPENAI_KEY" ]; then
-    OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-fi
-if [ -z "$OPENAI_KEY" ]; then
-    echo "   ⚠️  No OpenAI API key found! Edit the service file later:"
-    echo "      sudo nano /etc/systemd/system/drawbox-web.service"
-    OPENAI_KEY="sk-your-actual-key-here"
-fi
-
-# Figure out the Replicate API token
-REP_KEY=""
-REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-if [ -z "$REP_KEY" ]; then
-    REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-fi
-if [ -z "$REP_KEY" ]; then
-    REP_KEY="${REPLICATE_API_TOKEN:-}"
-fi
-if [ -z "$REP_KEY" ]; then
-    echo "   ⚠️  No Replicate API token found! Edit the service file later:"
-    echo "      sudo nano /etc/systemd/system/drawbox-web.service"
-    REP_KEY="r8_your-token-here"
-fi
-
-# Figure out the Gemini API key
-GEM_KEY=""
-GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-if [ -z "$GEM_KEY" ]; then
-    GEM_KEY=$(grep -oP 'GEMINI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-fi
-if [ -z "$GEM_KEY" ]; then
-    GEM_KEY="${GEMINI_API_KEY:-}"
-fi
-if [ -z "$GEM_KEY" ]; then
-    echo "   ⚠️  No Gemini API key found (optional — needed for Nano Banana 2 model)"
-    GEM_KEY=""
+# Seed API keys file from existing service env vars (one-time migration)
+mkdir -p ~/.drawbox
+if [ ! -f ~/.drawbox/api_keys.json ]; then
+    echo "   Migrating API keys to ~/.drawbox/api_keys.json..."
+    OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+    [ -z "$OPENAI_KEY" ] && OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
+    REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+    [ -z "$REP_KEY" ] && REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
+    GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+    [ -z "$GEM_KEY" ] && GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
+    python3 -c "
+import json
+keys = {}
+o, r, g = '''$OPENAI_KEY''', '''$REP_KEY''', '''$GEM_KEY'''
+if o: keys['openai'] = o
+if r: keys['replicate'] = r
+if g: keys['gemini'] = g
+open('/home/pi/.drawbox/api_keys.json', 'w').write(json.dumps(keys, indent=2))
+"
+    if [ -s ~/.drawbox/api_keys.json ]; then
+        echo "   ✅ API keys migrated (manage them from Settings > API Keys in the dashboard)"
+    else
+        echo "   ⚠️  No API keys found. Add them from the dashboard: Settings > API Keys"
+    fi
+else
+    echo "   ✅ API keys file already exists"
 fi
 
-# Create systemd service
-sudo tee /etc/systemd/system/drawbox-web.service > /dev/null << EOF
+# Create systemd service (keys are loaded from ~/.drawbox/api_keys.json by the app)
+sudo tee /etc/systemd/system/drawbox-web.service > /dev/null << 'EOF'
 [Unit]
 Description=DrawBox Web Dashboard
 After=network-online.target
@@ -112,9 +99,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-Environment=OPENAI_API_KEY=$OPENAI_KEY
-Environment=REPLICATE_API_TOKEN=$REP_KEY
-Environment=GEMINI_API_KEY=$GEM_KEY
 WorkingDirectory=/home/pi
 ExecStart=/usr/local/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 drawbox_web:app
 Restart=always
