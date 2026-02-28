@@ -375,10 +375,10 @@ body {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
   margin-bottom: 24px;
 }
-.stat-card { padding: 20px 24px; }
-.stat-label { font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
-.stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; line-height: 1.1; }
-.stat-sub { font-size: 12px; margin-top: 6px; color: var(--muted-foreground); }
+.stat-card { padding: 20px 24px; display: flex; flex-direction: column; min-height: 100px; }
+.stat-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.04em; }
+.stat-value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 8px; line-height: 1.2; }
+.stat-sub { font-size: 12px; margin-top: auto; padding-top: 8px; color: var(--muted-foreground); }
 .stat-sub.up { color: var(--success); }
 
 /* ── BUTTONS ────────────────────────── */
@@ -678,6 +678,7 @@ body {
       <div class="card stat-card">
         <div class="stat-label">Status</div>
         <div class="stat-value" id="ovStatus">--</div>
+        <div class="stat-sub" id="ovStatusSub">DrawBox service</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">Pages Printed</div>
@@ -687,10 +688,12 @@ body {
       <div class="card stat-card">
         <div class="stat-label">Temperature</div>
         <div class="stat-value" id="ovTemp">--</div>
+        <div class="stat-sub" id="ovTempSub">Raspberry Pi</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">Uptime</div>
         <div class="stat-value" id="ovUptime">--</div>
+        <div class="stat-sub" id="ovUptimeSub">Since last reboot</div>
       </div>
     </div>
 
@@ -1026,7 +1029,13 @@ async function refreshStatus() {
       ? '<span class="dot dot-green"></span>Running'
       : '<span class="dot dot-red"></span>Stopped';
     $('ovTemp').textContent = d.temperature || '--';
-    $('ovUptime').textContent = d.uptime || '--';
+    // Shorten uptime: "1 day, 18 hours, 20 minutes" → "1d 18h 20m"
+    const ut = (d.uptime || '--')
+      .replace(/(\d+)\s*days?/i, '$1d')
+      .replace(/(\d+)\s*hours?/i, '$1h')
+      .replace(/(\d+)\s*minutes?/i, '$1m')
+      .replace(/,\s*/g, ' ');
+    $('ovUptime').textContent = ut;
   } catch(e) {}
 }
 refreshStatus();
