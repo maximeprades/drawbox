@@ -410,11 +410,12 @@ def record_audio():
 
 # ── TRANSCRIBE ──────────────────────────────────
 def transcribe(path):
-    print("📝 Transcribing...")
+    print("📝 Transcribing (whisper-1)...")
+    t0 = time.time()
     with open(path, "rb") as f:
         r = client.audio.transcriptions.create(model="whisper-1", file=f)
     os.unlink(path)
-    print(f'   Heard: "{r.text}"')
+    print(f'   ✅ Transcribed in {time.time()-t0:.1f}s: "{r.text}"')
     return r.text
 
 # ── GENERATE ────────────────────────────────────
@@ -439,6 +440,8 @@ def generate_image(desc):
 
 
 def _generate_flux_schnell(prompt):
+    print(f"   📡 Calling Replicate (flux-schnell)...")
+    t0 = time.time()
     output = replicate.run(
         "black-forest-labs/flux-schnell",
         input={
@@ -449,11 +452,15 @@ def _generate_flux_schnell(prompt):
             "num_inference_steps": 4,
             "go_fast": True,
         })
-    return output[0].read()
+    img_bytes = output[0].read()
+    print(f"   ✅ Replicate responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
+    return img_bytes
 
 
 def _generate_nano_banana(prompt):
     """Generate via Google Gemini API (Nano Banana 2). No extra deps needed."""
+    print(f"   📡 Calling Gemini (nano-banana)...")
+    t0 = time.time()
     url = (f"https://generativelanguage.googleapis.com/v1beta/"
            f"models/gemini-2.5-flash-image:generateContent"
            f"?key={GEMINI_API_KEY}")
@@ -466,20 +473,38 @@ def _generate_nano_banana(prompt):
     }).encode()
     req = Request(url, data=body,
                   headers={"Content-Type": "application/json"})
-    resp = urlopen(req, timeout=60)
-    data = json.loads(resp.read())
+    try:
+        resp = urlopen(req, timeout=60)
+    except Exception as e:
+        print(f"   ❌ Gemini API request failed: {e}")
+        raise
+    raw = resp.read()
+    data = json.loads(raw)
     # Find the image part in the response
-    for part in data["candidates"][0]["content"]["parts"]:
+    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
         if "inlineData" in part:
-            return base64.b64decode(part["inlineData"]["data"])
-    raise RuntimeError("No image in Gemini response")
+            img_bytes = base64.b64decode(part["inlineData"]["data"])
+            print(f"   ✅ Gemini responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
+            return img_bytes
+    # No image found — log the response for debugging
+    print(f"   ❌ No image in Gemini response. Keys: {list(data.keys())}")
+    if "candidates" in data:
+        for i, c in enumerate(data["candidates"]):
+            print(f"      candidate[{i}]: finishReason={c.get('finishReason','?')}, parts={[list(p.keys()) for p in c.get('content',{}).get('parts',[])]}")
+    if "error" in data:
+        print(f"      error: {data['error']}")
+    raise RuntimeError(f"No image in Gemini response: {list(data.keys())}")
 
 
 def _generate_gpt_image(prompt):
+    print(f"   📡 Calling OpenAI (gpt-image-1)...")
+    t0 = time.time()
     r = client.images.generate(
         model="gpt-image-1", prompt=prompt,
         size="1024x1536", quality="low")
-    return base64.b64decode(r.data[0].b64_json)
+    img_bytes = base64.b64decode(r.data[0].b64_json)
+    print(f"   ✅ OpenAI responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
+    return img_bytes
 
 
 def _postprocess(img_bytes):
@@ -518,6 +543,16 @@ def main():
     # Re-read keys in case they were updated via the web dashboard
     _apply_api_keys()
 
+    print("─" * 48)
+    print("  🔧 DrawBox Configuration")
+    print("─" * 48)
+    print(f"   Image model : {IMAGE_MODEL}")
+    print(f"   OpenAI key  : {'✅ ' + OPENAI_API_KEY[:8] + '...' if OPENAI_API_KEY else '❌ missing'}")
+    print(f"   Replicate   : {'✅ ' + REPLICATE_API_TOKEN[:8] + '...' if REPLICATE_API_TOKEN else '⚠️  missing'}")
+    print(f"   Gemini key  : {'✅ ' + GEMINI_API_KEY[:8] + '...' if GEMINI_API_KEY else '⚠️  missing'}")
+    print(f"   Keys source : {API_KEYS_FILE} ({'exists' if API_KEYS_FILE.exists() else 'not found, using env'})")
+    print(f"   Settings    : {SETTINGS_FILE} ({'exists' if SETTINGS_FILE.exists() else 'not found, using defaults'})")
+
     if not OPENAI_API_KEY:
         print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
         return
@@ -527,7 +562,6 @@ def main():
         print("⚠️  REPLICATE_API_TOKEN not set (needed for flux-schnell). Set it via the web dashboard or service file.")
     if IMAGE_MODEL == "nano-banana" and not GEMINI_API_KEY:
         print("⚠️  GEMINI_API_KEY not set (needed for nano-banana). Set it via the web dashboard or service file.")
-    print(f"   Image model: {IMAGE_MODEL}")
 
     # Safety mode ON by default (create sentinel file if missing)
     SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -611,7 +645,9 @@ def main():
                     voice.play("done")
 
             except Exception as e:
+                import traceback
                 print(f"❌ Error: {e}")
+                traceback.print_exc()
                 voice.play("error")
             finally:
                 is_busy = False
