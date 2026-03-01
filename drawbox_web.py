@@ -98,13 +98,15 @@ def is_safe(text):
 
 # ── SETTINGS ─────────────────────────────────────
 def load_settings():
+    defaults = {"coloring_prompt": DEFAULT_COLORING_PROMPT,
+                "tts_voice": "nova", "record_seconds": 10}
     if SETTINGS_FILE.exists():
         try:
-            return json.loads(SETTINGS_FILE.read_text())
+            saved = json.loads(SETTINGS_FILE.read_text())
+            defaults.update(saved)
         except Exception:
             pass
-    return {"coloring_prompt": DEFAULT_COLORING_PROMPT,
-            "tts_voice": "nova", "record_seconds": 10}
+    return defaults
 
 def save_settings(data):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
