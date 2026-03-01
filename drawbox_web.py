@@ -793,7 +793,7 @@ body {
       <div class="card-content">
         <div class="form-group">
           <label class="form-label">Coloring Prompt</label>
-          <textarea class="textarea code-input" id="cfgPrompt" rows="8"></textarea>
+          <textarea class="textarea" id="cfgPrompt" rows="8"></textarea>
           <div class="form-hint">System prompt sent with every image generation request</div>
         </div>
         <div class="form-group">
