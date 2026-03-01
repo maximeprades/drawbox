@@ -13,7 +13,7 @@ from openai import OpenAI
 from PIL import Image
 
 # ── CONFIG ───────────────────────────────────────
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 PRINTER_NAME = "drawbox-printer"
 SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
@@ -375,9 +375,9 @@ body {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
   margin-bottom: 24px;
 }
-.stat-card { padding: 20px 24px; display: flex; flex-direction: column; min-height: 100px; }
+.stat-card { padding: 20px 24px; display: flex; flex-direction: column; height: 120px; }
 .stat-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.04em; }
-.stat-value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 8px; line-height: 1.2; }
+.stat-value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 8px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-sub { font-size: 12px; margin-top: auto; padding-top: 8px; color: var(--muted-foreground); }
 .stat-sub.up { color: var(--success); }
 
@@ -473,7 +473,10 @@ body {
 .analytics-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
   margin-bottom: 16px;
+  align-items: stretch;
 }
+.analytics-grid > .card { display: flex; flex-direction: column; }
+.analytics-grid > .card > .card-content { flex: 1; }
 .bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .bar-row:last-child { margin-bottom: 0; }
 .bar-label { width: 110px; font-size: 13px; font-weight: 500; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1163,7 +1166,7 @@ async function loadSettings() {
     const r = await fetch('/api/settings');
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
-    $('cfgModel').value = d.image_model || 'flux-schnell';
+    $('cfgModel').value = d.image_model || 'nano-banana';
     $('cfgVoice').value = d.tts_voice || 'nova';
     $('cfgRecSec').value = d.record_seconds || 10;
   } catch(e) {}

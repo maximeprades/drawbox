@@ -51,7 +51,7 @@ def _apply_api_keys():
 _apply_api_keys()
 
 # Image model: "flux-schnell" (Replicate), "nano-banana" (Gemini), "gpt-image" (OpenAI)
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100
 PRINTER_NAME = "drawbox-printer"
@@ -120,7 +120,7 @@ def log_print_event(prompt, model, duration_s):
     except Exception:
         pass
 
-COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
+DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
 This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - Black and white LINE DRAWING only
 - Thick, clean outlines (3-4px stroke)
@@ -135,6 +135,20 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
 - If the request is ambiguous, default to the most innocent interpretation"""
+
+SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
+
+def _load_coloring_prompt():
+    """Load coloring prompt from shared settings file, fall back to default."""
+    if SETTINGS_FILE.exists():
+        try:
+            settings = json.loads(SETTINGS_FILE.read_text())
+            prompt = settings.get("coloring_prompt", "").strip()
+            if prompt:
+                return prompt
+        except Exception:
+            pass
+    return DEFAULT_COLORING_PROMPT
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
@@ -408,7 +422,8 @@ def generate_image(desc):
     # Re-read keys in case they were updated via the web dashboard
     _apply_api_keys()
 
-    prompt = f"{COLORING_PROMPT}\n\nChild requested: {desc}"
+    coloring_prompt = _load_coloring_prompt()
+    prompt = f"{coloring_prompt}\n\nChild requested: {desc}"
     print(f"🎨 Generating ({IMAGE_MODEL}): {desc}")
     if IMAGE_MODEL == "nano-banana":
         if not GEMINI_API_KEY:
