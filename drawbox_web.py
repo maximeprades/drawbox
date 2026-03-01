@@ -103,7 +103,10 @@ def load_settings():
     if SETTINGS_FILE.exists():
         try:
             saved = json.loads(SETTINGS_FILE.read_text())
-            defaults.update(saved)
+            # Only override defaults with non-empty saved values
+            for k, v in saved.items():
+                if v or v == 0:  # keep falsy 0 but skip "" and None
+                    defaults[k] = v
         except Exception:
             pass
     return defaults
