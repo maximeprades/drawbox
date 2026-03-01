@@ -20,9 +20,36 @@ from io import BytesIO
 from pathlib import Path
 
 # ── CONFIG ──────────────────────────────────────
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+API_KEYS_FILE = Path.home() / ".drawbox" / "api_keys.json"
+
+def _load_api_keys():
+    """Load API keys from file, fall back to environment variables."""
+    keys = {}
+    if API_KEYS_FILE.exists():
+        try:
+            keys = json.loads(API_KEYS_FILE.read_text())
+        except Exception:
+            pass
+    return {
+        "openai": keys.get("openai") or os.environ.get("OPENAI_API_KEY") or "",
+        "replicate": keys.get("replicate") or os.environ.get("REPLICATE_API_TOKEN") or "",
+        "gemini": keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or "",
+    }
+
+def _apply_api_keys():
+    """Apply loaded keys to module globals and environment."""
+    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, client
+    keys = _load_api_keys()
+    OPENAI_API_KEY = keys["openai"]
+    REPLICATE_API_TOKEN = keys["replicate"]
+    GEMINI_API_KEY = keys["gemini"]
+    if keys["replicate"]:
+        os.environ["REPLICATE_API_TOKEN"] = keys["replicate"]
+    if OPENAI_API_KEY:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+_apply_api_keys()
+
 # Image model: "flux-schnell" (Replicate), "nano-banana" (Gemini), "gpt-image" (OpenAI)
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux-schnell")
 BUTTON_PIN = 17
@@ -109,7 +136,7 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
 - If the request is ambiguous, default to the most innocent interpretation"""
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ── VOICE FEEDBACK ─────────────────────────────
 # All voice lines. Keys with lists pick randomly.
@@ -378,13 +405,20 @@ def transcribe(path):
 
 # ── GENERATE ────────────────────────────────────
 def generate_image(desc):
+    # Re-read keys in case they were updated via the web dashboard
+    _apply_api_keys()
+
     prompt = f"{COLORING_PROMPT}\n\nChild requested: {desc}"
     print(f"🎨 Generating ({IMAGE_MODEL}): {desc}")
     if IMAGE_MODEL == "nano-banana":
+        if not GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY not set (needed for nano-banana). Set it via the web dashboard or service file.")
         img_bytes = _generate_nano_banana(prompt)
     elif IMAGE_MODEL == "gpt-image":
         img_bytes = _generate_gpt_image(prompt)
     else:  # flux-schnell (default)
+        if not REPLICATE_API_TOKEN:
+            raise RuntimeError("REPLICATE_API_TOKEN not set (needed for flux-schnell). Set it via the web dashboard or service file.")
         img_bytes = _generate_flux_schnell(prompt)
     return _postprocess(img_bytes)
 
@@ -466,15 +500,18 @@ is_busy = False
 def main():
     global is_busy
 
+    # Re-read keys in case they were updated via the web dashboard
+    _apply_api_keys()
+
     if not OPENAI_API_KEY:
         print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
         return
+
+    # Warn about missing model keys but don't exit — only matters at generation time
     if IMAGE_MODEL == "flux-schnell" and not REPLICATE_API_TOKEN:
-        print("❌ REPLICATE_API_TOKEN not set (needed for flux-schnell). Export it or add to your service file.")
-        return
+        print("⚠️  REPLICATE_API_TOKEN not set (needed for flux-schnell). Set it via the web dashboard or service file.")
     if IMAGE_MODEL == "nano-banana" and not GEMINI_API_KEY:
-        print("❌ GEMINI_API_KEY not set (needed for nano-banana). Export it or add to your service file.")
-        return
+        print("⚠️  GEMINI_API_KEY not set (needed for nano-banana). Set it via the web dashboard or service file.")
     print(f"   Image model: {IMAGE_MODEL}")
 
     # Safety mode ON by default (create sentinel file if missing)
