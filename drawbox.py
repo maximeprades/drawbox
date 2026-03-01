@@ -59,6 +59,7 @@ RECORD_SECONDS = 10
 REBOOT_HOLD_SEC = 5           # hold button 5s to reboot
 TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
 CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
+SCRIPTS_FILE = Path.home() / ".drawbox" / "voice_scripts.json"
 PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
 PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
@@ -231,6 +232,33 @@ KIDS_JOKES = [
     "What do you get when you cross a rabbit with shellfish? An oyster bunny!",
     "Why was the broom late? It over-swept!",
 ]
+
+def _load_voice_scripts():
+    """Load voice line/joke overrides from the dashboard scripts file."""
+    global VOICE_LINES, KIDS_JOKES
+    if not SCRIPTS_FILE.exists():
+        return
+    try:
+        data = json.loads(SCRIPTS_FILE.read_text())
+    except Exception:
+        return
+    # Override voice lines
+    if data.get("voice_lines"):
+        for key, text in data["voice_lines"].items():
+            if not text or key not in VOICE_LINES:
+                continue
+            lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+            if len(lines) > 1:
+                VOICE_LINES[key] = lines
+            elif lines:
+                VOICE_LINES[key] = lines[0]
+        print(f"   📝 Voice line overrides loaded from {SCRIPTS_FILE}")
+    # Override jokes
+    if data.get("jokes"):
+        KIDS_JOKES = [j for j in data["jokes"] if j.strip()]
+        print(f"   🃏 Jokes overrides loaded: {len(KIDS_JOKES)} jokes")
+
+_load_voice_scripts()
 
 class VoiceFeedback:
     """Pre-generates TTS lines and caches them as .mp3 files."""

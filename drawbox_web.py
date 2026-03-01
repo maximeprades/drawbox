@@ -20,6 +20,7 @@ PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
 SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
 PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
 API_KEYS_FILE = Path.home() / ".drawbox" / "api_keys.json"
+SCRIPTS_FILE = Path.home() / ".drawbox" / "voice_scripts.json"
 REPO_DIR = Path.home() / "drawbox-repo"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
@@ -114,6 +115,77 @@ def load_settings():
 def save_settings(data):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+
+# ── VOICE SCRIPTS ────────────────────────────────
+DEFAULT_VOICE_LINES = {
+    "ready":      {"text": "Ready! Press the button and tell me what to draw!",
+                   "desc": "Played on startup"},
+    "listening":  {"text": "I'm listening!",
+                   "desc": "Played when recording starts"},
+    "thinking":   {"text": "Ooh, great idea! Let me draw that for you!\nThat sounds awesome! Drawing it now!\nCool! Give me a moment...\nLove it! One coloring page coming right up!\nNice choice! Let me work on that!",
+                   "desc": "One picked randomly while generating (one per line)"},
+    "printing":   {"text": "Here it comes!",
+                   "desc": "Played when sending to printer"},
+    "done":       {"text": "All done! Press the button when you want another one!",
+                   "desc": "Played after printing"},
+    "error":      {"text": "Oops, something went wrong. Try again!",
+                   "desc": "Played on any error"},
+    "too_short":  {"text": "I didn't catch that. Press the button and tell me what you want to draw!",
+                   "desc": "Played when recording is too short or empty"},
+    "busy":       {"text": "Hold on, I'm still working on your picture! Almost done...",
+                   "desc": "Played if button pressed while already generating"},
+    "blocked":    {"text": "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
+                   "desc": "Played when safety filter blocks a request"},
+    "say_please": {"text": "Oops! Don't forget to say please! Try again and say the magic word!",
+                   "desc": "Played when Please Mode is on and kid forgets to say please"},
+    "reboot":     {"text": "Rebooting now! See you in a moment.",
+                   "desc": "Played on long button press reboot"},
+}
+
+DEFAULT_JOKES = [
+    "Why did the teddy bear say no to dessert? Because she was already stuffed!",
+    "What do you call a sleeping dinosaur? A dino-snore!",
+    "What do you call a fish without eyes? A fsh!",
+    "Why do cows wear bells? Because their horns don't work!",
+    "What do you call a bear with no teeth? A gummy bear!",
+    "Why did the banana go to the doctor? Because it wasn't peeling well!",
+    "What do you call a dog that does magic tricks? A Labracadabrador!",
+    "Why can't you give Elsa a balloon? Because she will let it go!",
+    "What do you call a dinosaur that crashes their car? Tyrannosaurus Wrecks!",
+    "Why did the cookie go to the hospital? Because it felt crummy!",
+    "What do cats eat for breakfast? Mice Krispies!",
+    "What animal is always at a baseball game? A bat!",
+    "Why are ghosts bad at lying? Because you can see right through them!",
+    "What did the ocean say to the beach? Nothing, it just waved!",
+    "Why did the math book look so sad? Because it had too many problems!",
+    "What do you call a funny mountain? Hill-arious!",
+    "What do you call cheese that isn't yours? Nacho cheese!",
+    "Why did the student eat his homework? Because the teacher told him it was a piece of cake!",
+    "What has ears but cannot hear? A cornfield!",
+    "What do you call a pig that does karate? A pork chop!",
+]
+
+def load_scripts():
+    defaults = {
+        "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
+        "jokes": DEFAULT_JOKES,
+    }
+    if SCRIPTS_FILE.exists():
+        try:
+            saved = json.loads(SCRIPTS_FILE.read_text())
+            if saved.get("voice_lines"):
+                for k, v in saved["voice_lines"].items():
+                    if v:  # skip empty overrides
+                        defaults["voice_lines"][k] = v
+            if saved.get("jokes"):
+                defaults["jokes"] = saved["jokes"]
+        except Exception:
+            pass
+    return defaults
+
+def save_scripts(data):
+    SCRIPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SCRIPTS_FILE.write_text(json.dumps(data, indent=2))
 
 # ── ANALYTICS ────────────────────────────────────
 def log_print_event(prompt, model, duration_s, source="web"):
@@ -651,6 +723,10 @@ body {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
       Settings
     </a>
+    <a class="sidebar-item" data-page="scripts" onclick="showPage('scripts')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Scripts
+    </a>
     <div class="sidebar-label">System</div>
     <a class="sidebar-item" data-page="wifi" onclick="showPage('wifi')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>
@@ -882,6 +958,36 @@ body {
     </div>
   </div>
 
+  <!-- ═══ SCRIPTS ═══ -->
+  <div class="page" id="page-scripts">
+    <div class="page-header">
+      <h1 class="page-title">Scripts</h1>
+      <p class="page-desc">Customize what DrawBox says at each step</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Voice Lines</div><div class="card-desc">Edit what DrawBox says during each interaction</div></div>
+      <div class="card-content" id="voiceLinesEditor"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Jokes</div><div class="card-desc">Told while the image generates (one per line)</div></div>
+      <div class="card-content">
+        <textarea class="textarea" id="jokesEditor" rows="12" style="font-size:13px"></textarea>
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:16px">
+      <button class="btn btn-primary" onclick="saveScripts()">Save Scripts</button>
+      <button class="btn btn-outline" onclick="loadScripts()">Reset</button>
+      <button class="btn btn-outline" onclick="resetScriptsDefaults()">Reset All to Defaults</button>
+    </div>
+    <div id="scriptsRestartNotice" style="display:none;margin-top:12px">
+      <div class="badge badge-warning" style="font-size:13px;padding:8px 14px">Restart DrawBox to apply voice changes</div>
+      <button class="btn btn-sm btn-outline" style="margin-left:8px" onclick="restartForScripts()">Restart Now</button>
+    </div>
+  </div>
+
   <!-- ═══ WIFI ═══ -->
   <div class="page" id="page-wifi">
     <div class="page-header">
@@ -1023,6 +1129,7 @@ function showPage(page) {
   $('sidebarOverlay').classList.remove('show');
   if (page === 'overview') loadAnalytics();
   if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadApiKeys(); }
+  if (page === 'scripts') loadScripts();
 }
 
 function toggleSidebar() {
@@ -1276,6 +1383,89 @@ async function toggleSafety() {
     loadSafetyMode();
     toast(d.enabled ? 'Safety filter disabled' : 'Safety filter enabled!');
   } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+// ── SCRIPTS ──────────────────────────────────
+const VOICE_LINE_META = {
+  ready:      'Played on startup',
+  listening:  'Played when recording starts',
+  thinking:   'One picked randomly while generating (one per line)',
+  printing:   'Played when sending to printer',
+  done:       'Played after printing',
+  error:      'Played on any error',
+  too_short:  'Played when recording is too short or empty',
+  busy:       'Played if button pressed while already generating',
+  blocked:    'Played when safety filter blocks a request',
+  say_please: 'Played when Please Mode is on and kid forgets',
+  reboot:     'Played on long button press reboot',
+};
+
+let scriptsDefaults = null;
+
+async function loadScripts() {
+  try {
+    const r = await fetch('/api/scripts');
+    const d = await r.json();
+    scriptsDefaults = d.defaults;
+    const container = $('voiceLinesEditor');
+    container.innerHTML = '';
+    const keys = Object.keys(d.voice_lines);
+    keys.forEach(key => {
+      const val = d.voice_lines[key] || '';
+      const isMulti = val.includes('\\n');
+      const desc = VOICE_LINE_META[key] || '';
+      const rows = isMulti ? Math.max(3, val.split('\\n').length + 1) : 2;
+      container.innerHTML += '<div class="form-group">' +
+        '<label class="form-label">' + esc(key) +
+        ' <span style="font-weight:400;color:var(--muted-foreground);font-size:12px">' + esc(desc) + '</span></label>' +
+        '<textarea class="textarea" id="vl_' + key + '" rows="' + rows + '" style="font-size:13px">' + esc(val) + '</textarea>' +
+        '</div>';
+    });
+    $('jokesEditor').value = (d.jokes || []).join('\\n');
+    $('scriptsRestartNotice').style.display = 'none';
+  } catch(e) { toast('Failed to load scripts: ' + e.message, false); }
+}
+
+async function saveScripts() {
+  const voice_lines = {};
+  document.querySelectorAll('[id^="vl_"]').forEach(el => {
+    const key = el.id.substring(3);
+    voice_lines[key] = el.value;
+  });
+  const jokes = $('jokesEditor').value.split('\\n').map(j => j.trim()).filter(j => j);
+  try {
+    const r = await fetch('/api/scripts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({voice_lines, jokes})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast('Scripts saved!');
+      $('scriptsRestartNotice').style.display = 'flex';
+    } else toast('Save failed', false);
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function resetScriptsDefaults() {
+  if (!confirm('Reset all voice lines and jokes to defaults?')) return;
+  try {
+    const r = await fetch('/api/scripts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reset: true})
+    });
+    const d = await r.json();
+    if (d.ok) { toast('Reset to defaults!'); loadScripts(); }
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function restartForScripts() {
+  try {
+    await fetch('/api/service/restart', {method: 'POST'});
+    toast('DrawBox service restarting...');
+    $('scriptsRestartNotice').style.display = 'none';
+  } catch(e) { toast('Restart failed: ' + e.message, false); }
 }
 
 // ── WIFI ──────────────────────────────────────
@@ -1571,6 +1761,30 @@ def api_settings():
     if "record_seconds" in data:
         settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
     save_settings(settings)
+    return jsonify(ok=True)
+
+@app.route("/api/scripts", methods=["GET", "POST"])
+def api_scripts():
+    if request.method == "GET":
+        scripts = load_scripts()
+        # Also send defaults so JS can offer per-field reset
+        scripts["defaults"] = {
+            "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
+            "jokes": DEFAULT_JOKES,
+        }
+        return jsonify(scripts)
+    data = request.get_json() or {}
+    if data.get("reset"):
+        # Delete the overrides file to restore defaults
+        if SCRIPTS_FILE.exists():
+            SCRIPTS_FILE.unlink()
+        return jsonify(ok=True)
+    scripts = {}
+    if "voice_lines" in data:
+        scripts["voice_lines"] = {k: v[:500] for k, v in data["voice_lines"].items()}
+    if "jokes" in data:
+        scripts["jokes"] = [j[:300] for j in data["jokes"][:100]]
+    save_scripts(scripts)
     return jsonify(ok=True)
 
 @app.route("/api/please-mode", methods=["GET", "POST"])
