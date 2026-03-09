@@ -130,7 +130,10 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - Style: children's coloring book page
 - ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
 - NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
-- If the request is ambiguous, default to the most innocent interpretation"""
+- If the request is ambiguous, default to the most innocent interpretation
+- Common requests from kids include: cats/kitties, Range Rovers, fast cars, dinosaurs, unicorns, dogs, rainbows
+- If the transcription is garbled but sounds like it could be a vehicle (car, truck, SUV), default to drawing a cool Range Rover or sports car
+- If it sounds like it could be an animal, default to a cute kitty or puppy"""
 
 
 def load_coloring_prompt():
