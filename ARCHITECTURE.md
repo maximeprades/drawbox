@@ -124,7 +124,7 @@ Flask web app at `http://drawbox.local:5000`. Runs as a separate systemd service
 
 ### Implementation Notes
 
-- **Self-contained** — Duplicates core functions from drawbox.py to avoid coupling
+- **Shared core** — Both scripts import from `drawbox_core.py` (API keys, safety, image generation, printing, logging)
 - **No auth** — Home toy on local network
 - **Diagnostics allowlist** — 14 commands, no arbitrary shell execution
 - **Log streaming** — SSE via `journalctl -u drawbox -f`
@@ -134,17 +134,20 @@ Flask web app at `http://drawbox.local:5000`. Runs as a separate systemd service
 ### Development (Mac)
 
 ```
+drawbox_core.py         # Shared logic (API keys, safety, generation, printing)
 drawbox.py              # Main script (the brain)
 drawbox_web.py          # Flask web dashboard
 drawbox-guide.html      # 20-step interactive build guide
 drawbox-simulator.html  # Browser-based simulator (no Pi needed)
 deploy-web.sh           # One-command deploy to Pi
 check.sh                # Health check script
+requirements.txt        # Python dependencies
 ```
 
 ### Pi (/home/pi/)
 
 ```
+~/drawbox_core.py         # Shared logic module
 ~/drawbox.py              # Main script (drawbox.service)
 ~/drawbox_web.py          # Web dashboard (drawbox-web.service)
 ~/drawbox-guide.html      # Served at /guide

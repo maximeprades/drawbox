@@ -5,232 +5,108 @@ Hardware: Pi 5, Brother HL-L2405W (USB), EG STARTS 100mm button,
           CHANGEEK USB mic, USB speaker
 """
 
-import os, time, tempfile, subprocess, random, hashlib, threading, json
+import os, time, tempfile, subprocess, random, hashlib, threading, json, traceback
 from concurrent.futures import ThreadPoolExecutor
-from urllib.request import Request, urlopen
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
 from gpiozero import Button as GpioButton
-import replicate
-from openai import OpenAI
-from PIL import Image
-import base64
-from io import BytesIO
-from pathlib import Path
+
+from drawbox_core import (
+    apply_api_keys, API_KEYS_FILE, SETTINGS_FILE, SAFETY_MODE_FILE,
+    SCRIPTS_FILE, CACHE_DIR, IMAGE_MODEL,
+    is_safe, safety_mode_enabled, please_mode_enabled, has_please,
+    generate_image, print_image, log_print_event,
+)
+import drawbox_core
 
 # ── CONFIG ──────────────────────────────────────
-API_KEYS_FILE = Path.home() / ".drawbox" / "api_keys.json"
-
-def _load_api_keys():
-    """Load API keys from file, fall back to environment variables."""
-    keys = {}
-    if API_KEYS_FILE.exists():
-        try:
-            keys = json.loads(API_KEYS_FILE.read_text())
-        except Exception:
-            pass
-    return {
-        "openai": keys.get("openai") or os.environ.get("OPENAI_API_KEY") or "",
-        "replicate": keys.get("replicate") or os.environ.get("REPLICATE_API_TOKEN") or "",
-        "gemini": keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or "",
-    }
-
-def _apply_api_keys():
-    """Apply loaded keys to module globals and environment."""
-    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, client
-    keys = _load_api_keys()
-    OPENAI_API_KEY = keys["openai"]
-    REPLICATE_API_TOKEN = keys["replicate"]
-    GEMINI_API_KEY = keys["gemini"]
-    if keys["replicate"]:
-        os.environ["REPLICATE_API_TOKEN"] = keys["replicate"]
-    if OPENAI_API_KEY:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-_apply_api_keys()
-
-# Image model: "flux-schnell" (Replicate), "nano-banana" (Gemini), "gpt-image" (OpenAI)
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100
-PRINTER_NAME = "drawbox-printer"
 RECORD_SECONDS = 10
 REBOOT_HOLD_SEC = 5           # hold button 5s to reboot
-TTS_VOICE = "nova"            # alloy, echo, fable, onyx, nova, shimmer
-CACHE_DIR = Path.home() / ".drawbox" / "voice_cache"
-SCRIPTS_FILE = Path.home() / ".drawbox" / "voice_scripts.json"
-PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
-SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
-PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
-
-# ── SAFETY BLOCKLIST ────────────────────────────
-BLOCKED_WORDS = {
-    "kill", "murder", "dead", "death", "die", "dying", "corpse",
-    "blood", "bloody", "gore", "gory", "wound", "stab", "shoot",
-    "gun", "guns", "rifle", "pistol", "shotgun", "weapon", "knife",
-    "bomb", "explode", "explosion", "grenade", "missile", "nuke",
-    "sex", "sexy", "sexual", "nude", "naked", "porn", "hentai",
-    "penis", "dick", "cock", "vagina", "pussy", "boob", "breast",
-    "nipple", "butt", "ass", "anus", "genital", "erotic", "orgasm",
-    "fuck", "shit", "damn", "bitch", "bastard", "crap", "piss",
-    "whore", "slut", "hooker", "prostitute", "stripper",
-    "drug", "drugs", "cocaine", "heroin", "meth", "weed", "marijuana",
-    "alcohol", "beer", "wine", "vodka", "drunk", "cigarette", "smoke",
-    "devil", "satan", "demon", "hell", "torture", "horror", "zombie",
-    "vampire", "skeleton", "skull", "coffin", "grave", "creepy",
-    "scary", "nightmare", "terror", "evil", "wicked", "curse",
-    "hate", "racist", "racism", "nazi", "hitler", "slavery", "slave",
-    "suicide", "hanging", "noose", "drown", "poison", "overdose",
-    "rape", "molest", "abuse", "kidnap", "assault", "victim",
-    "war", "soldier", "army", "military", "combat", "battle",
-    "thong", "lingerie", "bikini", "underwear",
-    "pee", "fart", "vomit", "snot",
-}
-
-def is_safe(text):
-    words = text.lower()
-    return not any(w in words for w in BLOCKED_WORDS)
-
-def safety_mode_enabled():
-    return SAFETY_MODE_FILE.exists()
-
-def please_mode_enabled():
-    return PLEASE_MODE_FILE.exists()
-
-def has_please(text):
-    t = text.lower()
-    return any(w in t for w in (
-        "please", "s'il vous plait", "s'il te plait",
-        "s'il vous plaît", "s'il te plaît", "svp"))
-
-def log_print_event(prompt, model, duration_s):
-    """Append a print event to the analytics log."""
-    from datetime import datetime
-    entry = {
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "prompt": prompt[:200],
-        "model": model,
-        "duration_s": round(duration_s, 2),
-        "source": "button",
-    }
-    try:
-        PRINT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PRINT_LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
-
-DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
-This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
-- Black and white LINE DRAWING only
-- Thick, clean outlines (3-4px stroke)
-- NO shading, NO gradients, NO filled/solid areas
-- NO gray — pure black lines on white
-- Simple shapes, minimal fine detail
-- Large open areas for coloring with crayons
-- Friendly, fun, cute, non-scary style
-- Centered with padding — the subject must NOT touch or extend to the edges
-- Leave at least 10% empty white space on all sides as margin
-- Style: children's coloring book page
-- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
-- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
-- If the request is ambiguous, default to the most innocent interpretation"""
-
-SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
-
-def _load_coloring_prompt():
-    """Load coloring prompt from shared settings file, fall back to default."""
-    if SETTINGS_FILE.exists():
-        try:
-            settings = json.loads(SETTINGS_FILE.read_text())
-            prompt = settings.get("coloring_prompt", "").strip()
-            if prompt:
-                return prompt
-        except Exception:
-            pass
-    return DEFAULT_COLORING_PROMPT
-
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+TTS_VOICE_ID = "xNtG3W2oqJs0cJZuTyBc"  # ElevenLabs voice ID
+TTS_STABILITY = 0.5           # 0.0–1.0 (lower = more expressive)
+TTS_STYLE = 0.0               # 0.0–1.0 (style exaggeration)
 
 # ── VOICE FEEDBACK ─────────────────────────────
 # All voice lines. Keys with lists pick randomly.
 VOICE_LINES = {
-    "ready":     "Ready! Press the button and tell me what to draw!",
-    "listening": "I'm listening!",
+    "ready":     "[cheerfully] Ready! Press the button and tell me what to draw!",
+    "listening": "[cheerfully] I'm listening!",
     "thinking":  [
-        "Ooh, great idea! Let me draw that for you!",
-        "That sounds awesome! Drawing it now!",
-        "Cool! Give me a moment...",
-        "Love it! One coloring page coming right up!",
-        "Nice choice! Let me work on that!",
+        "[excitedly] Ooh, great idea! Let me draw that for you!",
+        "[elated] That sounds awesome! Drawing it now!",
+        "[cheerfully] Cool! Give me a moment...",
+        "[excitedly] Love it! One coloring page coming right up!",
+        "[cheerfully] Nice choice! Let me work on that!",
     ],
-    "printing":  "Here it comes!",
-    "done":      "All done! Press the button when you want another one!",
-    "error":     "Oops, something went wrong. Try again!",
-    "too_short": ("I didn't catch that. Press the button "
+    "printing":  "[excitedly] Here it comes!",
+    "done":      "[giggling] All done! Press the button when you want another one!",
+    "error":     "[gently] Oops, something went wrong. Try again!",
+    "too_short": ("[gently] I didn't catch that. Press the button "
                   "and tell me what you want to draw!"),
-    "busy":      ("Hold on, I'm still working on your picture! "
+    "busy":      ("[cheerfully] Hold on, I'm still working on your picture! "
                   "Almost done..."),
-    "blocked":   ("Hmm, I can't draw that. How about something "
+    "blocked":   ("[gently] Hmm, I can't draw that. How about something "
                   "fun like an animal or a rainbow?"),
-    "say_please": ("Oops! Don't forget to say please! "
+    "say_please": ("[playfully] Oops! Don't forget to say please! "
                    "Try again and say the magic word!"),
-    "reboot":    "Rebooting now! See you in a moment.",
+    "reboot":    "[cheerfully] Rebooting now! See you in a moment.",
 }
 
 # ── KIDS JOKES (told while generating) ─────────
 KIDS_JOKES = [
-    "Why did the teddy bear say no to dessert? Because she was already stuffed!",
-    "What do you call a sleeping dinosaur? A dino-snore!",
-    "What do you call a fish without eyes? A fsh!",
-    "Why do cows wear bells? Because their horns don't work!",
-    "What do you call a bear with no teeth? A gummy bear!",
-    "Why did the banana go to the doctor? Because it wasn't peeling well!",
-    "What do you call a dog that does magic tricks? A Labracadabrador!",
-    "Why can't you give Elsa a balloon? Because she will let it go!",
-    "What do you call a dinosaur that crashes their car? Tyrannosaurus Wrecks!",
-    "Why did the cookie go to the hospital? Because it felt crummy!",
-    "What do cats eat for breakfast? Mice Krispies!",
-    "What animal is always at a baseball game? A bat!",
-    "Why are ghosts bad at lying? Because you can see right through them!",
-    "What did the ocean say to the beach? Nothing, it just waved!",
-    "Why did the math book look so sad? Because it had too many problems!",
-    "What do you call a funny mountain? Hill-arious!",
-    "What do you call cheese that isn't yours? Nacho cheese!",
-    "Why did the student eat his homework? Because the teacher told him it was a piece of cake!",
-    "What has ears but cannot hear? A cornfield!",
-    "What do you call a pig that does karate? A pork chop!",
-    "Why did the bicycle fall over? Because it was two tired!",
-    "What did the big flower say to the little flower? Hi, bud!",
-    "What do elves learn in school? The elf-abet!",
-    "Why do bees have sticky hair? Because they use honeycombs!",
-    "What do you call a boomerang that won't come back? A stick!",
-    "Why did the golfer bring two pairs of pants? In case he got a hole in one!",
-    "What do you call a snowman with a six-pack? An abdominal snowman!",
-    "What did the left eye say to the right eye? Between you and me, something smells!",
-    "What do you call a train that sneezes? Achoo-choo train!",
-    "Why are elephants so wrinkly? Because you can't iron them!",
-    "What did one wall say to the other wall? I'll meet you at the corner!",
-    "What do you get when you cross a snowman and a vampire? Frostbite!",
-    "Why don't scientists trust atoms? Because they make up everything!",
-    "What kind of tree fits in your hand? A palm tree!",
-    "What do you call a lazy kangaroo? A pouch potato!",
-    "Why did the scarecrow win an award? Because he was outstanding in his field!",
-    "What do you call a duck that gets all A's? A wise quacker!",
-    "Why can't a leopard hide? Because he's always spotted!",
-    "What did the traffic light say to the car? Don't look, I'm about to change!",
-    "What do you call a cat sitting on the beach on Christmas Eve? Sandy Claws!",
-    "Why did the tomato turn red? Because it saw the salad dressing!",
-    "What do you get when you cross a centipede and a parrot? A walkie talkie!",
-    "What did the stamp say to the envelope? Stick with me and we'll go places!",
-    "Why are fish so smart? Because they live in schools!",
-    "What do you call a sleeping bull? A bulldozer!",
-    "What did the zero say to the eight? Nice belt!",
-    "Why did the kid bring a ladder to school? Because she wanted to go to high school!",
-    "What do you call a fairy that hasn't taken a bath? Stinker Bell!",
-    "What do you get when you cross a rabbit with shellfish? An oyster bunny!",
-    "Why was the broom late? It over-swept!",
+    "Why did the teddy bear say no to dessert? ... [giggling] Because she was already stuffed!",
+    "What do you call a sleeping dinosaur? ... [giggling] A dino-snore!",
+    "What do you call a fish without eyes? ... [giggling] A fsh!",
+    "Why do cows wear bells? ... [giggling] Because their horns don't work!",
+    "What do you call a bear with no teeth? ... [giggling] A gummy bear!",
+    "Why did the banana go to the doctor? ... [giggling] Because it wasn't peeling well!",
+    "What do you call a dog that does magic tricks? ... [giggling] A Labracadabrador!",
+    "Why can't you give Elsa a balloon? ... [giggling] Because she will let it go!",
+    "What do you call a dinosaur that crashes their car? ... [giggling] Tyrannosaurus Wrecks!",
+    "Why did the cookie go to the hospital? ... [giggling] Because it felt crummy!",
+    "What do cats eat for breakfast? ... [giggling] Mice Krispies!",
+    "What animal is always at a baseball game? ... [giggling] A bat!",
+    "Why are ghosts bad at lying? ... [giggling] Because you can see right through them!",
+    "What did the ocean say to the beach? ... [giggling] Nothing, it just waved!",
+    "Why did the math book look so sad? ... [giggling] Because it had too many problems!",
+    "What do you call a funny mountain? ... [giggling] Hill-arious!",
+    "What do you call cheese that isn't yours? ... [giggling] Nacho cheese!",
+    "Why did the student eat his homework? ... [giggling] Because the teacher told him it was a piece of cake!",
+    "What has ears but cannot hear? ... [giggling] A cornfield!",
+    "What do you call a pig that does karate? ... [giggling] A pork chop!",
+    "Why did the bicycle fall over? ... [giggling] Because it was two tired!",
+    "What did the big flower say to the little flower? ... [giggling] Hi, bud!",
+    "What do elves learn in school? ... [giggling] The elf-abet!",
+    "Why do bees have sticky hair? ... [giggling] Because they use honeycombs!",
+    "What do you call a boomerang that won't come back? ... [giggling] A stick!",
+    "Why did the golfer bring two pairs of pants? ... [giggling] In case he got a hole in one!",
+    "What do you call a snowman with a six-pack? ... [giggling] An abdominal snowman!",
+    "What did the left eye say to the right eye? ... [giggling] Between you and me, something smells!",
+    "What do you call a train that sneezes? ... [giggling] Achoo-choo train!",
+    "Why are elephants so wrinkly? ... [giggling] Because you can't iron them!",
+    "What did one wall say to the other wall? ... [giggling] I'll meet you at the corner!",
+    "What do you get when you cross a snowman and a vampire? ... [giggling] Frostbite!",
+    "Why don't scientists trust atoms? ... [giggling] Because they make up everything!",
+    "What kind of tree fits in your hand? ... [giggling] A palm tree!",
+    "What do you call a lazy kangaroo? ... [giggling] A pouch potato!",
+    "Why did the scarecrow win an award? ... [giggling] Because he was outstanding in his field!",
+    "What do you call a duck that gets all A's? ... [giggling] A wise quacker!",
+    "Why can't a leopard hide? ... [giggling] Because he's always spotted!",
+    "What did the traffic light say to the car? ... [giggling] Don't look, I'm about to change!",
+    "What do you call a cat sitting on the beach on Christmas Eve? ... [giggling] Sandy Claws!",
+    "Why did the tomato turn red? ... [giggling] Because it saw the salad dressing!",
+    "What do you get when you cross a centipede and a parrot? ... [giggling] A walkie talkie!",
+    "What did the stamp say to the envelope? ... [giggling] Stick with me and we'll go places!",
+    "Why are fish so smart? ... [giggling] Because they live in schools!",
+    "What do you call a sleeping bull? ... [giggling] A bulldozer!",
+    "What did the zero say to the eight? ... [giggling] Nice belt!",
+    "Why did the kid bring a ladder to school? ... [giggling] Because she wanted to go to high school!",
+    "What do you call a fairy that hasn't taken a bath? ... [giggling] Stinker Bell!",
+    "What do you get when you cross a rabbit with shellfish? ... [giggling] An oyster bunny!",
+    "Why was the broom late? ... [giggling] It over-swept!",
 ]
 
 def _load_voice_scripts():
@@ -260,8 +136,26 @@ def _load_voice_scripts():
 
 _load_voice_scripts()
 
+def _load_tts_settings():
+    """Load TTS voice ID and ElevenLabs settings from the dashboard settings file."""
+    global TTS_VOICE_ID, TTS_STABILITY, TTS_STYLE
+    if not SETTINGS_FILE.exists():
+        return
+    try:
+        data = json.loads(SETTINGS_FILE.read_text())
+    except Exception:
+        return
+    if data.get("tts_voice_id"):
+        TTS_VOICE_ID = data["tts_voice_id"]
+    if "tts_stability" in data:
+        TTS_STABILITY = max(0.0, min(1.0, float(data["tts_stability"])))
+    if "tts_style" in data:
+        TTS_STYLE = max(0.0, min(1.0, float(data["tts_style"])))
+
+_load_tts_settings()
+
 class VoiceFeedback:
-    """Pre-generates TTS lines and caches them as .mp3 files."""
+    """Pre-generates TTS lines via ElevenLabs and caches them as .mp3 files."""
 
     def __init__(self):
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -269,37 +163,67 @@ class VoiceFeedback:
         self._warm_up()
 
     def _tts_path(self, text):
-        """Deterministic filename based on voice + text content."""
-        h = hashlib.md5(f"{TTS_VOICE}:{text}".encode()).hexdigest()[:12]
+        """Deterministic filename based on voice + settings + text."""
+        h = hashlib.md5(
+            f"{TTS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}".encode()
+        ).hexdigest()[:12]
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
-        """Generate a single TTS file if not already cached."""
+        """Generate a single TTS file via ElevenLabs if not already cached."""
         path = self._tts_path(text)
         if path.exists():
             return path
         print(f"   🔊 Caching: {text[:50]}...")
         try:
-            resp = client.audio.speech.create(
-                model="tts-1", voice=TTS_VOICE, input=text)
-            resp.stream_to_file(str(path))
+            self._elevenlabs_tts(text, str(path))
         except Exception as e:
             print(f"   ⚠️  TTS cache error: {e}")
             return None
         return path
 
+    def _elevenlabs_tts(self, text, out_path):
+        """Call ElevenLabs TTS API and save the audio to out_path."""
+        import urllib.request
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{TTS_VOICE_ID}"
+        body = json.dumps({
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": TTS_STABILITY,
+                "similarity_boost": 0.75,
+                "style": TTS_STYLE,
+                "use_speaker_boost": True,
+            },
+        }).encode()
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json",
+            "xi-api-key": drawbox_core.ELEVENLABS_API_KEY,
+            "Accept": "audio/mpeg",
+        })
+        resp = urllib.request.urlopen(req, timeout=30)
+        with open(out_path, "wb") as f:
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                f.write(chunk)
+
     def _warm_up(self):
         """Pre-generate all static voice lines at startup."""
         print("🔊 Warming up voice cache...")
-        # Generate a short silence MP3 to wake the USB speaker before speech.
-        # A single comma produces ~0.3s of near-silence from the TTS engine.
+        # Generate a short silent MP3 to wake the USB speaker before speech.
+        # Uses ffmpeg to create pure silence — no API call, no vocal artifacts.
         self._silence_path = CACHE_DIR / "silence.mp3"
         if not self._silence_path.exists():
             print("   🔇 Generating speaker wake-up file...")
             try:
-                resp = client.audio.speech.create(
-                    model="tts-1", voice=TTS_VOICE, input=",")
-                resp.stream_to_file(str(self._silence_path))
+                subprocess.run([
+                    "ffmpeg", "-y", "-f", "lavfi",
+                    "-i", "anullsrc=r=44100:cl=mono",
+                    "-t", "0.5", "-q:a", "9",
+                    str(self._silence_path),
+                ], check=True, capture_output=True)
             except Exception as e:
                 print(f"   ⚠️  Could not generate silence file: {e}")
                 self._silence_path = None
@@ -375,51 +299,35 @@ class VoiceFeedback:
     def _play_live(self, text):
         """Generate and play TTS on the fly (uncached)."""
         print(f"🔊 Speaking: {text}")
+        tmp_path = None
         try:
-            resp = client.audio.speech.create(
-                model="tts-1", voice=TTS_VOICE, input=text)
             tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-            resp.stream_to_file(tmp.name)
-            self._play_file(tmp.name)
-            os.unlink(tmp.name)
+            tmp_path = tmp.name
+            tmp.close()
+            self._elevenlabs_tts(text, tmp_path)
+            self._play_file(tmp_path)
         except Exception as e:
             print(f"   TTS error: {e}")
             subprocess.run(["espeak", text], check=False)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
-    def play_jokes_until_done(self, thread, pause_between=1.5):
-        """Play random jokes until the given thread completes."""
+    def play_jokes_until_done(self, thread):
+        """Play one random joke, then wait for the thread to finish."""
         jokes = list(self._joke_paths)
         if not jokes:
             thread.join()
             return
-        random.shuffle(jokes)
-        idx = 0
-        while thread.is_alive():
-            if idx >= len(jokes):
-                random.shuffle(jokes)
-                idx = 0
-            if not thread.is_alive():
-                break
-            print(f"   🃏 Telling joke {idx + 1}...")
-            self._play_file(jokes[idx])
-            idx += 1
-            # Brief pause between jokes, checking if generation is done
-            waited = 0.0
-            while waited < pause_between and thread.is_alive():
-                time.sleep(0.1)
-                waited += 0.1
-
-# ── BEEP FALLBACK ──────────────────────────────
-def beep(freq=440, dur=0.2):
-    t = np.linspace(0, dur, int(SAMPLE_RATE * dur), False)
-    sd.play((np.sin(freq * t * 2 * np.pi) * 0.3).astype(np.float32),
-            SAMPLE_RATE)
-    sd.wait()
-
-def beep_ready():
-    beep(523, 0.1); time.sleep(0.05)
-    beep(659, 0.1); time.sleep(0.05)
-    beep(784, 0.2)
+        joke = random.choice(jokes)
+        if thread.is_alive():
+            print("   🃏 Telling a joke...")
+            self._play_file(joke)
+        # Wait silently for generation to finish
+        thread.join()
 
 # ── RECORD ──────────────────────────────────────
 def record_audio():
@@ -441,126 +349,10 @@ def transcribe(path):
     print("📝 Transcribing (whisper-1)...")
     t0 = time.time()
     with open(path, "rb") as f:
-        r = client.audio.transcriptions.create(model="whisper-1", file=f)
+        r = drawbox_core.client.audio.transcriptions.create(model="whisper-1", file=f)
     os.unlink(path)
     print(f'   ✅ Transcribed in {time.time()-t0:.1f}s: "{r.text}"')
     return r.text
-
-# ── GENERATE ────────────────────────────────────
-def generate_image(desc):
-    # Re-read keys in case they were updated via the web dashboard
-    _apply_api_keys()
-
-    coloring_prompt = _load_coloring_prompt()
-    prompt = f"{coloring_prompt}\n\nChild requested: {desc}"
-    print(f"🎨 Generating ({IMAGE_MODEL}): {desc}")
-    if IMAGE_MODEL == "nano-banana":
-        if not GEMINI_API_KEY:
-            raise RuntimeError("GEMINI_API_KEY not set (needed for nano-banana). Set it via the web dashboard or service file.")
-        img_bytes = _generate_nano_banana(prompt)
-    elif IMAGE_MODEL == "gpt-image":
-        img_bytes = _generate_gpt_image(prompt)
-    else:  # flux-schnell (default)
-        if not REPLICATE_API_TOKEN:
-            raise RuntimeError("REPLICATE_API_TOKEN not set (needed for flux-schnell). Set it via the web dashboard or service file.")
-        img_bytes = _generate_flux_schnell(prompt)
-    return _postprocess(img_bytes)
-
-
-def _generate_flux_schnell(prompt):
-    print(f"   📡 Calling Replicate (flux-schnell)...")
-    t0 = time.time()
-    output = replicate.run(
-        "black-forest-labs/flux-schnell",
-        input={
-            "prompt": prompt,
-            "num_outputs": 1,
-            "aspect_ratio": "3:4",
-            "output_format": "png",
-            "num_inference_steps": 4,
-            "go_fast": True,
-        })
-    img_bytes = output[0].read()
-    print(f"   ✅ Replicate responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
-    return img_bytes
-
-
-def _generate_nano_banana(prompt):
-    """Generate via Google Gemini API (Nano Banana 2). No extra deps needed."""
-    print(f"   📡 Calling Gemini (nano-banana)...")
-    t0 = time.time()
-    url = (f"https://generativelanguage.googleapis.com/v1beta/"
-           f"models/gemini-2.5-flash-image:generateContent"
-           f"?key={GEMINI_API_KEY}")
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["IMAGE"],
-            "imageConfig": {"aspectRatio": "3:4"},
-        },
-    }).encode()
-    req = Request(url, data=body,
-                  headers={"Content-Type": "application/json"})
-    try:
-        resp = urlopen(req, timeout=60)
-    except Exception as e:
-        print(f"   ❌ Gemini API request failed: {e}")
-        raise
-    raw = resp.read()
-    data = json.loads(raw)
-    # Find the image part in the response
-    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
-        if "inlineData" in part:
-            img_bytes = base64.b64decode(part["inlineData"]["data"])
-            print(f"   ✅ Gemini responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
-            return img_bytes
-    # No image found — log the response for debugging
-    print(f"   ❌ No image in Gemini response. Keys: {list(data.keys())}")
-    if "candidates" in data:
-        for i, c in enumerate(data["candidates"]):
-            print(f"      candidate[{i}]: finishReason={c.get('finishReason','?')}, parts={[list(p.keys()) for p in c.get('content',{}).get('parts',[])]}")
-    if "error" in data:
-        print(f"      error: {data['error']}")
-    raise RuntimeError(f"No image in Gemini response: {list(data.keys())}")
-
-
-def _generate_gpt_image(prompt):
-    print(f"   📡 Calling OpenAI (gpt-image-1)...")
-    t0 = time.time()
-    r = client.images.generate(
-        model="gpt-image-1", prompt=prompt,
-        size="1024x1536", quality="low")
-    img_bytes = base64.b64decode(r.data[0].b64_json)
-    print(f"   ✅ OpenAI responded in {time.time()-t0:.1f}s ({len(img_bytes)//1024}KB)")
-    return img_bytes
-
-
-def _postprocess(img_bytes):
-    """Convert to B&W line art and fit onto letter-size canvas."""
-    img = Image.open(BytesIO(img_bytes)).convert("L")
-    img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    iw, ih = img.size
-    canvas_w, canvas_h = 1275, 1650
-    margin = 75  # 0.5" at 150dpi
-    max_w = canvas_w - 2 * margin
-    max_h = canvas_h - 2 * margin
-    scale = min(max_w / iw, max_h / ih)
-    new_w = int(iw * scale)
-    new_h = int(ih * scale)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("L", (canvas_w, canvas_h), 255)
-    canvas.paste(img, ((canvas_w - new_w) // 2, (canvas_h - new_h) // 2))
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    canvas.save(tmp.name); tmp.close()
-    return tmp.name
-
-# ── PRINT ───────────────────────────────────────
-def print_image(path):
-    print("🖨️  Printing...")
-    subprocess.run(["lp", "-d", PRINTER_NAME,
-        "-o", "media=Letter", "-o", "fit-to-page", path], check=True)
-    os.unlink(path)
-    print("   ✅ Sent to printer!")
 
 # ── MAIN ────────────────────────────────────────
 is_busy = False
@@ -569,26 +361,30 @@ def main():
     global is_busy
 
     # Re-read keys in case they were updated via the web dashboard
-    _apply_api_keys()
+    apply_api_keys()
 
     print("─" * 48)
     print("  🔧 DrawBox Configuration")
     print("─" * 48)
     print(f"   Image model : {IMAGE_MODEL}")
-    print(f"   OpenAI key  : {'✅ ' + OPENAI_API_KEY[:8] + '...' if OPENAI_API_KEY else '❌ missing'}")
-    print(f"   Replicate   : {'✅ ' + REPLICATE_API_TOKEN[:8] + '...' if REPLICATE_API_TOKEN else '⚠️  missing'}")
-    print(f"   Gemini key  : {'✅ ' + GEMINI_API_KEY[:8] + '...' if GEMINI_API_KEY else '⚠️  missing'}")
+    print(f"   OpenAI key  : {'✅ ' + drawbox_core.OPENAI_API_KEY[:8] + '...' if drawbox_core.OPENAI_API_KEY else '❌ missing'}")
+    print(f"   ElevenLabs  : {'✅ ' + drawbox_core.ELEVENLABS_API_KEY[:8] + '...' if drawbox_core.ELEVENLABS_API_KEY else '❌ missing'}")
+    print(f"   Replicate   : {'✅ ' + drawbox_core.REPLICATE_API_TOKEN[:8] + '...' if drawbox_core.REPLICATE_API_TOKEN else '⚠️  missing'}")
+    print(f"   Gemini key  : {'✅ ' + drawbox_core.GEMINI_API_KEY[:8] + '...' if drawbox_core.GEMINI_API_KEY else '⚠️  missing'}")
     print(f"   Keys source : {API_KEYS_FILE} ({'exists' if API_KEYS_FILE.exists() else 'not found, using env'})")
     print(f"   Settings    : {SETTINGS_FILE} ({'exists' if SETTINGS_FILE.exists() else 'not found, using defaults'})")
 
-    if not OPENAI_API_KEY:
+    if not drawbox_core.OPENAI_API_KEY:
         print("❌ OPENAI_API_KEY not set. Export it or add to your service file.")
+        return
+    if not drawbox_core.ELEVENLABS_API_KEY:
+        print("❌ ELEVENLABS_API_KEY not set. Add it via the web dashboard.")
         return
 
     # Warn about missing model keys but don't exit — only matters at generation time
-    if IMAGE_MODEL == "flux-schnell" and not REPLICATE_API_TOKEN:
+    if IMAGE_MODEL == "flux-schnell" and not drawbox_core.REPLICATE_API_TOKEN:
         print("⚠️  REPLICATE_API_TOKEN not set (needed for flux-schnell). Set it via the web dashboard or service file.")
-    if IMAGE_MODEL == "nano-banana" and not GEMINI_API_KEY:
+    if IMAGE_MODEL == "nano-banana" and not drawbox_core.GEMINI_API_KEY:
         print("⚠️  GEMINI_API_KEY not set (needed for nano-banana). Set it via the web dashboard or service file.")
 
     # Safety mode ON by default (create sentinel file if missing)
@@ -673,7 +469,6 @@ def main():
                     voice.play("done")
 
             except Exception as e:
-                import traceback
                 print(f"❌ Error: {e}")
                 traceback.print_exc()
                 voice.play("error")

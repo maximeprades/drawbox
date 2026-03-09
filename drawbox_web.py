@@ -1,106 +1,31 @@
 #!/usr/bin/env python3
 """DrawBox Web Dashboard — Control panel accessible from any browser on your network."""
 
-import os, json, tempfile, subprocess, base64, time as _time, threading, shutil
+import os, json, subprocess, base64, time as _time, threading, shutil
 from pathlib import Path
-from io import BytesIO
 from datetime import datetime
 from collections import Counter
-from urllib.request import Request, urlopen
 from flask import Flask, request, jsonify, Response, render_template_string, send_file
-import replicate
-from openai import OpenAI
-from PIL import Image
+
+from drawbox_core import (
+    apply_api_keys, _load_api_keys, is_safe,
+    generate_image, print_image, log_print_event,
+    DEFAULT_COLORING_PROMPT, IMAGE_MODEL,
+    SETTINGS_FILE, PLEASE_MODE_FILE, SAFETY_MODE_FILE,
+    PRINT_LOG_FILE, API_KEYS_FILE, SCRIPTS_FILE, DRAWBOX_DIR,
+)
+import drawbox_core
 
 # ── CONFIG ───────────────────────────────────────
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
-PRINTER_NAME = "drawbox-printer"
-SETTINGS_FILE = Path.home() / ".drawbox" / "web_settings.json"
-PLEASE_MODE_FILE = Path.home() / ".drawbox" / "please_mode"
-SAFETY_MODE_FILE = Path.home() / ".drawbox" / "safety_mode"
-PRINT_LOG_FILE = Path.home() / ".drawbox" / "print_log.jsonl"
-API_KEYS_FILE = Path.home() / ".drawbox" / "api_keys.json"
-SCRIPTS_FILE = Path.home() / ".drawbox" / "voice_scripts.json"
 REPO_DIR = Path.home() / "drawbox-repo"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
 
-# ── API KEYS (file > env var) ────────────────────
-def _load_api_keys():
-    """Load API keys from file, fall back to environment variables."""
-    keys = {}
-    if API_KEYS_FILE.exists():
-        try:
-            keys = json.loads(API_KEYS_FILE.read_text())
-        except Exception:
-            pass
-    return {
-        "openai": keys.get("openai") or os.environ.get("OPENAI_API_KEY") or "",
-        "replicate": keys.get("replicate") or os.environ.get("REPLICATE_API_TOKEN") or "",
-        "gemini": keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or "",
-    }
-
-def _apply_api_keys():
-    """Apply loaded keys to module globals and environment."""
-    global OPENAI_API_KEY, GEMINI_API_KEY, client
-    keys = _load_api_keys()
-    OPENAI_API_KEY = keys["openai"]
-    GEMINI_API_KEY = keys["gemini"]
-    if keys["replicate"]:
-        os.environ["REPLICATE_API_TOKEN"] = keys["replicate"]
-    if OPENAI_API_KEY:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-_apply_api_keys()
-
-DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
-This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
-- Black and white LINE DRAWING only
-- Thick, clean outlines (3-4px stroke)
-- NO shading, NO gradients, NO filled/solid areas
-- NO gray — pure black lines on white
-- Simple shapes, minimal fine detail
-- Large open areas for coloring with crayons
-- Friendly, fun, cute, non-scary style
-- Centered with padding — the subject must NOT touch or extend to the edges
-- Leave at least 10% empty white space on all sides as margin
-- Style: children's coloring book page
-- ONLY draw safe, wholesome subjects (animals, nature, vehicles, food, toys)
-- NEVER draw anything violent, scary, sexual, or inappropriate for a 5-year-old
-- If the request is ambiguous, default to the most innocent interpretation"""
-
-# ── SAFETY BLOCKLIST ─────────────────────────────
-BLOCKED_WORDS = {
-    "kill", "murder", "dead", "death", "die", "dying", "corpse",
-    "blood", "bloody", "gore", "gory", "wound", "stab", "shoot",
-    "gun", "guns", "rifle", "pistol", "shotgun", "weapon", "knife",
-    "bomb", "explode", "explosion", "grenade", "missile", "nuke",
-    "sex", "sexy", "sexual", "nude", "naked", "porn", "hentai",
-    "penis", "dick", "cock", "vagina", "pussy", "boob", "breast",
-    "nipple", "butt", "ass", "anus", "genital", "erotic", "orgasm",
-    "fuck", "shit", "damn", "bitch", "bastard", "crap", "piss",
-    "whore", "slut", "hooker", "prostitute", "stripper",
-    "drug", "drugs", "cocaine", "heroin", "meth", "weed", "marijuana",
-    "alcohol", "beer", "wine", "vodka", "drunk", "cigarette", "smoke",
-    "devil", "satan", "demon", "hell", "torture", "horror", "zombie",
-    "vampire", "skeleton", "skull", "coffin", "grave", "creepy",
-    "scary", "nightmare", "terror", "evil", "wicked", "curse",
-    "hate", "racist", "racism", "nazi", "hitler", "slavery", "slave",
-    "suicide", "hanging", "noose", "drown", "poison", "overdose",
-    "rape", "molest", "abuse", "kidnap", "assault", "victim",
-    "war", "soldier", "army", "military", "combat", "battle",
-    "thong", "lingerie", "bikini", "underwear",
-    "pee", "fart", "vomit", "snot",
-}
-
-def is_safe(text):
-    words = text.lower()
-    return not any(w in words for w in BLOCKED_WORDS)
-
 # ── SETTINGS ─────────────────────────────────────
 def load_settings():
     defaults = {"coloring_prompt": DEFAULT_COLORING_PROMPT,
-                "tts_voice": "nova", "record_seconds": 10}
+                "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc", "tts_stability": 0.5,
+                "tts_style": 0.0, "record_seconds": 10}
     if SETTINGS_FILE.exists():
         try:
             saved = json.loads(SETTINGS_FILE.read_text())
@@ -187,101 +112,8 @@ def save_scripts(data):
     SCRIPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SCRIPTS_FILE.write_text(json.dumps(data, indent=2))
 
-# ── ANALYTICS ────────────────────────────────────
-def log_print_event(prompt, model, duration_s, source="web"):
-    """Append a print event to the analytics log."""
-    entry = {
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "prompt": prompt[:200],
-        "model": model,
-        "duration_s": round(duration_s, 2),
-        "source": source,
-    }
-    try:
-        PRINT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(PRINT_LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
-
-# ── IMAGE GENERATION & PRINTING ──────────────────
-client = None  # initialized by _apply_api_keys()
-is_generating = False
-last_image_b64 = None
-
-def generate_image(desc):
-    settings = load_settings()
-    prompt = settings.get("coloring_prompt", DEFAULT_COLORING_PROMPT)
-    full_prompt = f"{prompt}\n\nChild requested: {desc}"
-    model = settings.get("image_model", IMAGE_MODEL)
-    if model == "nano-banana":
-        img_bytes = _generate_nano_banana(full_prompt)
-    elif model == "gpt-image":
-        img_bytes = _generate_gpt_image(full_prompt)
-    else:
-        img_bytes = _generate_flux_schnell(full_prompt)
-    return _postprocess(img_bytes)
-
-
-def _generate_flux_schnell(prompt):
-    output = replicate.run(
-        "black-forest-labs/flux-schnell",
-        input={
-            "prompt": prompt, "num_outputs": 1, "aspect_ratio": "3:4",
-            "output_format": "png", "num_inference_steps": 4, "go_fast": True,
-        })
-    return output[0].read()
-
-
-def _generate_nano_banana(prompt):
-    url = (f"https://generativelanguage.googleapis.com/v1beta/"
-           f"models/gemini-2.5-flash-image:generateContent"
-           f"?key={GEMINI_API_KEY}")
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["IMAGE"],
-            "imageConfig": {"aspectRatio": "3:4"},
-        },
-    }).encode()
-    req = Request(url, data=body, headers={"Content-Type": "application/json"})
-    resp = urlopen(req, timeout=60)
-    data = json.loads(resp.read())
-    for part in data["candidates"][0]["content"]["parts"]:
-        if "inlineData" in part:
-            return base64.b64decode(part["inlineData"]["data"])
-    raise RuntimeError("No image in Gemini response")
-
-
-def _generate_gpt_image(prompt):
-    r = client.images.generate(
-        model="gpt-image-1", prompt=prompt,
-        size="1024x1536", quality="low")
-    return base64.b64decode(r.data[0].b64_json)
-
-
-def _postprocess(img_bytes):
-    img = Image.open(BytesIO(img_bytes)).convert("L")
-    img = img.point(lambda x: 0 if x < 180 else 255, "1").convert("L")
-    iw, ih = img.size
-    canvas_w, canvas_h = 1275, 1650
-    margin = 75
-    max_w = canvas_w - 2 * margin
-    max_h = canvas_h - 2 * margin
-    scale = min(max_w / iw, max_h / ih)
-    new_w = int(iw * scale)
-    new_h = int(ih * scale)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("L", (canvas_w, canvas_h), 255)
-    canvas.paste(img, ((canvas_w - new_w) // 2, (canvas_h - new_h) // 2))
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    canvas.save(tmp.name); tmp.close()
-    return tmp.name
-
-def print_image(path):
-    subprocess.run(["lp", "-d", PRINTER_NAME,
-        "-o", "media=Letter", "-o", "fit-to-page", path], check=True)
-    os.unlink(path)
+# ── IMAGE GENERATION STATE ────────────────────────
+_gen_lock = threading.Lock()
 
 # ── DIAGNOSTICS ALLOWLIST ────────────────────────
 DIAGNOSTIC_COMMANDS = {
@@ -310,7 +142,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 @app.after_request
 def add_cors(response):
     origin = request.headers.get("Origin", "")
-    if origin and (".drawbox." in origin or origin.endswith(".pages.dev")):
+    if origin and (".drawbox." in origin or origin.endswith(".drawbox.pages.dev")):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
@@ -892,15 +724,19 @@ body {
       <div class="card-header"><div class="card-title">Voice & Audio</div></div>
       <div class="card-content">
         <div class="form-group">
-          <label class="form-label">TTS Voice</label>
-          <select class="select" id="cfgVoice">
-            <option value="nova">nova</option>
-            <option value="alloy">alloy</option>
-            <option value="echo">echo</option>
-            <option value="fable">fable</option>
-            <option value="onyx">onyx</option>
-            <option value="shimmer">shimmer</option>
-          </select>
+          <label class="form-label">ElevenLabs Voice ID</label>
+          <input class="input" type="text" id="cfgVoiceId" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
+          <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
+          <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
+          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
+          <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
+          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
         </div>
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
@@ -947,6 +783,11 @@ body {
           <label class="form-label">Gemini API Key</label>
           <input class="input" type="password" id="keyGemini" placeholder="AI..." autocomplete="off" />
           <div class="form-hint" id="keyGeminiHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">ElevenLabs API Key</label>
+          <input class="input" type="password" id="keyElevenlabs" placeholder="sk_..." autocomplete="off" />
+          <div class="form-hint" id="keyElevenlabsHint"></div>
         </div>
         <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
       </div>
@@ -1282,7 +1123,11 @@ async function loadSettings() {
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
     $('cfgModel').value = d.image_model || 'nano-banana';
-    $('cfgVoice').value = d.tts_voice || 'nova';
+    $('cfgVoiceId').value = d.tts_voice_id || 'xNtG3W2oqJs0cJZuTyBc';
+    $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
+    $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
+    $('cfgStyle').value = d.tts_style != null ? d.tts_style : 0.0;
+    $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
     $('cfgRecSec').value = d.record_seconds || 10;
   } catch(e) {}
 }
@@ -1291,7 +1136,9 @@ async function saveSettings() {
   const data = {
     coloring_prompt: $('cfgPrompt').value,
     image_model: $('cfgModel').value,
-    tts_voice: $('cfgVoice').value,
+    tts_voice_id: $('cfgVoiceId').value.trim(),
+    tts_stability: parseFloat($('cfgStability').value),
+    tts_style: parseFloat($('cfgStyle').value),
     record_seconds: parseInt($('cfgRecSec').value) || 10
   };
   try {
@@ -1314,9 +1161,11 @@ async function loadApiKeys() {
     $('keyOpenaiHint').textContent = d.openai ? 'Current: ' + d.openai : 'Not set';
     $('keyReplicateHint').textContent = d.replicate ? 'Current: ' + d.replicate : 'Not set';
     $('keyGeminiHint').textContent = d.gemini ? 'Current: ' + d.gemini : 'Not set';
+    $('keyElevenlabsHint').textContent = d.elevenlabs ? 'Current: ' + d.elevenlabs : 'Not set';
     $('keyOpenai').value = '';
     $('keyReplicate').value = '';
     $('keyGemini').value = '';
+    $('keyElevenlabs').value = '';
   } catch(e) {}
 }
 
@@ -1325,6 +1174,7 @@ async function saveApiKeys() {
   if ($('keyOpenai').value.trim()) data.openai = $('keyOpenai').value.trim();
   if ($('keyReplicate').value.trim()) data.replicate = $('keyReplicate').value.trim();
   if ($('keyGemini').value.trim()) data.gemini = $('keyGemini').value.trim();
+  if ($('keyElevenlabs').value.trim()) data.elevenlabs = $('keyElevenlabs').value.trim();
   if (!Object.keys(data).length) { toast('No keys entered', false); return; }
   try {
     const r = await fetch('/api/keys', {
@@ -1698,10 +1548,6 @@ def api_status():
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
-    global is_generating, last_image_b64
-    if is_generating:
-        return jsonify(ok=False, error="Already generating — please wait.")
-
     data = request.get_json() or {}
     desc = (data.get("description") or "").strip()
     if not desc:
@@ -1713,23 +1559,24 @@ def api_generate():
             error="That description contains blocked words. "
                   "Try something fun like an animal or a rainbow!")
 
-    is_generating = True
+    if not _gen_lock.acquire(blocking=False):
+        return jsonify(ok=False, error="Already generating — please wait.")
     try:
+        settings = load_settings()
+        model = settings.get("image_model", IMAGE_MODEL)
         t0 = _time.time()
-        path = generate_image(desc)
+        path = generate_image(desc, model=model)
         duration = _time.time() - t0
         # Read image for preview before printing
         with open(path, "rb") as f:
-            last_image_b64 = base64.b64encode(f.read()).decode()
+            image_b64 = base64.b64encode(f.read()).decode()
         print_image(path)
-        # Log analytics
-        settings = load_settings()
-        log_print_event(desc, settings.get("image_model", IMAGE_MODEL), duration)
-        return jsonify(ok=True, image=last_image_b64)
+        log_print_event(desc, model, duration, source="web")
+        return jsonify(ok=True, image=image_b64)
     except Exception as e:
         return jsonify(ok=False, error=str(e))
     finally:
-        is_generating = False
+        _gen_lock.release()
 
 @app.route("/api/logs")
 def api_logs():
@@ -1742,6 +1589,7 @@ def api_logs():
                 yield f"data: {line.rstrip()}\n\n"
         except GeneratorExit:
             proc.kill()
+            proc.wait()
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache",
                              "X-Accel-Buffering": "no"})
@@ -1756,8 +1604,12 @@ def api_settings():
         settings["coloring_prompt"] = data["coloring_prompt"][:5000]
     if "image_model" in data and data["image_model"] in ("flux-schnell", "nano-banana", "gpt-image"):
         settings["image_model"] = data["image_model"]
-    if "tts_voice" in data:
-        settings["tts_voice"] = data["tts_voice"]
+    if "tts_voice_id" in data and data["tts_voice_id"].strip():
+        settings["tts_voice_id"] = data["tts_voice_id"].strip()
+    if "tts_stability" in data:
+        settings["tts_stability"] = max(0.0, min(1.0, float(data["tts_stability"])))
+    if "tts_style" in data:
+        settings["tts_style"] = max(0.0, min(1.0, float(data["tts_style"])))
     if "record_seconds" in data:
         settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
     save_settings(settings)
@@ -1826,13 +1678,13 @@ def api_keys():
         existing = json.loads(API_KEYS_FILE.read_text()) if API_KEYS_FILE.exists() else {}
     except Exception:
         existing = {}
-    for k in ("openai", "replicate", "gemini"):
+    for k in ("openai", "replicate", "gemini", "elevenlabs"):
         val = data.get(k, "").strip()
         if val:  # only overwrite if a new value was provided
             existing[k] = val
     API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
     API_KEYS_FILE.write_text(json.dumps(existing, indent=2))
-    _apply_api_keys()
+    apply_api_keys()
     return jsonify(ok=True)
 
 @app.route("/api/wifi/networks")
@@ -2012,7 +1864,7 @@ def api_update_deploy():
         output = pull.stdout + "\n" + pull.stderr
 
         home = Path.home()
-        files_to_copy = ["drawbox.py", "drawbox_web.py",
+        files_to_copy = ["drawbox_core.py", "drawbox.py", "drawbox_web.py",
                          "drawbox-guide.html", "drawbox-simulator.html",
                          "check.sh"]
         for fname in files_to_copy:
@@ -2020,6 +1872,12 @@ def api_update_deploy():
             if src.exists():
                 shutil.copy2(str(src), str(home / fname))
                 output += f"\nCopied {fname} to ~/"
+
+        # Clear voice cache so TTS lines are regenerated with new code/settings
+        cache_dir = Path.home() / ".drawbox" / "voice_cache"
+        if cache_dir.exists():
+            shutil.rmtree(str(cache_dir))
+            output += "\nCleared voice cache (will regenerate on restart)"
 
         # Schedule service restart (runs after response is sent)
         def restart_later():
@@ -2036,13 +1894,13 @@ def api_update_deploy():
         return jsonify(ok=False, error=str(e))
 
 # ── INIT ─────────────────────────────────────────
-SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+DRAWBOX_DIR.mkdir(parents=True, exist_ok=True)
 # Safety mode ON by default (create sentinel file if missing)
 if not SAFETY_MODE_FILE.exists():
     SAFETY_MODE_FILE.touch()
 
 if __name__ == "__main__":
-    if not OPENAI_API_KEY:
+    if not drawbox_core.OPENAI_API_KEY:
         print("Warning: OPENAI_API_KEY not set. Voice features won't work.")
     print(f"   Image model: {IMAGE_MODEL}")
     print(f"   Safety filter: {'ON' if SAFETY_MODE_FILE.exists() else 'OFF'}")

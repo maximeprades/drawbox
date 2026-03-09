@@ -14,7 +14,8 @@ echo ""
 
 # ── 1. Copy files ────────────────────────────────
 echo "📦 Copying files to Pi..."
-scp "$DIR/drawbox_web.py" \
+scp "$DIR/drawbox_core.py" \
+    "$DIR/drawbox_web.py" \
     "$DIR/drawbox-guide.html" \
     "$DIR/drawbox-simulator.html" \
     "$DIR/check.sh" \

@@ -1,0 +1,9 @@
+openai
+Pillow
+numpy
+sounddevice
+soundfile
+gpiozero
+flask
+gunicorn
+replicate
