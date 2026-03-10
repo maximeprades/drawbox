@@ -70,24 +70,14 @@ DEFAULT_VOICE_LINES = {
 DEFAULT_JOKES = [
     "Why did the teddy bear say no to dessert? Because she was already stuffed!",
     "What do you call a sleeping dinosaur? A dino-snore!",
-    "What do you call a fish without eyes? A fsh!",
     "Why do cows wear bells? Because their horns don't work!",
     "What do you call a bear with no teeth? A gummy bear!",
     "Why did the banana go to the doctor? Because it wasn't peeling well!",
-    "What do you call a dog that does magic tricks? A Labracadabrador!",
     "Why can't you give Elsa a balloon? Because she will let it go!",
     "What do you call a dinosaur that crashes their car? Tyrannosaurus Wrecks!",
     "Why did the cookie go to the hospital? Because it felt crummy!",
-    "What do cats eat for breakfast? Mice Krispies!",
-    "What animal is always at a baseball game? A bat!",
     "Why are ghosts bad at lying? Because you can see right through them!",
     "What did the ocean say to the beach? Nothing, it just waved!",
-    "Why did the math book look so sad? Because it had too many problems!",
-    "What do you call a funny mountain? Hill-arious!",
-    "What do you call cheese that isn't yours? Nacho cheese!",
-    "Why did the student eat his homework? Because the teacher told him it was a piece of cake!",
-    "What has ears but cannot hear? A cornfield!",
-    "What do you call a pig that does karate? A pork chop!",
 ]
 
 def load_scripts():
@@ -1684,6 +1674,7 @@ def api_keys():
             existing[k] = val
     API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
     API_KEYS_FILE.write_text(json.dumps(existing, indent=2))
+    API_KEYS_FILE.chmod(0o600)
     apply_api_keys()
     return jsonify(ok=True)
 
@@ -1716,6 +1707,10 @@ def api_wifi_connect():
     password = (data.get("password") or "").strip()
     if not ssid:
         return jsonify(ok=False, error="SSID required")
+    if len(ssid) > 64 or len(password) > 128:
+        return jsonify(ok=False, error="SSID or password too long")
+    if any(ord(c) < 32 for c in ssid + password):
+        return jsonify(ok=False, error="Invalid characters in SSID or password")
     try:
         cmd = ["sudo", "nmcli", "dev", "wifi", "connect", ssid]
         if password:
