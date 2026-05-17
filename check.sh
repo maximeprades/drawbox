@@ -138,17 +138,49 @@ echo ""
 
 # ── 4. SPEAKER ───────────────────────────────────
 echo "🔊 Speaker"
-if aplay -l 2>/dev/null | grep -qi "USB\|Speaker"; then
-    CARD=$(aplay -l 2>/dev/null | grep -i "USB\|Speaker" | head -1)
-    ok "USB speaker detected: $CARD"
+
+# Detect USB speaker and its current card number
+SPEAKER_LINE=$(aplay -l 2>/dev/null | grep -i "USB\|Speaker" | head -1)
+SPEAKER_CARD=""
+if [ -n "$SPEAKER_LINE" ]; then
+    SPEAKER_CARD=$(echo "$SPEAKER_LINE" | grep -oP 'card \K\d+' || true)
+    ok "USB speaker detected on card $SPEAKER_CARD: $SPEAKER_LINE"
 else
-    warn "No USB speaker found. Check: aplay -l"
+    fail "No USB speaker found. Check: aplay -l"
 fi
 
+# Check ~/.asoundrc and verify its card number matches
 if [ -f ~/.asoundrc ]; then
-    ok "~/.asoundrc exists (audio routing configured)"
+    ASOUND_CARD=$(grep -oP 'defaults\.pcm\.card\s+\K\d+' ~/.asoundrc 2>/dev/null || true)
+    if [ -n "$ASOUND_CARD" ] && [ -n "$SPEAKER_CARD" ]; then
+        if [ "$ASOUND_CARD" != "$SPEAKER_CARD" ]; then
+            fail "~/.asoundrc says card $ASOUND_CARD but speaker is on card $SPEAKER_CARD — audio is going nowhere!"
+            echo "    Fix: printf 'defaults.pcm.card $SPEAKER_CARD\ndefaults.ctl.card $SPEAKER_CARD\n' > ~/.asoundrc"
+        else
+            ok "~/.asoundrc card $ASOUND_CARD matches speaker"
+        fi
+    else
+        ok "~/.asoundrc exists (audio routing configured)"
+    fi
 else
     warn "No ~/.asoundrc — audio may play through wrong device. See Step 12 in the guide."
+    if [ -n "$SPEAKER_CARD" ]; then
+        echo "    Fix: printf 'defaults.pcm.card $SPEAKER_CARD\ndefaults.ctl.card $SPEAKER_CARD\n' > ~/.asoundrc"
+    fi
+fi
+
+# Check for PipeWire/PulseAudio conflict (grabs ALSA devices away from mpg123)
+if pactl info 2>/dev/null | grep -qi "pipewire\|PulseAudio"; then
+    warn "PipeWire/PulseAudio is running — may block ALSA access by mpg123. If speaker is silent, try: systemctl --user stop pipewire pipewire-pulse pulseaudio 2>/dev/null; true"
+fi
+
+# Actually play a test tone to verify audio comes out
+if [ -n "$SPEAKER_CARD" ]; then
+    if timeout 3 speaker-test -D plughw:${SPEAKER_CARD},0 -c 1 -t sine -f 440 -l 1 > /dev/null 2>&1; then
+        ok "Speaker playback test passed (440Hz tone on card $SPEAKER_CARD)"
+    else
+        fail "Speaker playback test FAILED on card $SPEAKER_CARD. Manual test: speaker-test -D plughw:${SPEAKER_CARD},0 -c 1 -t sine"
+    fi
 fi
 echo ""
 
