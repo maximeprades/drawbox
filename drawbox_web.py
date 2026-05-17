@@ -121,6 +121,7 @@ DIAGNOSTIC_COMMANDS = {
     "rpi_connect":    ["rpi-connect", "status"],
     "journal_errors": ["journalctl", "-u", "drawbox", "-p", "err", "-n", "20", "--no-pager"],
     "cups_log":       ["tail", "-n", "30", "/var/log/cups/error_log"],
+    "test_speaker":   ["speaker-test", "-c", "1", "-t", "sine", "-f", "440", "-l", "1"],
 }
 
 # ── FLASK APP ────────────────────────────────────
@@ -861,6 +862,8 @@ body {
           <button class="btn btn-outline btn-sm" onclick="runDiag('printer_queue')">Print Queue</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('audio_inputs')">Audio Inputs</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('audio_outputs')">Audio Outputs</button>
+          <button class="btn btn-outline btn-sm" onclick="runDiag('test_speaker')">Test Speaker 🔊</button>
+          <button class="btn btn-outline btn-sm" onclick="testMic()">Test Mic 🎙️</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('service_status')">Service Status</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('web_service')">Web Service</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('disk_usage')">Disk Usage</button>
@@ -1365,6 +1368,16 @@ async function connectWifi() {
 }
 
 // ── DIAGNOSTICS ───────────────────────────────
+async function testMic() {
+  const out = $('diagOut');
+  out.textContent = 'Recording for 2 seconds — make some noise near the mic...';
+  try {
+    const r = await fetch('/api/test/mic', {method: 'POST'});
+    const d = await r.json();
+    out.textContent = d.message || d.error || 'Done';
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+}
+
 async function runDiag(cmd) {
   const out = $('diagOut');
   out.textContent = 'Running ' + cmd + '...';
@@ -1742,6 +1755,34 @@ def api_diagnostics():
         return jsonify(output="Command timed out after 15 seconds.")
     except Exception as e:
         return jsonify(error=str(e))
+
+@app.route("/api/test/mic", methods=["POST"])
+def api_test_mic():
+    import tempfile, wave, struct
+    tmp = tempfile.mktemp(suffix=".wav")
+    try:
+        r = subprocess.run(
+            ["arecord", "-d", "2", "-f", "S16_LE", "-r", "44100", tmp],
+            capture_output=True, text=True, timeout=10,
+        )
+        if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+            return jsonify(message=f"Recording failed — check mic connection\n{r.stderr.strip()}")
+        with wave.open(tmp) as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = struct.unpack(f"{len(raw) // 2}h", raw)
+        peak = max(abs(s) for s in samples) / 32768.0 if samples else 0.0
+        if peak < 0.01:
+            return jsonify(message=f"Mic silent — peak level {peak:.3f} (is the mic plugged in?)")
+        return jsonify(message=f"Mic working — peak level {peak:.3f} ✅")
+    except subprocess.TimeoutExpired:
+        return jsonify(message="arecord timed out")
+    except Exception as e:
+        return jsonify(message=str(e))
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 @app.route("/api/service/<action>", methods=["POST"])
 def api_service(action):
