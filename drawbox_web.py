@@ -121,7 +121,6 @@ DIAGNOSTIC_COMMANDS = {
     "rpi_connect":    ["rpi-connect", "status"],
     "journal_errors": ["journalctl", "-u", "drawbox", "-p", "err", "-n", "20", "--no-pager"],
     "cups_log":       ["tail", "-n", "30", "/var/log/cups/error_log"],
-    "test_speaker":   ["speaker-test", "-c", "1", "-t", "sine", "-f", "440", "-l", "1"],
 }
 
 # ── FLASK APP ────────────────────────────────────
@@ -862,7 +861,7 @@ body {
           <button class="btn btn-outline btn-sm" onclick="runDiag('printer_queue')">Print Queue</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('audio_inputs')">Audio Inputs</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('audio_outputs')">Audio Outputs</button>
-          <button class="btn btn-outline btn-sm" onclick="runDiag('test_speaker')">Test Speaker 🔊</button>
+          <button class="btn btn-outline btn-sm" onclick="testSpeaker()">Test Speaker 🔊</button>
           <button class="btn btn-outline btn-sm" onclick="testMic()">Test Mic 🎙️</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('service_status')">Service Status</button>
           <button class="btn btn-outline btn-sm" onclick="runDiag('web_service')">Web Service</button>
@@ -1368,6 +1367,16 @@ async function connectWifi() {
 }
 
 // ── DIAGNOSTICS ───────────────────────────────
+async function testSpeaker() {
+  const out = $('diagOut');
+  out.textContent = 'Detecting USB speaker and playing test tone...';
+  try {
+    const r = await fetch('/api/test/speaker', {method: 'POST'});
+    const d = await r.json();
+    out.textContent = d.message || d.error || 'Done';
+  } catch(e) { out.textContent = 'Error: ' + e.message; }
+}
+
 async function testMic() {
   const out = $('diagOut');
   out.textContent = 'Recording for 2 seconds — make some noise near the mic...';
@@ -1755,6 +1764,48 @@ def api_diagnostics():
         return jsonify(output="Command timed out after 15 seconds.")
     except Exception as e:
         return jsonify(error=str(e))
+
+@app.route("/api/test/speaker", methods=["POST"])
+def api_test_speaker():
+    import re
+    # Find the USB speaker card number from aplay -l
+    aplay = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
+    card_match = re.search(r"card (\d+).*(?:USB|Speaker)", aplay.stdout, re.IGNORECASE)
+    if not card_match:
+        return jsonify(message=f"No USB speaker detected.\naplay -l output:\n{aplay.stdout.strip() or '(empty)'}")
+    card = card_match.group(1)
+    lines = [f"USB speaker found on card {card}."]
+
+    # Check if ~/.asoundrc matches
+    asoundrc = Path.home() / ".asoundrc"
+    if asoundrc.exists():
+        text = asoundrc.read_text()
+        m = re.search(r"defaults\.pcm\.card\s+(\d+)", text)
+        if m:
+            configured = m.group(1)
+            if configured != card:
+                lines.append(f"⚠️  ~/.asoundrc says card {configured} but speaker is on card {card} — fix with:")
+                lines.append(f"   printf 'defaults.pcm.card {card}\\ndefaults.ctl.card {card}\\n' > ~/.asoundrc")
+            else:
+                lines.append(f"~/.asoundrc correctly set to card {card}.")
+    else:
+        lines.append("~/.asoundrc not found.")
+
+    # Play test tone directly on the detected card, bypassing ~/.asoundrc
+    try:
+        r = subprocess.run(
+            ["speaker-test", "-D", f"plughw:{card},0", "-c", "1", "-t", "sine", "-f", "440", "-l", "1"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            lines.append("✅ Tone played successfully — you should have heard a beep.")
+        else:
+            lines.append(f"❌ speaker-test failed:\n{r.stderr.strip() or r.stdout.strip()}")
+    except FileNotFoundError:
+        lines.append("speaker-test not found. Run: sudo apt install alsa-utils")
+    except subprocess.TimeoutExpired:
+        lines.append("speaker-test timed out.")
+    return jsonify(message="\n".join(lines))
 
 @app.route("/api/test/mic", methods=["POST"])
 def api_test_mic():
