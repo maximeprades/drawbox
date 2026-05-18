@@ -239,6 +239,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Bug fixes, build guide improvements, and
 <p align="center">
   <img src="docs/3.jpeg" alt="DrawBox — front view with button, mic, and label" width="400">
   <img src="docs/2.jpeg" alt="DrawBox — giant googly eyes" width="400">
+  <img width="4284" height="5712" alt="IMG_0570" src="https://github.com/user-attachments/assets/f701998e-8d80-474a-ab0f-e62b34bd309e" />
   <img src="docs/1.jpeg" alt="Kid using DrawBox" width="400">
 </p>
 
