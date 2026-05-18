@@ -6,6 +6,8 @@ SKILL.md
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+.pytest_cache/
 
 # Environment
 .env

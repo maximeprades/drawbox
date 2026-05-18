@@ -1,106 +1,39 @@
 #!/usr/bin/env python3
-"""DrawBox Web Dashboard — Control panel accessible from any browser on your network."""
+"""DrawBox web dashboard — Flask control panel for the Pi."""
 
-import os, json, subprocess, base64, time as _time, threading, shutil
-from pathlib import Path
-from datetime import datetime
+import base64
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time as _time
 from collections import Counter
-from flask import Flask, request, jsonify, Response, render_template_string, send_file
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlparse
 
-from drawbox_core import (
-    apply_api_keys, _load_api_keys, is_safe,
-    generate_image, print_image, log_print_event,
-    DEFAULT_COLORING_PROMPT, IMAGE_MODEL,
-    SETTINGS_FILE, PLEASE_MODE_FILE, SAFETY_MODE_FILE,
-    PRINT_LOG_FILE, API_KEYS_FILE, SCRIPTS_FILE, DRAWBOX_DIR,
-)
+from flask import Flask, Response, jsonify, render_template_string, request, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 import drawbox_core
+from drawbox_core import (
+    API_KEYS_FILE, DEFAULT_COLORING_PROMPT, DEFAULT_JOKES, DEFAULT_SETTINGS,
+    DEFAULT_VOICE_LINES, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE,
+    PRINT_LOG_FILE, SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys,
+    apply_api_keys, default_scripts, generate_image, is_safe,
+    load_scripts, load_settings, log_print_event, mask_key, print_image,
+    save_scripts, save_settings,
+)
+
+log = logging.getLogger("drawbox.web")
 
 # ── CONFIG ───────────────────────────────────────
 REPO_DIR = Path.home() / "drawbox-repo"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
-
-# ── SETTINGS ─────────────────────────────────────
-def load_settings():
-    defaults = {"coloring_prompt": DEFAULT_COLORING_PROMPT,
-                "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc", "tts_stability": 0.5,
-                "tts_style": 0.0, "record_seconds": 10}
-    if SETTINGS_FILE.exists():
-        try:
-            saved = json.loads(SETTINGS_FILE.read_text())
-            # Only override defaults with non-empty saved values
-            for k, v in saved.items():
-                if v or v == 0:  # keep falsy 0 but skip "" and None
-                    defaults[k] = v
-        except Exception:
-            pass
-    return defaults
-
-def save_settings(data):
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
-
-# ── VOICE SCRIPTS ────────────────────────────────
-DEFAULT_VOICE_LINES = {
-    "ready":      {"text": "Ready! Press the button and tell me what to draw!",
-                   "desc": "Played on startup"},
-    "listening":  {"text": "I'm listening!",
-                   "desc": "Played when recording starts"},
-    "thinking":   {"text": "Ooh, great idea! Let me draw that for you!\nThat sounds awesome! Drawing it now!\nCool! Give me a moment...\nLove it! One coloring page coming right up!\nNice choice! Let me work on that!",
-                   "desc": "One picked randomly while generating (one per line)"},
-    "printing":   {"text": "Here it comes!",
-                   "desc": "Played when sending to printer"},
-    "done":       {"text": "All done! Press the button when you want another one!",
-                   "desc": "Played after printing"},
-    "error":      {"text": "Oops, something went wrong. Try again!",
-                   "desc": "Played on any error"},
-    "too_short":  {"text": "I didn't catch that. Press the button and tell me what you want to draw!",
-                   "desc": "Played when recording is too short or empty"},
-    "busy":       {"text": "Hold on, I'm still working on your picture! Almost done...",
-                   "desc": "Played if button pressed while already generating"},
-    "blocked":    {"text": "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
-                   "desc": "Played when safety filter blocks a request"},
-    "say_please": {"text": "Oops! Don't forget to say please! Try again and say the magic word!",
-                   "desc": "Played when Please Mode is on and kid forgets to say please"},
-    "reboot":     {"text": "Rebooting now! See you in a moment.",
-                   "desc": "Played on long button press reboot"},
-}
-
-DEFAULT_JOKES = [
-    "Why did the teddy bear say no to dessert? Because she was already stuffed!",
-    "What do you call a sleeping dinosaur? A dino-snore!",
-    "Why do cows wear bells? Because their horns don't work!",
-    "What do you call a bear with no teeth? A gummy bear!",
-    "Why did the banana go to the doctor? Because it wasn't peeling well!",
-    "Why can't you give Elsa a balloon? Because she will let it go!",
-    "What do you call a dinosaur that crashes their car? Tyrannosaurus Wrecks!",
-    "Why did the cookie go to the hospital? Because it felt crummy!",
-    "Why are ghosts bad at lying? Because you can see right through them!",
-    "What did the ocean say to the beach? Nothing, it just waved!",
-]
-
-def load_scripts():
-    defaults = {
-        "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
-        "jokes": DEFAULT_JOKES,
-    }
-    if SCRIPTS_FILE.exists():
-        try:
-            saved = json.loads(SCRIPTS_FILE.read_text())
-            if saved.get("voice_lines"):
-                for k, v in saved["voice_lines"].items():
-                    if v:  # skip empty overrides
-                        defaults["voice_lines"][k] = v
-            if saved.get("jokes"):
-                defaults["jokes"] = saved["jokes"]
-        except Exception:
-            pass
-    return defaults
-
-def save_scripts(data):
-    SCRIPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SCRIPTS_FILE.write_text(json.dumps(data, indent=2))
 
 # ── IMAGE GENERATION STATE ────────────────────────
 _gen_lock = threading.Lock()
@@ -124,19 +57,67 @@ DIAGNOSTIC_COMMANDS = {
 }
 
 # ── FLASK APP ────────────────────────────────────
-from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# CORS: allow requests from the cloud hub dashboard
+# Origins that may call this dashboard from another host (the multi-Pi
+# "hub" page). Anchored regex on the *host* portion of the Origin header —
+# not a substring match on the whole URL, which would let
+# ``evil.drawbox.attacker.com`` through.
+#
+# Defaults cover the canonical Cloudflare Pages deployment. Power users can
+# extend the list with ``DRAWBOX_ALLOWED_ORIGINS`` (comma-separated exact
+# hostnames or simple ``*.domain.tld`` patterns).
+_DEFAULT_ORIGIN_PATTERN = re.compile(
+    r"^(?:[a-z0-9-]+\.)*drawbox\.pages\.dev$", re.IGNORECASE,
+)
+
+
+def _compile_extra_origins(spec):
+    out = []
+    for raw in (spec or "").split(","):
+        host = raw.strip().lower()
+        if not host:
+            continue
+        if host.startswith("*."):
+            suffix = re.escape(host[2:])
+            out.append(re.compile(rf"^(?:[a-z0-9-]+\.)+{suffix}$", re.IGNORECASE))
+        else:
+            out.append(re.compile(rf"^{re.escape(host)}$", re.IGNORECASE))
+    return out
+
+
+_EXTRA_ORIGIN_PATTERNS = _compile_extra_origins(os.environ.get("DRAWBOX_ALLOWED_ORIGINS"))
+
+
+def _allowed_origin(origin):
+    """Return the origin string if it's allowed by our CORS policy, else ''."""
+    if not origin:
+        return ""
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return ""
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return ""
+    host = parsed.hostname
+    if _DEFAULT_ORIGIN_PATTERN.match(host):
+        return origin
+    if any(p.match(host) for p in _EXTRA_ORIGIN_PATTERNS):
+        return origin
+    return ""
+
+
 @app.after_request
 def add_cors(response):
-    origin = request.headers.get("Origin", "")
-    if origin and (".drawbox." in origin or origin.endswith(".drawbox.pages.dev")):
-        response.headers["Access-Control-Allow-Origin"] = origin
+    allowed = _allowed_origin(request.headers.get("Origin", ""))
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = allowed
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
+        response.headers["Vary"] = "Origin"
     return response
+
 
 @app.route("/api/<path:path>", methods=["OPTIONS"])
 def cors_preflight(path):
@@ -1330,11 +1311,14 @@ async function loadWifi() {
       wl.innerHTML = '<div style="color:var(--muted-foreground);font-size:13px;padding:8px 0">No networks found</div>';
     } else {
       wl.innerHTML = d.networks.map(n =>
-        '<div class="wifi-network" onclick="selectWifi(\\'' + n.ssid.replace(/'/g, "\\\\'") + '\\')">' +
+        '<div class="wifi-network" data-ssid="' + esc(n.ssid) + '">' +
           '<span class="wifi-ssid">' + esc(n.ssid) + '</span>' +
-          '<span class="wifi-meta">' + n.signal + '% &middot; ' + n.security + '</span>' +
+          '<span class="wifi-meta">' + esc(String(n.signal)) + '% &middot; ' + esc(n.security) + '</span>' +
         '</div>'
       ).join('');
+      wl.querySelectorAll('.wifi-network').forEach(el =>
+        el.addEventListener('click', () => selectWifi(el.dataset.ssid))
+      );
     }
     wl.style.display = 'block';
   } catch(e) { $('wifiCurrent').textContent = 'Error: ' + e.message; }
@@ -1560,16 +1544,21 @@ def api_status():
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
-    data = request.get_json() or {}
-    desc = (data.get("description") or "").strip()
+    data = request.get_json(silent=True) or {}
+    desc = data.get("description")
+    if not isinstance(desc, str):
+        return jsonify(ok=False, error="Please describe what to draw.")
+    desc = desc.strip()
     if not desc:
         return jsonify(ok=False, error="Please describe what to draw.")
     if len(desc) > 500:
         return jsonify(ok=False, error="Description too long (max 500 chars).")
     if SAFETY_MODE_FILE.exists() and not is_safe(desc):
-        return jsonify(ok=False,
+        return jsonify(
+            ok=False,
             error="That description contains blocked words. "
-                  "Try something fun like an animal or a rainbow!")
+                  "Try something fun like an animal or a rainbow!",
+        )
 
     if not _gen_lock.acquire(blocking=False):
         return jsonify(ok=False, error="Already generating — please wait.")
@@ -1579,51 +1568,64 @@ def api_generate():
         t0 = _time.time()
         path = generate_image(desc, model=model)
         duration = _time.time() - t0
-        # Read image for preview before printing
         with open(path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode()
         print_image(path)
         log_print_event(desc, model, duration, source="web")
         return jsonify(ok=True, image=image_b64)
     except Exception as e:
+        log.exception("generate failed")
         return jsonify(ok=False, error=str(e))
     finally:
         _gen_lock.release()
 
 @app.route("/api/logs")
 def api_logs():
-    def generate():
+    def stream():
         proc = subprocess.Popen(
             ["journalctl", "-u", "drawbox", "-f", "-n", "50", "--no-pager"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
         try:
             for line in proc.stdout:
                 yield f"data: {line.rstrip()}\n\n"
-        except GeneratorExit:
+        finally:
             proc.kill()
-            proc.wait()
-    return Response(generate(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache",
-                             "X-Accel-Buffering": "no"})
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+    return Response(
+        stream(), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+def _clamp_float(v, lo, hi):
+    return max(lo, min(hi, float(v)))
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "GET":
         return jsonify(load_settings())
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="Invalid JSON body"), 400
     settings = load_settings()
-    if "coloring_prompt" in data:
-        settings["coloring_prompt"] = data["coloring_prompt"][:5000]
-    if "image_model" in data and data["image_model"] in ("flux-schnell", "nano-banana", "gpt-image"):
-        settings["image_model"] = data["image_model"]
-    if "tts_voice_id" in data and data["tts_voice_id"].strip():
-        settings["tts_voice_id"] = data["tts_voice_id"].strip()
-    if "tts_stability" in data:
-        settings["tts_stability"] = max(0.0, min(1.0, float(data["tts_stability"])))
-    if "tts_style" in data:
-        settings["tts_style"] = max(0.0, min(1.0, float(data["tts_style"])))
-    if "record_seconds" in data:
-        settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
+    try:
+        if isinstance(data.get("coloring_prompt"), str):
+            settings["coloring_prompt"] = data["coloring_prompt"][:5000]
+        if data.get("image_model") in SUPPORTED_MODELS:
+            settings["image_model"] = data["image_model"]
+        if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
+            settings["tts_voice_id"] = data["tts_voice_id"].strip()[:64]
+        if "tts_stability" in data:
+            settings["tts_stability"] = _clamp_float(data["tts_stability"], 0.0, 1.0)
+        if "tts_style" in data:
+            settings["tts_style"] = _clamp_float(data["tts_style"], 0.0, 1.0)
+        if "record_seconds" in data:
+            settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
+    except (TypeError, ValueError) as e:
+        return jsonify(ok=False, error=f"Invalid value: {e}"), 400
     save_settings(settings)
     return jsonify(ok=True)
 
@@ -1631,72 +1633,63 @@ def api_settings():
 def api_scripts():
     if request.method == "GET":
         scripts = load_scripts()
-        # Also send defaults so JS can offer per-field reset
-        scripts["defaults"] = {
-            "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
-            "jokes": DEFAULT_JOKES,
-        }
+        scripts["defaults"] = default_scripts()
         return jsonify(scripts)
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="Invalid JSON body"), 400
     if data.get("reset"):
-        # Delete the overrides file to restore defaults
-        if SCRIPTS_FILE.exists():
-            SCRIPTS_FILE.unlink()
+        from drawbox_core import SCRIPTS_FILE
+        SCRIPTS_FILE.unlink(missing_ok=True)
         return jsonify(ok=True)
-    scripts = {}
-    if "voice_lines" in data:
-        scripts["voice_lines"] = {k: v[:500] for k, v in data["voice_lines"].items()}
-    if "jokes" in data:
-        scripts["jokes"] = [j[:300] for j in data["jokes"][:100]]
-    save_scripts(scripts)
+    save_scripts(data)
     return jsonify(ok=True)
+
+def _toggle_sentinel(path):
+    data = request.get_json(silent=True) or {}
+    if data.get("enabled"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    else:
+        path.unlink(missing_ok=True)
+    return jsonify(ok=True, enabled=path.exists())
 
 @app.route("/api/please-mode", methods=["GET", "POST"])
 def api_please_mode():
     if request.method == "GET":
         return jsonify(enabled=PLEASE_MODE_FILE.exists())
-    data = request.get_json() or {}
-    if data.get("enabled"):
-        PLEASE_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        PLEASE_MODE_FILE.touch()
-    else:
-        PLEASE_MODE_FILE.unlink(missing_ok=True)
-    return jsonify(ok=True, enabled=PLEASE_MODE_FILE.exists())
+    return _toggle_sentinel(PLEASE_MODE_FILE)
 
 @app.route("/api/safety-mode", methods=["GET", "POST"])
 def api_safety_mode():
     if request.method == "GET":
         return jsonify(enabled=SAFETY_MODE_FILE.exists())
-    data = request.get_json() or {}
-    if data.get("enabled"):
-        SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SAFETY_MODE_FILE.touch()
-    else:
-        SAFETY_MODE_FILE.unlink(missing_ok=True)
-    return jsonify(ok=True, enabled=SAFETY_MODE_FILE.exists())
+    return _toggle_sentinel(SAFETY_MODE_FILE)
 
 @app.route("/api/keys", methods=["GET", "POST"])
 def api_keys():
     if request.method == "GET":
         keys = _load_api_keys()
-        # Return masked versions so we don't expose full keys in the browser
-        return jsonify({
-            k: ("" if not v else v[:4] + "..." + v[-4:] if len(v) > 12 else "****")
-            for k, v in keys.items()
-        })
-    data = request.get_json() or {}
-    # Load existing keys, only update the ones that were sent
+        return jsonify({k: mask_key(v, head=4, tail=4) for k, v in keys.items()})
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="Invalid JSON body"), 400
     try:
         existing = json.loads(API_KEYS_FILE.read_text()) if API_KEYS_FILE.exists() else {}
-    except Exception:
+        if not isinstance(existing, dict):
+            existing = {}
+    except (OSError, ValueError):
         existing = {}
     for k in ("openai", "replicate", "gemini", "elevenlabs"):
-        val = data.get(k, "").strip()
-        if val:  # only overwrite if a new value was provided
-            existing[k] = val
+        val = data.get(k)
+        if isinstance(val, str) and val.strip():
+            existing[k] = val.strip()
     API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
     API_KEYS_FILE.write_text(json.dumps(existing, indent=2))
-    API_KEYS_FILE.chmod(0o600)
+    try:
+        API_KEYS_FILE.chmod(0o600)
+    except OSError:
+        pass
     apply_api_keys()
     return jsonify(ok=True)
 
@@ -1724,9 +1717,10 @@ def api_wifi_networks():
 
 @app.route("/api/wifi/connect", methods=["POST"])
 def api_wifi_connect():
-    data = request.get_json() or {}
-    ssid = (data.get("ssid") or "").strip()
-    password = (data.get("password") or "").strip()
+    data = request.get_json(silent=True) or {}
+    ssid = data.get("ssid") if isinstance(data.get("ssid"), str) else ""
+    password = data.get("password") if isinstance(data.get("password"), str) else ""
+    ssid, password = ssid.strip(), password.strip()
     if not ssid:
         return jsonify(ok=False, error="SSID required")
     if len(ssid) > 64 or len(password) > 128:
@@ -1740,17 +1734,18 @@ def api_wifi_connect():
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             return jsonify(ok=True, message=f"Connected to {ssid}")
-        else:
-            return jsonify(ok=False, error=r.stderr.strip() or r.stdout.strip())
-    except Exception as e:
+        return jsonify(ok=False, error=r.stderr.strip() or r.stdout.strip())
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="nmcli timed out")
+    except OSError as e:
         return jsonify(ok=False, error=str(e))
 
 @app.route("/api/diagnostics", methods=["POST"])
 def api_diagnostics():
-    data = request.get_json() or {}
-    cmd_key = data.get("command", "")
-    if cmd_key not in DIAGNOSTIC_COMMANDS:
-        return jsonify(error="Unknown command: " + cmd_key)
+    data = request.get_json(silent=True) or {}
+    cmd_key = data.get("command")
+    if not isinstance(cmd_key, str) or cmd_key not in DIAGNOSTIC_COMMANDS:
+        return jsonify(error=f"Unknown command: {cmd_key!r}"), 400
     cmd = DIAGNOSTIC_COMMANDS[cmd_key]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -1762,8 +1757,8 @@ def api_diagnostics():
         return jsonify(output=f"Command not found: {cmd[0]}")
     except subprocess.TimeoutExpired:
         return jsonify(output="Command timed out after 15 seconds.")
-    except Exception as e:
-        return jsonify(error=str(e))
+    except OSError as e:
+        return jsonify(error=str(e)), 500
 
 @app.route("/api/test/speaker", methods=["POST"])
 def api_test_speaker():
@@ -1809,25 +1804,32 @@ def api_test_speaker():
 
 @app.route("/api/test/mic", methods=["POST"])
 def api_test_mic():
-    import tempfile, wave, struct
-    tmp = tempfile.mktemp(suffix=".wav")
+    import struct
+    import tempfile
+    import wave
+    # mkstemp avoids the mktemp race; we close the fd immediately because
+    # arecord wants to own the file.
+    fd, tmp = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
     try:
         r = subprocess.run(
             ["arecord", "-d", "2", "-f", "S16_LE", "-r", "44100", tmp],
             capture_output=True, text=True, timeout=10,
         )
-        if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+        if r.returncode != 0 or os.path.getsize(tmp) == 0:
             return jsonify(message=f"Recording failed — check mic connection\n{r.stderr.strip()}")
         with wave.open(tmp) as wf:
             raw = wf.readframes(wf.getnframes())
+        if not raw:
+            return jsonify(message="Recording was empty")
         samples = struct.unpack(f"{len(raw) // 2}h", raw)
-        peak = max(abs(s) for s in samples) / 32768.0 if samples else 0.0
+        peak = max(abs(s) for s in samples) / 32768.0
         if peak < 0.01:
             return jsonify(message=f"Mic silent — peak level {peak:.3f} (is the mic plugged in?)")
-        return jsonify(message=f"Mic working — peak level {peak:.3f} ✅")
+        return jsonify(message=f"Mic working — peak level {peak:.3f}")
     except subprocess.TimeoutExpired:
         return jsonify(message="arecord timed out")
-    except Exception as e:
+    except OSError as e:
         return jsonify(message=str(e))
     finally:
         try:
@@ -1982,14 +1984,15 @@ def api_update_deploy():
 
 # ── INIT ─────────────────────────────────────────
 DRAWBOX_DIR.mkdir(parents=True, exist_ok=True)
-# Safety mode ON by default (create sentinel file if missing)
+# Safety mode ON by default — opt-out, not opt-in
 if not SAFETY_MODE_FILE.exists():
     SAFETY_MODE_FILE.touch()
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if not drawbox_core.OPENAI_API_KEY:
-        print("Warning: OPENAI_API_KEY not set. Voice features won't work.")
-    print(f"   Image model: {IMAGE_MODEL}")
-    print(f"   Safety filter: {'ON' if SAFETY_MODE_FILE.exists() else 'OFF'}")
-    print("DrawBox Web Dashboard starting on http://0.0.0.0:5000")
+        log.warning("OPENAI_API_KEY not set — voice features won't work.")
+    log.info("image_model=%s safety_filter=%s",
+             IMAGE_MODEL, "on" if SAFETY_MODE_FILE.exists() else "off")
+    log.info("starting on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
