@@ -64,6 +64,7 @@ echo "   ✅ Sudoers configured"
 
 # Seed API keys file from existing service env vars (one-time migration)
 mkdir -p ~/.drawbox
+chmod 700 ~/.drawbox
 if [ ! -f ~/.drawbox/api_keys.json ]; then
     echo "   Migrating API keys to ~/.drawbox/api_keys.json..."
     OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
@@ -72,16 +73,22 @@ if [ ! -f ~/.drawbox/api_keys.json ]; then
     [ -z "$REP_KEY" ] && REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
     GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
     [ -z "$GEM_KEY" ] && GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
-    python3 -c "
-import json
+    # Pass keys via env vars (NOT shell interpolation into the source) so
+    # values containing quotes or shell metacharacters can't break the script.
+    OPENAI_KEY="$OPENAI_KEY" REP_KEY="$REP_KEY" GEM_KEY="$GEM_KEY" python3 - <<'PYTHON'
+import json, os
 keys = {}
-o, r, g = '''$OPENAI_KEY''', '''$REP_KEY''', '''$GEM_KEY'''
-if o: keys['openai'] = o
-if r: keys['replicate'] = r
-if g: keys['gemini'] = g
-open('/home/pi/.drawbox/api_keys.json', 'w').write(json.dumps(keys, indent=2))
-"
-    if [ -s ~/.drawbox/api_keys.json ]; then
+for env_name, key_name in (("OPENAI_KEY", "openai"),
+                           ("REP_KEY", "replicate"),
+                           ("GEM_KEY", "gemini")):
+    v = os.environ.get(env_name, "").strip()
+    if v:
+        keys[key_name] = v
+with open(os.path.expanduser("~/.drawbox/api_keys.json"), "w") as f:
+    json.dump(keys, f, indent=2)
+PYTHON
+    chmod 600 ~/.drawbox/api_keys.json
+    if [ -s ~/.drawbox/api_keys.json ] && [ "$(cat ~/.drawbox/api_keys.json)" != "{}" ]; then
         echo "   ✅ API keys migrated (manage them from Settings > API Keys in the dashboard)"
     else
         echo "   ⚠️  No API keys found. Add them from the dashboard: Settings > API Keys"

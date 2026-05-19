@@ -1,0 +1,59 @@
+"""Test fixtures.
+
+Every test gets an isolated ``~/.drawbox`` directory under a ``tmp_path`` so
+nothing leaks between tests (and your real settings file stays intact).
+We patch the module-level path constants on each of the modules that hold
+them — this is simpler and faster than reloading the modules.
+"""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+# Make the project root importable as `drawbox_core`, `drawbox_web`.
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
+@pytest.fixture
+def drawbox_dir(tmp_path, monkeypatch):
+    """Redirect all on-disk paths to a temp directory. Returns its Path."""
+    import drawbox_core
+
+    dx = tmp_path / "drawbox"
+    dx.mkdir()
+    overrides = {
+        "DRAWBOX_DIR": dx,
+        "API_KEYS_FILE": dx / "api_keys.json",
+        "SETTINGS_FILE": dx / "web_settings.json",
+        "PLEASE_MODE_FILE": dx / "please_mode",
+        "SAFETY_MODE_FILE": dx / "safety_mode",
+        "PRINT_LOG_FILE": dx / "print_log.jsonl",
+        "SCRIPTS_FILE": dx / "voice_scripts.json",
+        "CACHE_DIR": dx / "voice_cache",
+    }
+    for name, value in overrides.items():
+        monkeypatch.setattr(drawbox_core, name, value)
+
+    # Apply the same overrides on drawbox_web — it imported the names at
+    # module load time, so they're locals there.
+    if "drawbox_web" in sys.modules:
+        import drawbox_web
+        for name, value in overrides.items():
+            if hasattr(drawbox_web, name):
+                monkeypatch.setattr(drawbox_web, name, value)
+
+    yield dx
+
+
+@pytest.fixture
+def client(drawbox_dir, monkeypatch):
+    """Flask test client with an isolated drawbox dir and known fake keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    import drawbox_web
+    drawbox_web.app.testing = True
+    return drawbox_web.app.test_client()

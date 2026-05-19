@@ -168,13 +168,24 @@ requirements.txt        # Python dependencies
 
 ## Configuration
 
-### Environment Variables
+### API Keys
 
-```bash
-# Set in drawbox.service AND ~/.bashrc (for manual runs)
-# Systemd does NOT read ~/.bashrc — key must be in the service file
-Environment=OPENAI_API_KEY=sk-...
-```
+DrawBox loads API keys with this precedence (first match wins per key):
+
+1. `~/.drawbox/api_keys.json` (mode 0600, managed from the dashboard)
+2. Environment variables: `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`,
+   `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`
+
+The dashboard writes to the JSON file; `deploy-web.sh` migrates existing
+systemd `Environment=` values into it on first run. New deployments don't
+need keys in the service file at all.
+
+### Optional Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, or `gpt-image` |
+| `DRAWBOX_ALLOWED_ORIGINS` | Comma-separated CORS allowlist for the dashboard. Defaults cover `*.drawbox.pages.dev`. Accepts exact hosts or `*.domain.tld` patterns. |
 
 ### ALSA Audio (~/.asoundrc)
 

@@ -114,6 +114,7 @@ Verifies: internet, API keys, mic, speaker, printer, GPIO, Python deps, script c
 | `deploy-tunnel.sh` | One-command Cloudflare Tunnel setup for remote access |
 | `check.sh` | Health check — verifies the entire Pi setup |
 | `requirements.txt` | Python dependencies |
+| `tests/` | pytest suite for the safety filter, settings, and Flask routes (runs on a Mac, no Pi needed: `pip install pytest && pytest tests/`) |
 
 ### Code Architecture
 
