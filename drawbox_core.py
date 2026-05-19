@@ -196,10 +196,6 @@ DEFAULT_JOKES = [
 ]
 
 
-def default_voice_text(key):
-    return DEFAULT_VOICE_LINES[key]["text"]
-
-
 def default_scripts():
     return {
         "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
