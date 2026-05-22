@@ -41,6 +41,7 @@ log = logging.getLogger("drawbox")
 # ── CONFIG ──────────────────────────────────────
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100              # CHANGEEK USB mic only supports 44.1kHz
+USB_MIC_NAME_HINTS = ("USB", "PnP", "CHANGEEK")  # matched against sd.query_devices() names
 RECORD_SECONDS = 10
 REBOOT_HOLD_SEC = 5              # hold button this long to trigger reboot
 MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
@@ -262,7 +263,7 @@ def _find_usb_input_device():
         if d.get("max_input_channels", 0) <= 0:
             continue
         name = d.get("name", "")
-        if any(kw in name for kw in ("USB", "PnP", "CHANGEEK")):
+        if any(kw in name for kw in USB_MIC_NAME_HINTS):
             log.info("using input device %d: %s", i, name)
             return i
     return None

@@ -2,6 +2,7 @@
 """DrawBox web dashboard — Flask control panel for the Pi."""
 
 import base64
+import io
 import json
 import logging
 import os
@@ -1585,9 +1586,11 @@ def api_generate():
 @app.route("/api/logs")
 def api_logs():
     def stream():
+        # Cap the backfill at 1000 lines so the live view stays responsive on
+        # a chatty Pi. Full 24h is available via /api/logs/download.
         proc = subprocess.Popen(
             ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
-             "--since", "24 hours ago", "-f", "--no-pager"],
+             "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         try:
@@ -1606,17 +1609,21 @@ def api_logs():
 
 @app.route("/api/logs/download")
 def api_logs_download():
-    proc = subprocess.run(
-        ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
-         "--since", "24 hours ago", "--no-pager"],
-        capture_output=True, text=True, timeout=30,
-    )
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
+             "--since", "24 hours ago", "--no-pager"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return Response("journalctl timed out", mimetype="text/plain", status=504)
     text = proc.stdout or proc.stderr or "(no logs)"
     ts = _time.strftime("%Y%m%d-%H%M%S")
-    return Response(
-        text,
+    return send_file(
+        io.BytesIO(text.encode("utf-8")),
         mimetype="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="drawbox-logs-{ts}.txt"'},
+        as_attachment=True,
+        download_name=f"drawbox-logs-{ts}.txt",
     )
 
 def _clamp_float(v, lo, hi):
