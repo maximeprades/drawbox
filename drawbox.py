@@ -249,6 +249,25 @@ class VoiceFeedback:
 
 
 # ── RECORD ──────────────────────────────────────
+def _find_usb_input_device():
+    """Locate the USB mic by name. Returns a sounddevice index, or None to
+    fall back to the system default. ALSA's default can point to an
+    output-only card (e.g. when ~/.asoundrc sets defaults.pcm.card to the
+    speaker), which makes sd.InputStream fail with 'Error querying device -1'."""
+    try:
+        devices = sd.query_devices()
+    except Exception:
+        return None
+    for i, d in enumerate(devices):
+        if d.get("max_input_channels", 0) <= 0:
+            continue
+        name = d.get("name", "")
+        if any(kw in name for kw in ("USB", "PnP", "CHANGEEK")):
+            log.info("using input device %d: %s", i, name)
+            return i
+    return None
+
+
 def record_audio(seconds=RECORD_SECONDS):
     """Record for ``seconds`` seconds and return a WAV path, or None if silent."""
     log.info("recording for %ds", seconds)
@@ -257,7 +276,9 @@ def record_audio(seconds=RECORD_SECONDS):
     def cb(indata, _frame_count, _time_info, _status):
         frames.append(indata.copy())
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, callback=cb):
+    device = _find_usb_input_device()
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                        callback=cb, device=device):
         time.sleep(seconds)
     if not frames:
         return None

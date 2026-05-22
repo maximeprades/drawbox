@@ -654,14 +654,17 @@ body {
   <div class="page" id="page-logs">
     <div class="page-header">
       <h1 class="page-title">Live Logs</h1>
-      <p class="page-desc">Real-time log stream from the DrawBox service</p>
+      <p class="page-desc">Last 24 hours of logs from both the button service and web dashboard, plus live tail.</p>
     </div>
     <div class="card">
-      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-        <div class="card-title" style="font-family:ui-monospace,monospace;font-size:13px;color:var(--muted-foreground)">journalctl -u drawbox -f</div>
-        <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="card-title" style="font-family:ui-monospace,monospace;font-size:13px;color:var(--muted-foreground)">journalctl -u drawbox -u drawbox-web --since "24 hours ago" -f</div>
+        <div style="display:flex;gap:8px">
+          <a class="btn btn-outline btn-sm" href="/api/logs/download" download>Download last 24h</a>
+          <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
+        </div>
       </div>
-      <div class="log-area" id="logArea">Connecting to log stream...</div>
+      <div class="log-area" id="logArea">Loading last 24 hours...</div>
     </div>
   </div>
 
@@ -1583,7 +1586,8 @@ def api_generate():
 def api_logs():
     def stream():
         proc = subprocess.Popen(
-            ["journalctl", "-u", "drawbox", "-f", "-n", "50", "--no-pager"],
+            ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
+             "--since", "24 hours ago", "-f", "--no-pager"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         try:
@@ -1598,6 +1602,21 @@ def api_logs():
     return Response(
         stream(), mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+@app.route("/api/logs/download")
+def api_logs_download():
+    proc = subprocess.run(
+        ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
+         "--since", "24 hours ago", "--no-pager"],
+        capture_output=True, text=True, timeout=30,
+    )
+    text = proc.stdout or proc.stderr or "(no logs)"
+    ts = _time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        text,
+        mimetype="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="drawbox-logs-{ts}.txt"'},
     )
 
 def _clamp_float(v, lo, hi):
