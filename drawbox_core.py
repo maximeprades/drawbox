@@ -48,6 +48,15 @@ ELEVENLABS_API_KEY = ""
 client = None  # OpenAI client, rebuilt on apply_api_keys()
 
 
+API_KEY_NAMES = ("openai", "replicate", "gemini", "elevenlabs")
+_API_KEY_ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "replicate": "REPLICATE_API_TOKEN",
+    "gemini": "GEMINI_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+}
+
+
 def _load_api_keys():
     """Read API keys from the on-disk file, falling back to environment variables."""
     keys = {}
@@ -57,10 +66,8 @@ def _load_api_keys():
         except (OSError, ValueError) as e:
             log.warning("could not read %s: %s", API_KEYS_FILE, e)
     return {
-        "openai": keys.get("openai") or os.environ.get("OPENAI_API_KEY") or "",
-        "replicate": keys.get("replicate") or os.environ.get("REPLICATE_API_TOKEN") or "",
-        "gemini": keys.get("gemini") or os.environ.get("GEMINI_API_KEY") or "",
-        "elevenlabs": keys.get("elevenlabs") or os.environ.get("ELEVENLABS_API_KEY") or "",
+        name: keys.get(name) or os.environ.get(env_var) or ""
+        for name, env_var in _API_KEY_ENV_VARS.items()
     }
 
 
@@ -156,6 +163,13 @@ def parse_admin_poop_command(text):
 
 def safety_mode_enabled():
     return SAFETY_MODE_FILE.exists()
+
+
+def ensure_safety_mode_default():
+    """Default-on opt-out: create the sentinel on first run if it does not exist."""
+    SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not SAFETY_MODE_FILE.exists():
+        SAFETY_MODE_FILE.touch()
 
 
 def please_mode_enabled():
@@ -265,8 +279,7 @@ def save_scripts(data):
         }
     if isinstance(data.get("jokes"), list):
         clean["jokes"] = [j[:300] for j in data["jokes"][:100] if isinstance(j, str)]
-    SCRIPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SCRIPTS_FILE.write_text(json.dumps(clean, indent=2))
+    _write_secure_json(SCRIPTS_FILE, clean)
 
 
 # ── SETTINGS ──────────────────────────────────────
@@ -318,9 +331,18 @@ def load_settings():
     return out
 
 
+def _write_secure_json(path, data):
+    """Write JSON with mode 0600. Best-effort chmod since some FS lack POSIX modes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def save_settings(data):
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+    _write_secure_json(SETTINGS_FILE, data)
 
 
 def poop_mode_enabled():
@@ -484,10 +506,9 @@ def _postprocess(img_bytes):
     img = img.resize((new_w, new_h), Image.LANCZOS)
     canvas = Image.new("L", (CANVAS_W, CANVAS_H), 255)
     canvas.paste(img, ((CANVAS_W - new_w) // 2, (CANVAS_H - new_h) // 2))
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    canvas.save(tmp.name)
-    tmp.close()
-    return tmp.name
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        canvas.save(tmp.name)
+        return tmp.name
 
 
 # ── PRINTING ──────────────────────────────────────

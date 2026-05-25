@@ -21,13 +21,13 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import drawbox_core
 from drawbox_core import (
-    API_KEYS_FILE, DEFAULT_COLORING_PROMPT, DEFAULT_JOKES, DEFAULT_SETTINGS,
-    DEFAULT_VOICE_LINES, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE,
-    PRINT_LOG_FILE, SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys,
-    apply_api_keys, contains_poop, default_scripts, generate_image, is_safe,
-    load_scripts, load_settings, log_print_event, mask_key,
-    poop_blocked_message, poop_mode_enabled, print_image, save_scripts,
-    save_settings, set_poop_mode_enabled,
+    API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
+    SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys, _write_secure_json,
+    apply_api_keys, contains_poop, default_scripts, ensure_safety_mode_default,
+    generate_image, is_safe, load_scripts, load_settings, log_print_event,
+    mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
+    print_image, safety_mode_enabled, save_scripts, save_settings,
+    set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox.web")
@@ -1039,7 +1039,7 @@ async function loadAnalytics() {
     } else {
       mc.innerHTML = entries.map(([m, c]) =>
         '<div class="bar-row">' +
-          '<span class="bar-label">' + m + '</span>' +
+          '<span class="bar-label">' + esc(m) + '</span>' +
           '<div class="bar-track"><div class="bar-fill" style="width:' + (c/total*100).toFixed(1) + '%;background:' + (colors[m]||'var(--chart-4)') + '"></div></div>' +
           '<span class="bar-value">' + c + '</span>' +
         '</div>'
@@ -1289,13 +1289,10 @@ const VOICE_LINE_META = {
   reboot:     'Played on long button press reboot',
 };
 
-let scriptsDefaults = null;
-
 async function loadScripts() {
   try {
     const r = await fetch('/api/scripts');
     const d = await r.json();
-    scriptsDefaults = d.defaults;
     const container = $('voiceLinesEditor');
     container.innerHTML = '';
     const keys = Object.keys(d.voice_lines);
@@ -1719,7 +1716,7 @@ def api_generate():
         return jsonify(ok=False, error="Description too long (max 500 chars).")
     if not poop_mode_enabled() and contains_poop(desc):
         return jsonify(ok=False, error=poop_blocked_message())
-    if SAFETY_MODE_FILE.exists() and not is_safe(desc):
+    if safety_mode_enabled() and not is_safe(desc):
         return jsonify(
             ok=False,
             error="That description contains blocked words. "
@@ -1739,9 +1736,9 @@ def api_generate():
         print_image(path)
         log_print_event(desc, model, duration, source="web")
         return jsonify(ok=True, image=image_b64)
-    except Exception as e:
+    except Exception:
         log.exception("generate failed")
-        return jsonify(ok=False, error=str(e))
+        return jsonify(ok=False, error="Generation failed; check logs.")
     finally:
         _gen_lock.release()
 
@@ -1795,8 +1792,8 @@ def _clamp_float(v, lo, hi):
 def api_settings():
     if request.method == "GET":
         return jsonify(load_settings())
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict):
+    data = _request_dict()
+    if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400
     settings = load_settings()
     try:
@@ -1823,8 +1820,8 @@ def api_scripts():
         scripts = load_scripts()
         scripts["defaults"] = default_scripts()
         return jsonify(scripts)
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict):
+    data = _request_dict()
+    if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400
     if data.get("reset"):
         from drawbox_core import SCRIPTS_FILE
@@ -1833,41 +1830,56 @@ def api_scripts():
     save_scripts(data)
     return jsonify(ok=True)
 
+def _request_dict():
+    """Return the JSON request body if it's a dict, else None."""
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else None
+
+
 def _toggle_sentinel(path):
-    data = request.get_json(silent=True) or {}
-    if data.get("enabled"):
+    data = _request_dict() or {}
+    if data.get("enabled") is True:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    else:
+    elif data.get("enabled") is False:
         path.unlink(missing_ok=True)
+    else:
+        return jsonify(ok=False, error='"enabled" must be true or false'), 400
     return jsonify(ok=True, enabled=path.exists())
+
+
+def _sentinel_route(path):
+    if request.method == "GET":
+        return jsonify(enabled=path.exists())
+    return _toggle_sentinel(path)
+
 
 @app.route("/api/please-mode", methods=["GET", "POST"])
 def api_please_mode():
-    if request.method == "GET":
-        return jsonify(enabled=PLEASE_MODE_FILE.exists())
-    return _toggle_sentinel(PLEASE_MODE_FILE)
+    return _sentinel_route(PLEASE_MODE_FILE)
+
 
 @app.route("/api/safety-mode", methods=["GET", "POST"])
 def api_safety_mode():
-    if request.method == "GET":
-        return jsonify(enabled=SAFETY_MODE_FILE.exists())
-    return _toggle_sentinel(SAFETY_MODE_FILE)
+    return _sentinel_route(SAFETY_MODE_FILE)
 
 @app.route("/api/poop-mode", methods=["GET", "POST"])
 def api_poop_mode():
     if request.method == "GET":
         return jsonify(enabled=poop_mode_enabled())
-    data = request.get_json(silent=True) or {}
-    return jsonify(ok=True, enabled=set_poop_mode_enabled(data.get("enabled")))
+    data = _request_dict() or {}
+    enabled = data.get("enabled")
+    if enabled is not True and enabled is not False:
+        return jsonify(ok=False, error='"enabled" must be true or false'), 400
+    return jsonify(ok=True, enabled=set_poop_mode_enabled(enabled))
 
 @app.route("/api/keys", methods=["GET", "POST"])
 def api_keys():
     if request.method == "GET":
         keys = _load_api_keys()
         return jsonify({k: mask_key(v, head=4, tail=4) for k, v in keys.items()})
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict):
+    data = _request_dict()
+    if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400
     try:
         existing = json.loads(API_KEYS_FILE.read_text()) if API_KEYS_FILE.exists() else {}
@@ -1875,16 +1887,11 @@ def api_keys():
             existing = {}
     except (OSError, ValueError):
         existing = {}
-    for k in ("openai", "replicate", "gemini", "elevenlabs"):
+    for k in drawbox_core.API_KEY_NAMES:
         val = data.get(k)
         if isinstance(val, str) and val.strip():
             existing[k] = val.strip()
-    API_KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    API_KEYS_FILE.write_text(json.dumps(existing, indent=2))
-    try:
-        API_KEYS_FILE.chmod(0o600)
-    except OSError:
-        pass
+    _write_secure_json(API_KEYS_FILE, existing)
     apply_api_keys()
     return jsonify(ok=True)
 
@@ -2139,7 +2146,6 @@ def api_diagnostics():
 
 @app.route("/api/test/speaker", methods=["POST"])
 def api_test_speaker():
-    import re
     # Find the USB speaker card number from aplay -l
     aplay = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
     card_match = re.search(r"card (\d+).*(?:USB|Speaker)", aplay.stdout, re.IGNORECASE)
@@ -2182,7 +2188,6 @@ def api_test_speaker():
 @app.route("/api/test/mic", methods=["POST"])
 def api_test_mic():
     import struct
-    import tempfile
     import wave
     # mkstemp avoids the mktemp race; we close the fd immediately because
     # arecord wants to own the file.
@@ -2244,9 +2249,9 @@ def api_analytics():
             for line in PRINT_LOG_FILE.read_text().strip().splitlines():
                 try:
                     events.append(json.loads(line))
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     continue
-        except Exception:
+        except OSError:
             pass
 
     total = len(events)
@@ -2254,10 +2259,7 @@ def api_analytics():
     prints_today = sum(1 for e in events if e.get("ts", "").startswith(today))
 
     # Model counts
-    model_counts = {}
-    for e in events:
-        m = e.get("model", "unknown")
-        model_counts[m] = model_counts.get(m, 0) + 1
+    model_counts = dict(Counter(e.get("model", "unknown") for e in events))
 
     # Average generation time
     durations = [e["duration_s"] for e in events if "duration_s" in e]
@@ -2361,15 +2363,13 @@ def api_update_deploy():
 
 # ── INIT ─────────────────────────────────────────
 DRAWBOX_DIR.mkdir(parents=True, exist_ok=True)
-# Safety mode ON by default — opt-out, not opt-in
-if not SAFETY_MODE_FILE.exists():
-    SAFETY_MODE_FILE.touch()
+ensure_safety_mode_default()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if not drawbox_core.OPENAI_API_KEY:
         log.warning("OPENAI_API_KEY not set — voice features won't work.")
     log.info("image_model=%s safety_filter=%s",
-             IMAGE_MODEL, "on" if SAFETY_MODE_FILE.exists() else "off")
+             IMAGE_MODEL, "on" if safety_mode_enabled() else "off")
     log.info("starting on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
