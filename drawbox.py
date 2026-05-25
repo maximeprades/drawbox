@@ -310,33 +310,35 @@ def record_audio(seconds=RECORD_SECONDS):
     last_error = None
     for device in _candidate_input_devices():
         frames = []
+        statuses = []
+        device_label = _input_device_label(device)
 
         def cb(indata, _frame_count, _time_info, status):
             if status:
-                log.debug("input stream status from %s: %s",
-                          _input_device_label(device), status)
+                statuses.append(status)
             frames.append(indata.copy())
 
         try:
-            log.info("trying %s", _input_device_label(device))
+            log.info("trying %s", device_label)
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                 callback=cb, device=device):
                 time.sleep(seconds)
         except Exception as e:
             last_error = e
-            log.warning("could not record from %s: %s",
-                        _input_device_label(device), e)
+            log.warning("could not record from %s: %s", device_label, e)
             continue
 
+        if statuses:
+            log.debug("input stream status from %s: %s",
+                      device_label, "; ".join(str(s) for s in statuses))
         if not frames:
-            log.warning("no audio frames captured from %s",
-                        _input_device_label(device))
+            log.warning("no audio frames captured from %s", device_label)
             continue
         audio = np.concatenate(frames)
         duration = len(audio) / SAMPLE_RATE
         if duration < MIN_RECORDING_SEC:
             log.warning("recording from %s too short: %.1fs",
-                        _input_device_label(device), duration)
+                        device_label, duration)
             continue
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)

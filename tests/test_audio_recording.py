@@ -37,8 +37,14 @@ def test_record_audio_tries_next_device_after_open_failure(monkeypatch, tmp_path
         {"name": "USB PnP Sound Device: Audio (hw:2,0)", "max_input_channels": 1},
     ]
     attempts = []
+    in_callback = {"value": False}
 
-    monkeypatch.setattr(drawbox.sd, "query_devices", lambda device=None: devices if device is None else devices[device])
+    def query_devices(device=None):
+        if in_callback["value"]:
+            raise AssertionError("query_devices must not run from audio callback")
+        return devices if device is None else devices[device]
+
+    monkeypatch.setattr(drawbox.sd, "query_devices", query_devices)
     monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
     monkeypatch.setattr(drawbox.time, "sleep", lambda _seconds: None)
 
@@ -52,7 +58,9 @@ def test_record_audio_tries_next_device_after_open_failure(monkeypatch, tmp_path
             if self.device == 0:
                 raise drawbox.sd.PortAudioError("stale ALSA card")
             audio = np.ones((drawbox.SAMPLE_RATE, 1), dtype=np.float32)
-            self.callback(audio, len(audio), None, None)
+            in_callback["value"] = True
+            self.callback(audio, len(audio), None, "input overflow")
+            in_callback["value"] = False
             return self
 
         def __exit__(self, *_exc):
