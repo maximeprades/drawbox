@@ -2062,6 +2062,9 @@ def api_wifi_saved():
                     "802-11-wireless.ssid", ssid]
             if password:
                 args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
+            else:
+                # Blank password means an open network; clear any prior WPA settings.
+                args += ["wifi-sec.key-mgmt", "", "wifi-sec.psk", ""]
             _run_sudo_nmcli(args)
             return jsonify(ok=True, updated=True, uuid=existing["uuid"])
 

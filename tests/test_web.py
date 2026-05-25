@@ -343,6 +343,21 @@ def test_wifi_saved_updates_existing_network(client, monkeypatch):
     assert "wifi-sec.psk" in calls[0]
 
 
+def test_wifi_saved_update_empty_password_clears_wpa_settings(client, monkeypatch):
+    calls = []
+    uuid = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [{
+        "name": "Cafe", "uuid": uuid, "ssid": "Cafe", "priority": 5,
+    }])
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    body = client.post("/api/wifi/saved", json={"ssid": "Cafe", "password": ""}).get_json()
+
+    assert body["ok"] is True
+    assert body["updated"] is True
+    assert calls[0][-4:] == ["wifi-sec.key-mgmt", "", "wifi-sec.psk", ""]
+
+
 def test_wifi_saved_reorder_rejects_invalid_body(client):
     assert client.post("/api/wifi/saved/reorder", json={"uuids": []}).status_code == 400
     assert client.post("/api/wifi/saved/reorder", json={"uuids": ["not-a-uuid"]}).status_code == 400
