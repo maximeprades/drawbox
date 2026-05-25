@@ -816,12 +816,39 @@ body {
   <div class="page" id="page-wifi">
     <div class="page-header">
       <h1 class="page-title">WiFi</h1>
-      <p class="page-desc">Manage wireless network connections</p>
+      <p class="page-desc">Manage wireless network connections and saved travel networks</p>
     </div>
+
     <div class="card">
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div class="card-title">Networks</div>
+          <div class="card-title">Saved Networks</div>
+          <div class="card-desc">DrawBox tries these in order when WiFi changes. Use up/down to set priority.</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="loadSavedWifi()">Refresh</button>
+      </div>
+      <div class="card-content" id="wifiSavedList"><div class="muted">Loading saved networks...</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Preconfigure a Network</div>
+        <div class="card-desc">Save a network now so DrawBox can connect automatically when it is in range later.</div>
+      </div>
+      <div class="card-content">
+        <div class="gen-form" style="grid-template-columns:1fr 1fr 1fr auto">
+          <input class="input" type="text" id="wifiSavedSSID" placeholder="SSID" />
+          <input class="input" type="text" id="wifiSavedName" placeholder="Name (optional)" />
+          <input class="input" type="password" id="wifiSavedPass" placeholder="Password (leave empty for open)" />
+          <button class="btn btn-primary btn-sm" onclick="saveWifiNetwork()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="card-title">Nearby Networks</div>
           <div class="card-desc" id="wifiCurrent">Click scan to find networks</div>
         </div>
         <button class="btn btn-outline btn-sm" onclick="loadWifi()">Scan</button>
@@ -956,6 +983,7 @@ function showPage(page) {
   if (page === 'overview') loadAnalytics();
   if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadPoopMode(); loadApiKeys(); }
   if (page === 'scripts') loadScripts();
+  if (page === 'wifi') { loadSavedWifi(); loadWifi(); }
 }
 
 function toggleSidebar() {
@@ -1330,6 +1358,102 @@ async function restartForScripts() {
 }
 
 // ── WIFI ──────────────────────────────────────
+let wifiSaved = [];
+
+async function loadSavedWifi() {
+  const list = $('wifiSavedList');
+  list.innerHTML = '<div class="muted">Loading saved networks...</div>';
+  try {
+    const r = await fetch('/api/wifi/saved');
+    const d = await r.json();
+    wifiSaved = d.saved || [];
+    if (d.error) {
+      list.innerHTML = '<div style="color:var(--destructive);font-size:13px">' + esc(d.error) + '</div>';
+      return;
+    }
+    if (!wifiSaved.length) {
+      list.innerHTML = '<div style="color:var(--muted-foreground);font-size:13px;padding:8px 0">No saved networks yet. Scan and connect, or preconfigure one below.</div>';
+      return;
+    }
+    list.innerHTML = wifiSaved.map((n, i) =>
+      '<div class="wifi-network" data-uuid="' + esc(n.uuid) + '">' +
+        '<div style="width:24px;color:var(--muted-foreground);font-size:12px">' + (i + 1) + '</div>' +
+        '<span class="wifi-ssid">' + esc(n.ssid || n.name) + '</span>' +
+        '<span class="wifi-meta">priority ' + esc(String(n.priority || 0)) + '</span>' +
+        '<button class="btn btn-outline btn-sm" data-action="up" ' + (i === 0 ? 'disabled' : '') + '>Up</button>' +
+        '<button class="btn btn-outline btn-sm" data-action="down" ' + (i === wifiSaved.length - 1 ? 'disabled' : '') + '>Down</button>' +
+        '<button class="btn btn-outline btn-sm" data-action="delete">Delete</button>' +
+      '</div>'
+    ).join('');
+    list.querySelectorAll('.wifi-network button').forEach(btn => {
+      btn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const row = btn.closest('.wifi-network');
+        handleSavedWifiAction(row.dataset.uuid, btn.dataset.action);
+      });
+    });
+  } catch(e) {
+    list.innerHTML = '<div style="color:var(--destructive);font-size:13px">Error: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function handleSavedWifiAction(uuid, action) {
+  const idx = wifiSaved.findIndex(n => n.uuid === uuid);
+  if (idx < 0) return;
+  if (action === 'delete') {
+    if (!confirm('Forget saved network "' + (wifiSaved[idx].ssid || wifiSaved[idx].name) + '"?')) return;
+    try {
+      const r = await fetch('/api/wifi/saved/' + encodeURIComponent(uuid), {method: 'DELETE'});
+      const d = await r.json();
+      if (d.ok) { toast('Saved network deleted'); loadSavedWifi(); }
+      else toast(d.error || 'Delete failed', false);
+    } catch(e) { toast('Error: ' + e.message, false); }
+    return;
+  }
+  const next = wifiSaved.slice();
+  const swap = action === 'up' ? idx - 1 : idx + 1;
+  if (swap < 0 || swap >= next.length) return;
+  [next[idx], next[swap]] = [next[swap], next[idx]];
+  await reorderSavedWifi(next.map(n => n.uuid));
+}
+
+async function reorderSavedWifi(uuids) {
+  try {
+    const r = await fetch('/api/wifi/saved/reorder', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({uuids})
+    });
+    const d = await r.json();
+    if (d.ok) { toast('WiFi priority updated'); loadSavedWifi(); }
+    else toast(d.error || 'Reorder failed', false);
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function saveWifiNetwork() {
+  const ssid = $('wifiSavedSSID').value.trim();
+  if (!ssid) { toast('SSID required', false); return; }
+  try {
+    const r = await fetch('/api/wifi/saved', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        ssid,
+        name: $('wifiSavedName').value,
+        password: $('wifiSavedPass').value
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast((d.updated ? 'Updated' : 'Saved') + ' WiFi network');
+      $('wifiSavedSSID').value = '';
+      $('wifiSavedName').value = '';
+      $('wifiSavedPass').value = '';
+      loadSavedWifi();
+    } else toast(d.error || 'Save failed', false);
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
 async function loadWifi() {
   $('wifiCurrent').textContent = 'Scanning...';
   try {
@@ -1383,6 +1507,7 @@ async function connectWifi() {
     if (d.ok) {
       toast('Connected to ' + wifiTarget);
       $('wifiConnectCard').style.display = 'none';
+      loadSavedWifi();
       loadWifi();
     } else { toast(d.error || 'Failed to connect', false); }
   } catch(e) { toast('Error: ' + e.message, false); }
@@ -1763,6 +1888,108 @@ def api_keys():
     apply_api_keys()
     return jsonify(ok=True)
 
+
+_WIFI_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _validate_wifi_text(value, field, max_len, allow_empty=False):
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}")
+    value = value.strip()
+    if not value and not allow_empty:
+        raise ValueError(f"{field} required")
+    if len(value) > max_len:
+        raise ValueError(f"{field} too long")
+    if any(ord(c) < 32 for c in value):
+        raise ValueError(f"Invalid characters in {field}")
+    return value
+
+
+def _nmcli_split(line):
+    """Split nmcli -t output, honoring backslash-escaped colons."""
+    fields, buf, escaped = [], [], False
+    for ch in line:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == ":":
+            fields.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    fields.append("".join(buf))
+    return fields
+
+
+def _parse_saved_wifi_profiles(output):
+    profiles = []
+    for line in (output or "").splitlines():
+        if not line.strip():
+            continue
+        parts = _nmcli_split(line)
+        parts += [""] * (5 - len(parts))
+        name, uuid, typ, ssid, priority = parts[:5]
+        if typ.lower() not in {"wifi", "802-11-wireless"}:
+            continue
+        try:
+            prio = int(priority or 0)
+        except ValueError:
+            prio = 0
+        profiles.append({
+            "name": name,
+            "uuid": uuid,
+            "ssid": ssid or name,
+            "priority": prio,
+        })
+    profiles.sort(key=lambda p: (-p["priority"], p["name"].lower()))
+    return profiles
+
+
+def _saved_wifi_profiles():
+    r = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME,UUID,TYPE,802-11-wireless.ssid,connection.autoconnect-priority", "con", "show"],
+        capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or r.stdout.strip() or "nmcli failed")
+    return _parse_saved_wifi_profiles(r.stdout)
+
+
+def _next_wifi_priority(profiles=None):
+    profiles = profiles if profiles is not None else _saved_wifi_profiles()
+    return (max((p["priority"] for p in profiles), default=0) + 10)
+
+
+def _run_sudo_nmcli(args, timeout=30):
+    r = subprocess.run(["sudo", "nmcli", *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or r.stdout.strip() or "nmcli failed")
+    return r
+
+
+def _set_wifi_priority(uuid, priority):
+    if not _WIFI_UUID_RE.match(uuid or ""):
+        raise ValueError("Invalid network id")
+    _run_sudo_nmcli(["con", "modify", uuid, "connection.autoconnect", "yes",
+                     "connection.autoconnect-priority", str(int(priority))])
+
+
+def _promote_wifi_profile_for_ssid(ssid):
+    try:
+        profiles = _saved_wifi_profiles()
+        match = next((p for p in profiles if p["ssid"] == ssid or p["name"] == ssid), None)
+        if match:
+            _set_wifi_priority(match["uuid"], _next_wifi_priority(profiles))
+    except Exception as e:
+        log.warning("could not promote WiFi profile for %s: %s", ssid, e)
+
 @app.route("/api/wifi/networks")
 def api_wifi_networks():
     try:
@@ -1803,11 +2030,88 @@ def api_wifi_connect():
             cmd += ["password", password]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
+            _promote_wifi_profile_for_ssid(ssid)
             return jsonify(ok=True, message=f"Connected to {ssid}")
         return jsonify(ok=False, error=r.stderr.strip() or r.stdout.strip())
     except subprocess.TimeoutExpired:
         return jsonify(ok=False, error="nmcli timed out")
     except OSError as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route("/api/wifi/saved", methods=["GET", "POST"])
+def api_wifi_saved():
+    if request.method == "GET":
+        try:
+            return jsonify(saved=_saved_wifi_profiles())
+        except Exception as e:
+            return jsonify(saved=[], error=str(e))
+
+    data = request.get_json(silent=True) or {}
+    try:
+        ssid = _validate_wifi_text(data.get("ssid"), "SSID", 64)
+        password = _validate_wifi_text(data.get("password", ""), "password", 128, allow_empty=True)
+        name = _validate_wifi_text(data.get("name") or ssid, "network name", 64)
+        profiles = _saved_wifi_profiles()
+        priority = _next_wifi_priority(profiles)
+        existing = next((p for p in profiles if p["uuid"] and (p["ssid"] == ssid or p["name"] == name)), None)
+        if existing:
+            args = ["con", "modify", existing["uuid"],
+                    "connection.autoconnect", "yes",
+                    "connection.autoconnect-priority", str(priority),
+                    "802-11-wireless.ssid", ssid]
+            if password:
+                args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
+            _run_sudo_nmcli(args)
+            return jsonify(ok=True, updated=True, uuid=existing["uuid"])
+
+        args = ["con", "add", "type", "wifi", "ifname", "wlan0",
+                "con-name", name, "ssid", ssid,
+                "connection.autoconnect", "yes",
+                "connection.autoconnect-priority", str(priority)]
+        if password:
+            args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
+        _run_sudo_nmcli(args)
+        return jsonify(ok=True, updated=False)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="nmcli timed out")
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route("/api/wifi/saved/reorder", methods=["POST"])
+def api_wifi_saved_reorder():
+    data = request.get_json(silent=True) or {}
+    uuids = data.get("uuids")
+    if not isinstance(uuids, list) or not uuids:
+        return jsonify(ok=False, error="Ordered network ids required"), 400
+    if len(uuids) != len(set(uuids)):
+        return jsonify(ok=False, error="Duplicate network ids"), 400
+    if any(not isinstance(u, str) or not _WIFI_UUID_RE.match(u) for u in uuids):
+        return jsonify(ok=False, error="Invalid network id"), 400
+    try:
+        start = 1000
+        for idx, uuid in enumerate(uuids):
+            _set_wifi_priority(uuid, start - (idx * 10))
+        return jsonify(ok=True)
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="nmcli timed out")
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@app.route("/api/wifi/saved/<uuid>", methods=["DELETE"])
+def api_wifi_saved_delete(uuid):
+    if not _WIFI_UUID_RE.match(uuid or ""):
+        return jsonify(ok=False, error="Invalid network id"), 400
+    try:
+        _run_sudo_nmcli(["con", "delete", uuid])
+        return jsonify(ok=True)
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="nmcli timed out")
+    except Exception as e:
         return jsonify(ok=False, error=str(e))
 
 @app.route("/api/diagnostics", methods=["POST"])

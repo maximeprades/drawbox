@@ -281,6 +281,102 @@ def test_wifi_connect_ignores_non_string_ssid(client):
     assert r["ok"] is False
 
 
+def test_parse_saved_wifi_profiles_sorts_and_unescapes():
+    out = (
+        "Home\\:Main:11111111-1111-1111-1111-111111111111:wifi:Home\\:Main:20\n"
+        "Ethernet:22222222-2222-2222-2222-222222222222:ethernet::0\n"
+        "Grandma:33333333-3333-3333-3333-333333333333:802-11-wireless:Grandma:100\n"
+    )
+    saved = drawbox_web._parse_saved_wifi_profiles(out)
+    assert [n["ssid"] for n in saved] == ["Grandma", "Home:Main"]
+    assert [n["priority"] for n in saved] == [100, 20]
+
+
+def test_wifi_saved_get_parses_nmcli(client, monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "Home:11111111-1111-1111-1111-111111111111:wifi:Home:10\n"
+        stderr = ""
+
+    monkeypatch.setattr(drawbox_web.subprocess, "run", lambda *a, **k: Result())
+    body = client.get("/api/wifi/saved").get_json()
+    assert body["saved"] == [{
+        "name": "Home",
+        "uuid": "11111111-1111-1111-1111-111111111111",
+        "ssid": "Home",
+        "priority": 10,
+    }]
+
+
+def test_wifi_saved_add_preconfigures_network(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [])
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    body = client.post("/api/wifi/saved", json={
+        "ssid": "Grandma",
+        "name": "Grandma house",
+        "password": "secret123",
+    }).get_json()
+
+    assert body["ok"] is True
+    assert body["updated"] is False
+    assert calls[0][:7] == ["con", "add", "type", "wifi", "ifname", "wlan0", "con-name"]
+    assert "Grandma" in calls[0]
+    assert "wifi-sec.psk" in calls[0]
+    assert "connection.autoconnect-priority" in calls[0]
+
+
+def test_wifi_saved_updates_existing_network(client, monkeypatch):
+    calls = []
+    uuid = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [{
+        "name": "Home", "uuid": uuid, "ssid": "Home", "priority": 5,
+    }])
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    body = client.post("/api/wifi/saved", json={"ssid": "Home", "password": "newpass"}).get_json()
+
+    assert body["ok"] is True
+    assert body["updated"] is True
+    assert calls[0][:3] == ["con", "modify", uuid]
+    assert "wifi-sec.psk" in calls[0]
+
+
+def test_wifi_saved_reorder_rejects_invalid_body(client):
+    assert client.post("/api/wifi/saved/reorder", json={"uuids": []}).status_code == 400
+    assert client.post("/api/wifi/saved/reorder", json={"uuids": ["not-a-uuid"]}).status_code == 400
+
+
+def test_wifi_saved_reorder_sets_priorities(client, monkeypatch):
+    calls = []
+    uuids = [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    monkeypatch.setattr(drawbox_web, "_set_wifi_priority", lambda uuid, priority: calls.append((uuid, priority)))
+
+    body = client.post("/api/wifi/saved/reorder", json={"uuids": uuids}).get_json()
+
+    assert body["ok"] is True
+    assert calls == [(uuids[0], 1000), (uuids[1], 990)]
+
+
+def test_wifi_saved_delete_rejects_invalid_uuid(client):
+    assert client.delete("/api/wifi/saved/not-a-uuid").status_code == 400
+
+
+def test_wifi_saved_delete_calls_nmcli(client, monkeypatch):
+    calls = []
+    uuid = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    body = client.delete(f"/api/wifi/saved/{uuid}").get_json()
+
+    assert body["ok"] is True
+    assert calls == [["con", "delete", uuid]]
+
+
 # ── /api/diagnostics allowlist ─────────────────────
 
 def test_diagnostics_rejects_unknown_command(client):
