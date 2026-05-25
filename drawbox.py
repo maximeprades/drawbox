@@ -252,48 +252,103 @@ class VoiceFeedback:
 
 
 # ── RECORD ──────────────────────────────────────
-def _find_usb_input_device():
-    """Locate the USB mic by name. Returns a sounddevice index, or None to
-    fall back to the system default. ALSA's default can point to an
-    output-only card (e.g. when ~/.asoundrc sets defaults.pcm.card to the
-    speaker), which makes sd.InputStream fail with 'Error querying device -1'."""
+def _candidate_input_devices():
+    """Return input-device candidates in preference order.
+
+    USB cards can be renumbered after unplug/reboot. PortAudio may still list a
+    stale ``hw:N,0`` device that ALSA refuses to open, so recording tries every
+    plausible candidate instead of trusting the first USB-looking match.
+    """
     try:
         devices = sd.query_devices()
-    except Exception:
-        return None
+    except Exception as e:
+        log.warning("could not query audio devices: %s", e)
+        return [None]
+
+    candidates = []
+
+    def add(device):
+        if device not in candidates:
+            candidates.append(device)
+
     for i, d in enumerate(devices):
         if d.get("max_input_channels", 0) <= 0:
             continue
         name = d.get("name", "")
         if any(kw in name for kw in USB_MIC_NAME_HINTS):
-            log.info("using input device %d: %s", i, name)
-            return i
-    return None
+            add(i)
+
+    try:
+        default_input = sd.default.device[0]
+    except Exception:
+        default_input = None
+    if isinstance(default_input, int) and default_input >= 0:
+        add(default_input)
+
+    for i, d in enumerate(devices):
+        if d.get("max_input_channels", 0) > 0:
+            add(i)
+
+    add(None)  # last resort: PortAudio's default device
+    return candidates
+
+
+def _input_device_label(device):
+    if device is None:
+        return "default input device"
+    try:
+        info = sd.query_devices(device)
+        return f"input device {device}: {info.get('name', 'unknown')}"
+    except Exception:
+        return f"input device {device}"
 
 
 def record_audio(seconds=RECORD_SECONDS):
     """Record for ``seconds`` seconds and return a WAV path, or None if silent."""
     log.info("recording for %ds", seconds)
-    frames = []
 
-    def cb(indata, _frame_count, _time_info, _status):
-        frames.append(indata.copy())
+    last_error = None
+    for device in _candidate_input_devices():
+        frames = []
 
-    device = _find_usb_input_device()
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                        callback=cb, device=device):
-        time.sleep(seconds)
-    if not frames:
-        return None
-    audio = np.concatenate(frames)
-    duration = len(audio) / SAMPLE_RATE
-    if duration < MIN_RECORDING_SEC:
-        return None
-    fd, path = tempfile.mkstemp(suffix=".wav")
-    os.close(fd)
-    sf.write(path, audio, SAMPLE_RATE)
-    log.info("recorded %.1fs to %s", duration, path)
-    return path
+        def cb(indata, _frame_count, _time_info, status):
+            if status:
+                log.debug("input stream status from %s: %s",
+                          _input_device_label(device), status)
+            frames.append(indata.copy())
+
+        try:
+            log.info("trying %s", _input_device_label(device))
+            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                                callback=cb, device=device):
+                time.sleep(seconds)
+        except Exception as e:
+            last_error = e
+            log.warning("could not record from %s: %s",
+                        _input_device_label(device), e)
+            continue
+
+        if not frames:
+            log.warning("no audio frames captured from %s",
+                        _input_device_label(device))
+            continue
+        audio = np.concatenate(frames)
+        duration = len(audio) / SAMPLE_RATE
+        if duration < MIN_RECORDING_SEC:
+            log.warning("recording from %s too short: %.1fs",
+                        _input_device_label(device), duration)
+            continue
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        sf.write(path, audio, SAMPLE_RATE)
+        log.info("recorded %.1fs to %s", duration, path)
+        return path
+
+    if last_error:
+        log.error("all input devices failed; last error: %s", last_error)
+    else:
+        log.error("no usable input devices found")
+    return None
 
 
 # ── TRANSCRIBE ──────────────────────────────────
