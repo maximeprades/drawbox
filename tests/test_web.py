@@ -4,6 +4,7 @@ binaries. We don't exercise /api/status, /api/logs, /api/diagnostics,
 journalctl, nmcli, aplay, etc. that don't exist on macOS."""
 
 import json
+from pathlib import Path
 
 import drawbox_core
 import drawbox_web
@@ -349,3 +350,16 @@ def test_analytics_skips_garbage_lines(client):
     )
     body = client.get("/api/analytics").get_json()
     assert body["total_prints"] == 1
+
+
+def test_simulator_defines_poop_mode_dependencies():
+    html = Path("drawbox-simulator.html").read_text()
+    for snippet in (
+        'id="poopmode"',
+        "function containsPoop",
+        "function parseAdminPoopCommand",
+        "poop_blocked:",
+        "poop_mode_enabled:",
+        "poop_mode_disabled:",
+    ):
+        assert snippet in html

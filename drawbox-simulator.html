@@ -145,6 +145,13 @@ body{font-family:-apple-system,'Helvetica Neue','Segoe UI',sans-serif;background
           <input type="checkbox" id="pleasemode" style="width:16px;height:16px;cursor:pointer" /> Require kids to say &ldquo;please&rdquo;
         </label>
       </div>
+      <div class="cfg-row">
+        <label>Poop Mode</label>
+        <label style="font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="poopmode" style="width:16px;height:16px;cursor:pointer" checked /> Allow funny poop drawing requests
+        </label>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">When off, requests using poop, pooped, pooping, or poopy are rejected before generation.</div>
+      </div>
       <div class="cfg-row" style="margin-top:14px">
         <label for="cprompt">Coloring Prompt</label>
         <textarea id="cprompt" spellcheck="false">Create a simple coloring page for children ages 3-8.
@@ -240,6 +247,7 @@ const $dl      = document.getElementById('dlbtn');
   if(s('recsec'))  $recSec.value  = s('recsec');
   if(s('prompt'))  $prompt.value  = s('prompt');
   if(s('please'))  document.getElementById('pleasemode').checked = s('please')==='true';
+  if(s('poop'))    document.getElementById('poopmode').checked = s('poop')==='true';
 })();
 function saveCfg(){
   const p = (k,v) => localStorage.setItem('db_'+k,v);
@@ -247,12 +255,14 @@ function saveCfg(){
   p('imgmodel',$imgModel.value); p('voice',$voice.value);
   p('recsec',$recSec.value); p('prompt',$prompt.value);
   p('please',document.getElementById('pleasemode').checked);
+  p('poop',document.getElementById('poopmode').checked);
 }
 [$key,$repKey,$gemKey,$voice,$recSec,$prompt].forEach(
   el => el.addEventListener('input', saveCfg));
 $voice.addEventListener('change', saveCfg);
 $imgModel.addEventListener('change', saveCfg);
 document.getElementById('pleasemode').addEventListener('change', saveCfg);
+document.getElementById('poopmode').addEventListener('change', saveCfg);
 
 function toggleKey(){
   $key.type = $key.type==='password' ? 'text' : 'password';
@@ -447,10 +457,30 @@ const BLOCKED_WORDS = [
   "pee","fart","vomit","snot",
 ];
 const SAFE_REJECT_MSG = "Hmm, I can't draw that. How about something fun like an animal or a rainbow?";
+const POOP_WORDS = new Set(["poop","poops","pooped","pooping","poopy"]);
 
 function isSafe(text){
   const lower = text.toLowerCase();
   return !BLOCKED_WORDS.some(w => lower.includes(w));
+}
+
+function wordTokens(text){
+  return (text || '').toLowerCase().match(/[a-z]+/g) || [];
+}
+
+function containsPoop(text){
+  return wordTokens(text).some(w => POOP_WORDS.has(w));
+}
+
+function normalizeVoiceCommand(text){
+  return wordTokens(text).join(' ');
+}
+
+function parseAdminPoopCommand(text){
+  const normalized = normalizeVoiceCommand(text);
+  if(normalized === 'admin mode enable poop mode') return 'enable';
+  if(normalized === 'admin mode disable poop mode') return 'disable';
+  return null;
 }
 
 // ── STATE ─────────────────────────────────────────
@@ -525,6 +555,9 @@ const VOICE_LINES = {
   busy:      "Hold on, I'm still working on your picture! Almost done...",
   blocked:   "Hmm, I can't draw that. How about something fun like an animal or a rainbow?",
   say_please: "Oops! Don't forget to say please! Try again and say the magic word!",
+  poop_blocked: "I'm sorry, I can't draw this. You have to ask again without the word poop in it.",
+  poop_mode_enabled: "Poop mode enabled.",
+  poop_mode_disabled: "Poop mode disabled.",
   reboot:    "Rebooting now! See you in a moment.",
 };
 
