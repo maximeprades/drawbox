@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -140,11 +141,7 @@ class VoiceFeedback:
             "Accept": "audio/mpeg",
         })
         with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                f.write(chunk)
+            shutil.copyfileobj(resp, f, length=8192)
 
     def _warm_up(self):
         log.info("warming up voice cache…")
@@ -419,10 +416,7 @@ def main():
     if IMAGE_MODEL == "nano-banana" and not drawbox_core.GEMINI_API_KEY:
         log.warning("GEMINI_API_KEY not set (needed for nano-banana).")
 
-    # Safety mode defaults ON
-    SAFETY_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not SAFETY_MODE_FILE.exists():
-        SAFETY_MODE_FILE.touch()
+    drawbox_core.ensure_safety_mode_default()
     log.info("safety filter: %s", "on" if safety_mode_enabled() else "off")
 
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)

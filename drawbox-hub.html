@@ -119,10 +119,41 @@ const DEFAULT_PIES = [
 ];
 
 // ── LOAD CONFIG ──────────────────────────────
+const _ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+function _isHttpUrl(url){
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch(e){ return false; }
+}
+
+function _sanitizePis(raw){
+  if(!Array.isArray(raw)) return [];
+  return raw
+    .filter(p => p && typeof p === 'object'
+      && typeof p.id === 'string' && _ID_RE.test(p.id)
+      && typeof p.name === 'string'
+      && _isHttpUrl(p.url) && _isHttpUrl(p.ssh))
+    .map(p => ({ id: p.id, name: p.name, url: p.url, ssh: p.ssh }));
+}
+
+function _esc(s){
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
 function loadPiConfig(){
   const saved = localStorage.getItem('drawbox_hub_pis');
   if(saved){
-    try { return JSON.parse(saved); } catch(e){}
+    try {
+      const pis = _sanitizePis(JSON.parse(saved));
+      if(pis.length) return pis;
+    } catch(e){}
   }
   return DEFAULT_PIES;
 }
@@ -144,28 +175,33 @@ const pis = loadPiConfig();
 
 function renderCards(){
   const grid = document.getElementById('piGrid');
-  grid.innerHTML = pis.map((pi, i) => `
-    <div class="pi-card" id="card-${pi.id}">
+  grid.innerHTML = pis.map((pi, i) => {
+    const id = _esc(pi.id);
+    const name = _esc(pi.name);
+    const url = _esc(pi.url);
+    const ssh = _esc(pi.ssh);
+    return `
+    <div class="pi-card" id="card-${id}">
       <div class="pi-header">
-        <div class="pi-dot loading" id="dot-${pi.id}"></div>
-        <div class="pi-name">${pi.name}</div>
-        <span class="pi-status-tag offline" id="tag-${pi.id}">checking...</span>
+        <div class="pi-dot loading" id="dot-${id}"></div>
+        <div class="pi-name">${name}</div>
+        <span class="pi-status-tag offline" id="tag-${id}">checking...</span>
       </div>
       <div class="pi-stats">
-        <div class="pi-stat"><div class="val" id="temp-${pi.id}">--</div><div class="lbl">Temperature</div></div>
-        <div class="pi-stat"><div class="val" id="uptime-${pi.id}">--</div><div class="lbl">Uptime</div></div>
-        <div class="pi-stat"><div class="val" id="printer-${pi.id}">--</div><div class="lbl">Printer</div></div>
+        <div class="pi-stat"><div class="val" id="temp-${id}">--</div><div class="lbl">Temperature</div></div>
+        <div class="pi-stat"><div class="val" id="uptime-${id}">--</div><div class="lbl">Uptime</div></div>
+        <div class="pi-stat"><div class="val" id="printer-${id}">--</div><div class="lbl">Printer</div></div>
       </div>
       <div class="pi-actions">
-        <a href="${pi.url}" target="_blank" class="btn btn-blue">&#128214; Dashboard</a>
-        <a href="${pi.ssh}" target="_blank" class="btn btn-dark">&#128187; Terminal</a>
-        <button class="btn btn-outline" onclick="toggleSettings('${pi.id}')">&#9881; Quick Settings</button>
-        <button class="btn btn-outline" onclick="refreshPi('${pi.id}')">&#8635; Refresh</button>
+        <a href="${url}" target="_blank" rel="noopener" class="btn btn-blue">&#128214; Dashboard</a>
+        <a href="${ssh}" target="_blank" rel="noopener" class="btn btn-dark">&#128187; Terminal</a>
+        <button class="btn btn-outline" onclick="toggleSettings('${id}')">&#9881; Quick Settings</button>
+        <button class="btn btn-outline" onclick="refreshPi('${id}')">&#8635; Refresh</button>
       </div>
-      <div class="pi-settings" id="settings-${pi.id}">
+      <div class="pi-settings" id="settings-${id}">
         <div class="setting-row">
           <span class="setting-label">Image Model</span>
-          <select class="model-select" id="model-${pi.id}" onchange="updateModel('${pi.id}')">
+          <select class="model-select" id="model-${id}" onchange="updateModel('${id}')">
             <option value="flux-schnell">FLUX Schnell</option>
             <option value="nano-banana">Nano Banana 2</option>
             <option value="gpt-image">GPT Image</option>
@@ -173,19 +209,19 @@ function renderCards(){
         </div>
         <div class="setting-row">
           <span class="setting-label">Please Mode</span>
-          <button class="toggle-btn" id="please-${pi.id}" onclick="togglePiSetting('${pi.id}','please')">--</button>
+          <button class="toggle-btn" id="please-${id}" onclick="togglePiSetting('${id}','please')">--</button>
         </div>
         <div class="setting-row">
           <span class="setting-label">Safety Filter</span>
-          <button class="toggle-btn" id="safety-${pi.id}" onclick="togglePiSetting('${pi.id}','safety')">--</button>
+          <button class="toggle-btn" id="safety-${id}" onclick="togglePiSetting('${id}','safety')">--</button>
         </div>
         <div class="setting-row">
           <span class="setting-label">Poop Mode</span>
-          <button class="toggle-btn" id="poop-${pi.id}" onclick="togglePiSetting('${pi.id}','poop')">--</button>
+          <button class="toggle-btn" id="poop-${id}" onclick="togglePiSetting('${id}','poop')">--</button>
         </div>
       </div>
     </div>
-  `).join('');
+  `;}).join('');
 }
 renderCards();
 
@@ -336,7 +372,9 @@ function saveConfig(){
   try {
     const parsed = JSON.parse(document.getElementById('configJson').value);
     if(!Array.isArray(parsed)) throw new Error('Must be a JSON array');
-    savePiConfig(parsed);
+    const sanitized = _sanitizePis(parsed);
+    if(!sanitized.length) throw new Error('No valid Pis after sanitizing (need id, name, http(s) url and ssh)');
+    savePiConfig(sanitized);
     toast('Config saved! Reloading...');
     setTimeout(()=> location.reload(), 500);
   } catch(e){

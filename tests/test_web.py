@@ -6,6 +6,8 @@ journalctl, nmcli, aplay, etc. that don't exist on macOS."""
 import json
 from pathlib import Path
 
+import pytest
+
 import drawbox_core
 import drawbox_web
 
@@ -119,20 +121,25 @@ def test_scripts_post_rejects_non_dict(client):
 
 # ── /api/please-mode + /api/safety-mode ────────────
 
-def test_please_mode_toggle(client):
-    assert client.get("/api/please-mode").get_json()["enabled"] is False
-    client.post("/api/please-mode", json={"enabled": True})
-    assert client.get("/api/please-mode").get_json()["enabled"] is True
-    client.post("/api/please-mode", json={"enabled": False})
-    assert client.get("/api/please-mode").get_json()["enabled"] is False
+@pytest.mark.parametrize("endpoint, default", [
+    ("/api/please-mode", False),
+    ("/api/safety-mode", True),
+])
+def test_mode_toggle(client, endpoint, default):
+    if default:
+        # Default is ON (sentinel created at import time)
+        drawbox_core.SAFETY_MODE_FILE.touch()
+    assert client.get(endpoint).get_json()["enabled"] is default
+    client.post(endpoint, json={"enabled": not default})
+    assert client.get(endpoint).get_json()["enabled"] is (not default)
+    client.post(endpoint, json={"enabled": default})
+    assert client.get(endpoint).get_json()["enabled"] is default
 
 
-def test_safety_mode_toggle(client):
-    # Default is ON (sentinel created at import time)
-    drawbox_core.SAFETY_MODE_FILE.touch()
-    assert client.get("/api/safety-mode").get_json()["enabled"] is True
-    client.post("/api/safety-mode", json={"enabled": False})
-    assert client.get("/api/safety-mode").get_json()["enabled"] is False
+@pytest.mark.parametrize("endpoint", ["/api/please-mode", "/api/safety-mode", "/api/poop-mode"])
+def test_mode_toggle_rejects_non_boolean(client, endpoint):
+    assert client.post(endpoint, json={"enabled": "true"}).status_code == 400
+    assert client.post(endpoint, json={}).status_code == 400
 
 
 def test_poop_mode_defaults_enabled(client):
@@ -183,20 +190,17 @@ def test_keys_post_ignores_non_string_values(client):
 
 # ── /api/generate input validation (mocked image generator) ──
 
-def test_generate_rejects_empty(client):
-    r = client.post("/api/generate", json={"description": ""}).get_json()
-    assert r["ok"] is False
-
-
-def test_generate_rejects_missing(client):
-    r = client.post("/api/generate", json={}).get_json()
-    assert r["ok"] is False
-
-
-def test_generate_rejects_too_long(client):
-    r = client.post("/api/generate", json={"description": "x" * 501}).get_json()
-    assert r["ok"] is False
-    assert "long" in r["error"].lower()
+@pytest.mark.parametrize("payload, error_substr", [
+    ({"description": ""}, None),
+    ({}, None),
+    ({"description": "x" * 501}, "long"),
+    ({"description": 123}, None),
+])
+def test_generate_rejects_invalid_descriptions(client, payload, error_substr):
+    body = client.post("/api/generate", json=payload).get_json()
+    assert body["ok"] is False
+    if error_substr:
+        assert error_substr in body["error"].lower()
 
 
 def test_generate_rejects_blocked_when_safety_on(client):
@@ -251,34 +255,28 @@ def test_generate_checks_poop_before_safety(client):
     assert r["error"] == drawbox_core.DEFAULT_VOICE_LINES["poop_blocked"]["text"]
 
 
-def test_generate_rejects_non_string(client):
-    r = client.post("/api/generate", json={"description": 123}).get_json()
+def test_generate_returns_generic_error_on_failure(client, monkeypatch):
+    drawbox_core.SAFETY_MODE_FILE.unlink(missing_ok=True)
+    monkeypatch.setattr(drawbox_web, "generate_image",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("internal /home/secret")))
+    r = client.post("/api/generate", json={"description": "a happy puppy"}).get_json()
     assert r["ok"] is False
+    assert "/home/secret" not in r["error"]
 
 
 # ── /api/wifi/connect input validation ─────────────
 
-def test_wifi_connect_requires_ssid(client):
-    r = client.post("/api/wifi/connect", json={"ssid": ""}).get_json()
-    assert r["ok"] is False
-    assert "SSID" in r["error"]
-
-
-def test_wifi_connect_rejects_control_chars(client):
-    r = client.post("/api/wifi/connect",
-                    json={"ssid": "ok-net", "password": "bad\x00pw"}).get_json()
-    assert r["ok"] is False
-
-
-def test_wifi_connect_rejects_oversize(client):
-    r = client.post("/api/wifi/connect",
-                    json={"ssid": "x" * 65}).get_json()
-    assert r["ok"] is False
-
-
-def test_wifi_connect_ignores_non_string_ssid(client):
-    r = client.post("/api/wifi/connect", json={"ssid": 123}).get_json()
-    assert r["ok"] is False
+@pytest.mark.parametrize("payload, error_substr", [
+    ({"ssid": ""}, "SSID"),
+    ({"ssid": "ok-net", "password": "bad\x00pw"}, None),
+    ({"ssid": "x" * 65}, None),
+    ({"ssid": 123}, None),
+])
+def test_wifi_connect_rejects_invalid_payloads(client, payload, error_substr):
+    body = client.post("/api/wifi/connect", json=payload).get_json()
+    assert body["ok"] is False
+    if error_substr:
+        assert error_substr in body["error"]
 
 
 def test_parse_saved_wifi_profiles_sorts_and_unescapes():
