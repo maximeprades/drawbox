@@ -1125,6 +1125,25 @@ async function runFlow(){
       return;
     }
 
+    const adminPoopAction = parseAdminPoopCommand(text);
+    if(adminPoopAction){
+      const enabled = adminPoopAction === 'enable';
+      document.getElementById('poopmode').checked = enabled;
+      saveCfg();
+      log('Poop mode '+(enabled ? 'enabled' : 'disabled')+' via admin voice command','ok');
+      await speakLine(enabled ? 'poop_mode_enabled' : 'poop_mode_disabled');
+      setState('IDLE','Ready');
+      return;
+    }
+
+    // POOP MODE CHECK
+    if(!document.getElementById('poopmode').checked && containsPoop(text)){
+      log('Poop blocked: '+text,'err');
+      await speakLine('poop_blocked');
+      setState('IDLE','Ready');
+      return;
+    }
+
     // SAFETY CHECK
     if(!isSafe(text)){
       log('Blocked: '+text,'err');

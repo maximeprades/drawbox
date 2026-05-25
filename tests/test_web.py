@@ -134,6 +134,18 @@ def test_safety_mode_toggle(client):
     assert client.get("/api/safety-mode").get_json()["enabled"] is False
 
 
+def test_poop_mode_defaults_enabled(client):
+    assert client.get("/api/poop-mode").get_json()["enabled"] is True
+
+
+def test_poop_mode_toggle(client):
+    assert client.get("/api/poop-mode").get_json()["enabled"] is True
+    client.post("/api/poop-mode", json={"enabled": False})
+    assert client.get("/api/poop-mode").get_json()["enabled"] is False
+    client.post("/api/poop-mode", json={"enabled": True})
+    assert client.get("/api/poop-mode").get_json()["enabled"] is True
+
+
 # ── /api/keys ──────────────────────────────────────
 
 def test_keys_get_returns_masked(client, monkeypatch):
@@ -191,6 +203,51 @@ def test_generate_rejects_blocked_when_safety_on(client):
     r = client.post("/api/generate", json={"description": "a gun and a knife"}).get_json()
     assert r["ok"] is False
     assert "blocked" in r["error"].lower()
+
+
+def test_generate_allows_poop_when_poop_mode_on(client, monkeypatch, tmp_path):
+    img = tmp_path / "out.png"
+    img.write_bytes(b"fake-png")
+    monkeypatch.setattr(drawbox_web, "generate_image", lambda *a, **k: str(img))
+    monkeypatch.setattr(drawbox_web, "print_image", lambda *a, **k: None)
+
+    r = client.post("/api/generate", json={"description": "a car with poop on the roof"}).get_json()
+
+    assert r["ok"] is True
+    assert r["image"]
+
+
+def test_generate_rejects_poop_when_poop_mode_off(client):
+    client.post("/api/poop-mode", json={"enabled": False})
+    r = client.post("/api/generate", json={"description": "a car with poop on the roof"}).get_json()
+    assert r["ok"] is False
+    assert r["error"] == drawbox_core.DEFAULT_VOICE_LINES["poop_blocked"]["text"]
+
+
+def test_generate_rejects_poop_family_when_poop_mode_off(client):
+    client.post("/api/poop-mode", json={"enabled": False})
+    for word in ("poops", "pooped", "pooping", "poopy"):
+        r = client.post("/api/generate", json={"description": f"a {word} dinosaur"}).get_json()
+        assert r["ok"] is False
+        assert "poop" in r["error"]
+
+
+def test_generate_uses_custom_poop_blocked_message(client):
+    client.post("/api/poop-mode", json={"enabled": False})
+    client.post("/api/scripts", json={
+        "voice_lines": {"poop_blocked": "Custom poop nope."},
+    })
+    r = client.post("/api/generate", json={"description": "poopy car"}).get_json()
+    assert r["ok"] is False
+    assert r["error"] == "Custom poop nope."
+
+
+def test_generate_checks_poop_before_safety(client):
+    client.post("/api/poop-mode", json={"enabled": False})
+    drawbox_core.SAFETY_MODE_FILE.touch()
+    r = client.post("/api/generate", json={"description": "poop with a gun"}).get_json()
+    assert r["ok"] is False
+    assert r["error"] == drawbox_core.DEFAULT_VOICE_LINES["poop_blocked"]["text"]
 
 
 def test_generate_rejects_non_string(client):

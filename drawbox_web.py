@@ -24,9 +24,10 @@ from drawbox_core import (
     API_KEYS_FILE, DEFAULT_COLORING_PROMPT, DEFAULT_JOKES, DEFAULT_SETTINGS,
     DEFAULT_VOICE_LINES, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE,
     PRINT_LOG_FILE, SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys,
-    apply_api_keys, default_scripts, generate_image, is_safe,
-    load_scripts, load_settings, log_print_event, mask_key, print_image,
-    save_scripts, save_settings,
+    apply_api_keys, contains_poop, default_scripts, generate_image, is_safe,
+    load_scripts, load_settings, log_print_event, mask_key,
+    poop_blocked_message, poop_mode_enabled, print_image, save_scripts,
+    save_settings, set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox.web")
@@ -737,6 +738,13 @@ body {
           </div>
           <button class="toggle" id="safetyToggle" onclick="toggleSafety()"></button>
         </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Poop Mode</div>
+            <div class="setting-desc">When on, kids can ask for funny poop drawings. When off, requests using "poop", "pooped", "pooping", or "poopy" are rejected.</div>
+          </div>
+          <button class="toggle" id="poopToggle" onclick="togglePoop()"></button>
+        </div>
       </div>
     </div>
 
@@ -946,7 +954,7 @@ function showPage(page) {
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('show');
   if (page === 'overview') loadAnalytics();
-  if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadApiKeys(); }
+  if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadPoopMode(); loadApiKeys(); }
   if (page === 'scripts') loadScripts();
 }
 
@@ -1212,6 +1220,29 @@ async function toggleSafety() {
   } catch(e) { toast('Error: ' + e.message, false); }
 }
 
+// ── POOP MODE ─────────────────────────────────
+async function loadPoopMode() {
+  try {
+    const r = await fetch('/api/poop-mode');
+    const d = await r.json();
+    $('poopToggle').className = 'toggle' + (d.enabled ? ' on' : '');
+  } catch(e) {}
+}
+
+async function togglePoop() {
+  try {
+    const r = await fetch('/api/poop-mode');
+    const d = await r.json();
+    await fetch('/api/poop-mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: !d.enabled})
+    });
+    loadPoopMode();
+    toast(d.enabled ? 'Poop mode disabled' : 'Poop mode enabled!');
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
 // ── SCRIPTS ──────────────────────────────────
 const VOICE_LINE_META = {
   ready:      'Played on startup',
@@ -1224,6 +1255,9 @@ const VOICE_LINE_META = {
   busy:       'Played if button pressed while already generating',
   blocked:    'Played when safety filter blocks a request',
   say_please: 'Played when Please Mode is on and kid forgets',
+  poop_blocked: 'Played when Poop Mode is off and a request uses poop words',
+  poop_mode_enabled: 'Played when the admin voice command enables Poop Mode',
+  poop_mode_disabled: 'Played when the admin voice command disables Poop Mode',
   reboot:     'Played on long button press reboot',
 };
 
@@ -1478,6 +1512,7 @@ loadAnalytics();
 loadSettings();
 loadPleaseMode();
 loadSafetyMode();
+loadPoopMode();
 loadApiKeys();
 </script>
 </body>
@@ -1557,6 +1592,8 @@ def api_generate():
         return jsonify(ok=False, error="Please describe what to draw.")
     if len(desc) > 500:
         return jsonify(ok=False, error="Description too long (max 500 chars).")
+    if not poop_mode_enabled() and contains_poop(desc):
+        return jsonify(ok=False, error=poop_blocked_message())
     if SAFETY_MODE_FILE.exists() and not is_safe(desc):
         return jsonify(
             ok=False,
@@ -1691,6 +1728,13 @@ def api_safety_mode():
     if request.method == "GET":
         return jsonify(enabled=SAFETY_MODE_FILE.exists())
     return _toggle_sentinel(SAFETY_MODE_FILE)
+
+@app.route("/api/poop-mode", methods=["GET", "POST"])
+def api_poop_mode():
+    if request.method == "GET":
+        return jsonify(enabled=poop_mode_enabled())
+    data = request.get_json(silent=True) or {}
+    return jsonify(ok=True, enabled=set_poop_mode_enabled(data.get("enabled")))
 
 @app.route("/api/keys", methods=["GET", "POST"])
 def api_keys():

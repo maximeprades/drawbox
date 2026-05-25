@@ -179,6 +179,10 @@ function renderCards(){
           <span class="setting-label">Safety Filter</span>
           <button class="toggle-btn" id="safety-${pi.id}" onclick="togglePiSetting('${pi.id}','safety')">--</button>
         </div>
+        <div class="setting-row">
+          <span class="setting-label">Poop Mode</span>
+          <button class="toggle-btn" id="poop-${pi.id}" onclick="togglePiSetting('${pi.id}','poop')">--</button>
+        </div>
       </div>
     </div>
   `).join('');
@@ -245,6 +249,15 @@ async function fetchPiStatus(pi){
       btn.className = 'toggle-btn'+(sd.enabled ? ' on' : '');
     } catch(e){}
 
+    // Fetch poop mode
+    try {
+      const pr = await fetch(pi.url+'/api/poop-mode');
+      const pd = await pr.json();
+      const btn = document.getElementById('poop-'+pi.id);
+      btn.textContent = pd.enabled ? 'ON' : 'OFF';
+      btn.className = 'toggle-btn'+(pd.enabled ? ' on' : '');
+    } catch(e){}
+
   } catch(e){
     dot.className = 'pi-dot offline';
     tag.className = 'pi-status-tag offline';
@@ -287,7 +300,13 @@ async function updateModel(piId){
 
 async function togglePiSetting(piId, setting){
   const pi = pis.find(p => p.id === piId);
-  const endpoint = setting === 'please' ? '/api/please-mode' : '/api/safety-mode';
+  const endpoints = {
+    please: '/api/please-mode',
+    safety: '/api/safety-mode',
+    poop: '/api/poop-mode',
+  };
+  const endpoint = endpoints[setting];
+  if(!endpoint) return;
   try {
     const r = await fetch(pi.url+endpoint);
     const d = await r.json();

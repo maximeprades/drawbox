@@ -32,8 +32,10 @@ import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, CACHE_DIR, DEFAULT_JOKES, DEFAULT_VOICE_LINES, IMAGE_MODEL,
     SAFETY_MODE_FILE, SETTINGS_FILE, apply_api_keys, generate_image,
-    has_please, is_safe, load_settings, load_scripts, log_print_event,
-    mask_key, please_mode_enabled, print_image, safety_mode_enabled,
+    contains_poop, has_please, is_safe, load_settings, load_scripts,
+    log_print_event, mask_key, parse_admin_poop_command, please_mode_enabled,
+    poop_mode_enabled, print_image, safety_mode_enabled,
+    set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox")
@@ -414,6 +416,19 @@ def _handle_press(voice):
         text = transcribe(path)
         if not text or len(text.strip()) < 2:
             voice.play("too_short")
+            return
+
+        admin_poop_action = parse_admin_poop_command(text)
+        if admin_poop_action:
+            enabled = admin_poop_action == "enable"
+            set_poop_mode_enabled(enabled)
+            log.info("poop mode %s via voice command", "enabled" if enabled else "disabled")
+            voice.play("poop_mode_enabled" if enabled else "poop_mode_disabled")
+            return
+
+        if not poop_mode_enabled() and contains_poop(text):
+            log.info("poop blocked: %r", text)
+            voice.play("poop_blocked")
             return
 
         if safety_mode_enabled() and not is_safe(text):

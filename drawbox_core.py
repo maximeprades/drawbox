@@ -114,6 +114,7 @@ BLOCKED_WORDS = frozenset({
 })
 
 _WORD_RE = re.compile(r"[a-z]+")
+POOP_WORDS = frozenset({"poop", "poops", "pooped", "pooping", "poopy"})
 
 
 def is_safe(text):
@@ -127,6 +128,30 @@ def is_safe(text):
         return True
     tokens = set(_WORD_RE.findall(text.lower()))
     return not tokens & BLOCKED_WORDS
+
+
+def contains_poop(text):
+    """Return True when text contains a whole-word poop-family token."""
+    if not text:
+        return False
+    tokens = set(_WORD_RE.findall(text.lower()))
+    return bool(tokens & POOP_WORDS)
+
+
+def normalize_voice_command(text):
+    """Normalize a transcript for strict voice-command matching."""
+    tokens = _WORD_RE.findall((text or "").lower())
+    return " ".join(tokens)
+
+
+def parse_admin_poop_command(text):
+    """Return 'enable'/'disable' for exact admin poop commands, else None."""
+    normalized = normalize_voice_command(text)
+    if normalized == "admin mode enable poop mode":
+        return "enable"
+    if normalized == "admin mode disable poop mode":
+        return "disable"
+    return None
 
 
 def safety_mode_enabled():
@@ -178,6 +203,12 @@ DEFAULT_VOICE_LINES = {
                    "desc": "Played when safety filter blocks a request"},
     "say_please": {"text": "Oops! Don't forget to say please! Try again and say the magic word!",
                    "desc": "Played when Please Mode is on and kid forgets to say please"},
+    "poop_blocked": {"text": "I'm sorry, I can't draw this. You have to ask again without the word poop in it.",
+                     "desc": "Played when Poop Mode is off and a request uses poop words"},
+    "poop_mode_enabled": {"text": "Poop mode enabled.",
+                          "desc": "Played when the admin voice command enables Poop Mode"},
+    "poop_mode_disabled": {"text": "Poop mode disabled.",
+                           "desc": "Played when the admin voice command disables Poop Mode"},
     "reboot":     {"text": "Rebooting now! See you in a moment.",
                    "desc": "Played on long button press reboot"},
 }
@@ -265,6 +296,7 @@ DEFAULT_SETTINGS = {
     "tts_stability": 0.5,
     "tts_style": 0.0,
     "record_seconds": 10,
+    "poop_mode_enabled": True,
 }
 
 
@@ -289,6 +321,22 @@ def load_settings():
 def save_settings(data):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def poop_mode_enabled():
+    return bool(load_settings().get("poop_mode_enabled", True))
+
+
+def set_poop_mode_enabled(enabled):
+    settings = load_settings()
+    settings["poop_mode_enabled"] = bool(enabled)
+    save_settings(settings)
+    return bool(settings["poop_mode_enabled"])
+
+
+def poop_blocked_message():
+    return load_scripts()["voice_lines"].get("poop_blocked") or \
+        DEFAULT_VOICE_LINES["poop_blocked"]["text"]
 
 
 def load_coloring_prompt():
