@@ -185,20 +185,15 @@ class VoiceFeedback:
                     p = self._generate_one(line)
                     if p:
                         paths.append(p)
-                    if self._tts_rate_limit_remaining() > 0:
-                        break
-                self._cache[key] = [p for p in paths if p]
+                if paths:
+                    self._cache[key] = paths
             else:
                 p = self._generate_one(val)
                 if p:
                     self._cache[key] = p
-            if self._tts_rate_limit_remaining() > 0:
-                break
         uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
         for joke in uncached:
             self._generate_one(joke)
-            if self._tts_rate_limit_remaining() > 0:
-                break
         self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
                             if self._tts_path(j).exists()]
         log.info("voice cache ready: %d jokes, %d lines",
@@ -225,7 +220,7 @@ class VoiceFeedback:
     def play(self, key, block=True):
         """Play a cached line by key. Falls back to live TTS if not cached."""
         entry = self._cache.get(key)
-        if entry is None:
+        if entry is None or entry == []:
             text = VOICE_LINES.get(key, key)
             if isinstance(text, list):
                 text = random.choice(text)
