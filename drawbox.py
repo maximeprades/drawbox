@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -324,7 +325,8 @@ def _candidate_input_devices():
         if d.get("max_input_channels", 0) <= 0:
             continue
         name = d.get("name", "")
-        if any(kw in name for kw in USB_MIC_NAME_HINTS):
+        name_lower = name.lower()
+        if any(kw.lower() in name_lower for kw in USB_MIC_NAME_HINTS):
             add(i)
 
     try:
@@ -340,6 +342,8 @@ def _candidate_input_devices():
 
     if candidates:
         add(None)  # last resort: PortAudio's default device
+    else:
+        _log_no_sounddevice_inputs(devices)
     return candidates
 
 
@@ -353,12 +357,148 @@ def _input_device_label(device):
         return f"input device {device}"
 
 
+def _log_no_sounddevice_inputs(devices):
+    if not devices:
+        log.warning("sounddevice saw no audio devices; trying arecord fallback")
+        return
+    summary = []
+    for i, d in enumerate(devices):
+        summary.append(
+            f"{i}:{d.get('name', 'unknown')} "
+            f"in={d.get('max_input_channels', '?')} "
+            f"out={d.get('max_output_channels', '?')}"
+        )
+    log.warning(
+        "sounddevice saw %d audio device(s) but none with input channels: %s; "
+        "trying arecord fallback",
+        len(devices),
+        "; ".join(summary),
+    )
+
+
+def _arecord_input_devices():
+    """Return ALSA input devices from arecord -l, USB-looking devices first."""
+    if not shutil.which("arecord"):
+        log.warning("arecord is not installed; cannot use ALSA recording fallback")
+        return []
+    try:
+        result = subprocess.run(
+            ["arecord", "-l"], capture_output=True, text=True, timeout=5, check=False)
+    except subprocess.TimeoutExpired:
+        log.warning("arecord -l timed out; cannot enumerate ALSA input devices")
+        return []
+    except OSError as e:
+        log.warning("could not run arecord -l: %s", e)
+        return []
+
+    output = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 0:
+        log.warning("arecord -l failed (%s): %s", result.returncode, output.strip())
+        return []
+
+    preferred = []
+    others = []
+    for line in output.splitlines():
+        match = re.search(r"card\s+(\d+):.*device\s+(\d+):", line, re.IGNORECASE)
+        if not match:
+            continue
+        card, device = match.groups()
+        entry = (f"plughw:{card},{device}", line.strip())
+        line_lower = line.lower()
+        if any(kw.lower() in line_lower for kw in USB_MIC_NAME_HINTS):
+            preferred.append(entry)
+        else:
+            others.append(entry)
+
+    devices = []
+    seen = set()
+    for device_arg, label in preferred + others:
+        if device_arg not in seen:
+            devices.append((device_arg, label))
+            seen.add(device_arg)
+    devices.append((None, "arecord default input"))
+    return devices
+
+
+def _record_audio_with_arecord(seconds):
+    last_error = None
+    for device_arg, label in _arecord_input_devices():
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        cmd = [
+            "arecord", "-d", str(int(seconds)), "-f", "S16_LE",
+            "-r", str(SAMPLE_RATE), "-c", "1",
+        ]
+        if device_arg:
+            cmd.extend(["-D", device_arg])
+        cmd.append(path)
+        try:
+            log.info("trying %s via arecord", label)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=max(seconds + 5, 10), check=False)
+        except subprocess.TimeoutExpired as e:
+            last_error = f"timeout recording from {label}: {e}"
+            log.warning("arecord timed out from %s", label)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+        except OSError as e:
+            last_error = e
+            log.warning("could not run arecord for %s: %s", label, e)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            last_error = stderr or f"arecord exited {result.returncode}"
+            log.warning("arecord failed from %s: %s", label, last_error)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+
+        try:
+            duration = sf.info(path).duration
+        except Exception as e:
+            last_error = e
+            log.warning("could not inspect arecord output from %s: %s", label, e)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+
+        if duration < MIN_RECORDING_SEC:
+            last_error = f"recording too short: {duration:.1f}s"
+            log.warning("arecord recording from %s too short: %.1fs", label, duration)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+
+        log.info("recorded %.1fs to %s with arecord (%s)", duration, path, label)
+        return path
+
+    if last_error:
+        log.warning("arecord fallback failed; last error: %s", last_error)
+    return None
+
+
 def record_audio(seconds=RECORD_SECONDS):
     """Record for ``seconds`` seconds and return a WAV path, or None if silent."""
     log.info("recording for %ds", seconds)
 
     last_error = None
-    for device in _candidate_input_devices():
+    candidates = _candidate_input_devices()
+    for device in candidates:
         frames = []
         statuses = []
         device_label = _input_device_label(device)
@@ -396,10 +536,20 @@ def record_audio(seconds=RECORD_SECONDS):
         log.info("recorded %.1fs to %s", duration, path)
         return path
 
-    if last_error:
-        log.warning("all input devices failed; last error: %s", last_error)
+    if not candidates:
+        log.warning("no PortAudio input devices found; trying arecord fallback")
     else:
-        log.warning("no usable input devices found; check microphone connection")
+        log.warning("PortAudio input devices failed; trying arecord fallback")
+
+    path = _record_audio_with_arecord(seconds)
+    if path:
+        return path
+
+    if last_error:
+        log.warning("all input devices failed; last PortAudio error: %s", last_error)
+    else:
+        log.warning(
+            "no usable input devices found; check USB mic connection and run arecord -l")
     return None
 
 

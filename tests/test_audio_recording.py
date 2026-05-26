@@ -106,6 +106,7 @@ def test_record_audio_returns_none_when_all_devices_fail(monkeypatch):
             return False
 
     monkeypatch.setattr(drawbox.sd, "InputStream", FailingInputStream)
+    monkeypatch.setattr(drawbox, "_record_audio_with_arecord", lambda seconds: None)
 
     assert drawbox.record_audio(seconds=1) is None
 
@@ -214,3 +215,63 @@ def test_play_falls_back_for_empty_cache_list(monkeypatch, tmp_path):
     feedback.play("empty")
 
     assert played_live == ["fallback line"]
+
+
+def test_arecord_input_devices_prioritizes_usb(monkeypatch):
+    output = """**** List of CAPTURE Hardware Devices ****
+card 1: Builtin [Built-in Mic], device 0: Analog [Analog]
+card 2: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]
+"""
+
+    class Result:
+        returncode = 0
+        stdout = output
+        stderr = ""
+
+    monkeypatch.setattr(drawbox.shutil, "which", lambda name: "/usr/bin/arecord")
+    monkeypatch.setattr(drawbox.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert drawbox._arecord_input_devices() == [
+        ("plughw:2,0", "card 2: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]"),
+        ("plughw:1,0", "card 1: Builtin [Built-in Mic], device 0: Analog [Analog]"),
+        (None, "arecord default input"),
+    ]
+
+
+def test_record_audio_falls_back_to_arecord_when_sounddevice_has_no_inputs(monkeypatch, tmp_path):
+    devices = [
+        {"name": "Built-in Output", "max_input_channels": 0, "max_output_channels": 2},
+    ]
+    commands = []
+
+    class ListResult:
+        returncode = 0
+        stdout = "card 2: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]\n"
+        stderr = ""
+
+    class RecordResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    class Info:
+        duration = 1.0
+
+    def run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd == ["arecord", "-l"]:
+            return ListResult()
+        return RecordResult()
+
+    monkeypatch.setattr(drawbox.sd, "query_devices", lambda device=None: devices if device is None else devices[device])
+    monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
+    monkeypatch.setattr(drawbox.shutil, "which", lambda name: "/usr/bin/arecord")
+    monkeypatch.setattr(drawbox.subprocess, "run", run)
+    monkeypatch.setattr(drawbox.sf, "info", lambda path: Info())
+
+    path = drawbox.record_audio(seconds=1)
+
+    assert path is not None
+    assert commands[0] == ["arecord", "-l"]
+    assert commands[1][0:2] == ["arecord", "-d"]
+    assert commands[1][commands[1].index("-D") + 1] == "plughw:2,0"
