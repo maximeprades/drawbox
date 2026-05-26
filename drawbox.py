@@ -22,7 +22,7 @@ import tempfile
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+from urllib.error import HTTPError
 
 import numpy as np
 import sounddevice as sd
@@ -101,6 +101,8 @@ class VoiceFeedback:
         self._cache = {}            # key → Path or [Path, ...]
         self._joke_paths = []
         self._silence_path = None
+        self._tts_rate_limited_until = 0.0
+        self._tts_rate_limit_logged = False
         self._warm_up()
 
     def _tts_path(self, text):
@@ -114,13 +116,43 @@ class VoiceFeedback:
         path = self._tts_path(text)
         if path.exists():
             return path
+        if self._tts_rate_limit_remaining() > 0:
+            return None
         log.info("caching TTS: %s…", text[:50])
         try:
             self._elevenlabs_tts(text, str(path))
-        except Exception:
-            log.exception("ElevenLabs TTS failed for %r", text[:80])
+        except HTTPError as e:
+            if e.code == 429:
+                self._handle_tts_rate_limit(e)
+            else:
+                log.warning("ElevenLabs TTS HTTP %s failed for %r",
+                            e.code, text[:80])
+            return None
+        except Exception as e:
+            log.warning("ElevenLabs TTS failed for %r: %s", text[:80], e)
             return None
         return path
+
+    def _tts_rate_limit_remaining(self):
+        return max(0.0, self._tts_rate_limited_until - time.time())
+
+    def _handle_tts_rate_limit(self, error):
+        retry_after = 60.0
+        try:
+            retry_after = max(1.0, float(error.headers.get("Retry-After", retry_after)))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        self._tts_rate_limited_until = max(
+            self._tts_rate_limited_until,
+            time.time() + retry_after,
+        )
+        if not self._tts_rate_limit_logged:
+            log.warning(
+                "ElevenLabs TTS rate-limited (HTTP 429); using cached audio "
+                "and espeak fallback for %.0fs",
+                self._tts_rate_limit_remaining(),
+            )
+            self._tts_rate_limit_logged = True
 
     def _elevenlabs_tts(self, text, out_path):
         import urllib.request
@@ -148,16 +180,20 @@ class VoiceFeedback:
         self._silence_path = self._ensure_silence_file()
         for key, val in VOICE_LINES.items():
             if isinstance(val, list):
-                paths = [self._generate_one(line) for line in val]
-                self._cache[key] = [p for p in paths if p]
+                paths = []
+                for line in val:
+                    p = self._generate_one(line)
+                    if p:
+                        paths.append(p)
+                if paths:
+                    self._cache[key] = paths
             else:
                 p = self._generate_one(val)
                 if p:
                     self._cache[key] = p
         uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
-        if uncached:
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                list(pool.map(self._generate_one, uncached))
+        for joke in uncached:
+            self._generate_one(joke)
         self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
                             if self._tts_path(j).exists()]
         log.info("voice cache ready: %d jokes, %d lines",
@@ -184,7 +220,7 @@ class VoiceFeedback:
     def play(self, key, block=True):
         """Play a cached line by key. Falls back to live TTS if not cached."""
         entry = self._cache.get(key)
-        if entry is None:
+        if entry is None or entry == []:
             text = VOICE_LINES.get(key, key)
             if isinstance(text, list):
                 text = random.choice(text)
@@ -223,19 +259,35 @@ class VoiceFeedback:
 
     def _play_live(self, text):
         log.info("speaking: %s", text)
+        if self._tts_rate_limit_remaining() > 0:
+            self._speak_with_espeak(text)
+            return
         fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
         try:
             self._elevenlabs_tts(text, tmp_path)
             self._play_file(tmp_path)
+        except HTTPError as e:
+            if e.code == 429:
+                self._handle_tts_rate_limit(e)
+                log.warning("live TTS rate-limited; falling back to espeak")
+            else:
+                log.warning("live TTS HTTP %s failed; falling back to espeak", e.code)
+            self._speak_with_espeak(text)
         except Exception:
             log.exception("live TTS failed; falling back to espeak")
-            subprocess.run(["espeak", text], check=False)
+            self._speak_with_espeak(text)
         finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+    def _speak_with_espeak(self, text):
+        try:
+            subprocess.run(["espeak", text], check=False)
+        except FileNotFoundError:
+            log.error("no fallback speech command available (espeak)")
 
     def play_jokes_until_done(self, thread):
         """Tell one random joke if the generation thread is still working."""
@@ -286,7 +338,8 @@ def _candidate_input_devices():
         if d.get("max_input_channels", 0) > 0:
             add(i)
 
-    add(None)  # last resort: PortAudio's default device
+    if candidates:
+        add(None)  # last resort: PortAudio's default device
     return candidates
 
 
@@ -344,9 +397,9 @@ def record_audio(seconds=RECORD_SECONDS):
         return path
 
     if last_error:
-        log.error("all input devices failed; last error: %s", last_error)
+        log.warning("all input devices failed; last error: %s", last_error)
     else:
-        log.error("no usable input devices found")
+        log.warning("no usable input devices found; check microphone connection")
     return None
 
 
