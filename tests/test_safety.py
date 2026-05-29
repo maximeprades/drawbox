@@ -49,11 +49,17 @@ def test_is_safe_does_not_match_substrings():
 def test_has_please_english():
     assert has_please("a cat please") is True
     assert has_please("PLEASE draw a dog") is True
+    assert has_please("draw me please a dragon") is True
+    assert has_please("draw me a dragon, please!") is True
+    assert has_please("can you please draw a cat") is True
     assert has_please("a cat") is False
 
 
 def test_has_please_french():
     assert has_please("un chat s'il te plait") is True
+    assert has_please("un chat s’il te plaît") is True
+    assert has_please("un chat s il te plait") is True
+    assert has_please("un chat sil vous plaît") is True
     assert has_please("un chat svp") is True
 
 
