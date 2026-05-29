@@ -1936,14 +1936,19 @@ def _nmcli_split(line):
     return fields
 
 
-def _parse_saved_wifi_profiles(output):
+def _parse_saved_wifi_profiles(output, ssid_by_uuid=None):
+    ssid_by_uuid = ssid_by_uuid or {}
     profiles = []
     for line in (output or "").splitlines():
         if not line.strip():
             continue
         parts = _nmcli_split(line)
-        parts += [""] * (5 - len(parts))
-        name, uuid, typ, ssid, priority = parts[:5]
+        if len(parts) >= 5:
+            name, uuid, typ, ssid, priority = parts[:5]
+        else:
+            parts += [""] * (4 - len(parts))
+            name, uuid, typ, priority = parts[:4]
+            ssid = ssid_by_uuid.get(uuid, "")
         if typ.lower() not in {"wifi", "802-11-wireless"}:
             continue
         try:
@@ -1960,13 +1965,33 @@ def _parse_saved_wifi_profiles(output):
     return profiles
 
 
+def _nmcli_connection_ssid(uuid):
+    if not _WIFI_UUID_RE.match(uuid or ""):
+        return ""
+    r = subprocess.run(
+        ["nmcli", "-g", "802-11-wireless.ssid", "con", "show", uuid],
+        capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        log.warning("could not read WiFi SSID for connection %s: %s",
+                    uuid, r.stderr.strip() or r.stdout.strip() or "nmcli failed")
+        return ""
+    value = r.stdout.rstrip("\r\n")
+    return _nmcli_split(value)[0] if value else ""
+
+
 def _saved_wifi_profiles():
     r = subprocess.run(
-        ["nmcli", "-t", "-f", "NAME,UUID,TYPE,802-11-wireless.ssid,connection.autoconnect-priority", "con", "show"],
+        ["nmcli", "-t", "-f", "NAME,UUID,TYPE,AUTOCONNECT-PRIORITY", "con", "show"],
         capture_output=True, text=True, timeout=15)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or r.stdout.strip() or "nmcli failed")
-    return _parse_saved_wifi_profiles(r.stdout)
+    profiles = _parse_saved_wifi_profiles(r.stdout)
+    for profile in profiles:
+        ssid = _nmcli_connection_ssid(profile["uuid"])
+        if ssid:
+            profile["ssid"] = ssid
+    profiles.sort(key=lambda p: (-p["priority"], p["name"].lower()))
+    return profiles
 
 
 def _next_wifi_priority(profiles=None):
