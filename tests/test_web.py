@@ -295,6 +295,20 @@ def test_parse_saved_wifi_profiles_sorts_and_unescapes():
     assert [n["priority"] for n in saved] == [100, 20]
 
 
+def test_parse_saved_wifi_profiles_ignores_extra_summary_fields():
+    uuid = "11111111-1111-1111-1111-111111111111"
+    saved = drawbox_web._parse_saved_wifi_profiles(
+        f"Home:{uuid}:wifi:10:unexpected\n",
+        {uuid: "Home"},
+    )
+    assert saved == [{
+        "name": "Home",
+        "uuid": uuid,
+        "ssid": "Home",
+        "priority": 10,
+    }]
+
+
 def test_wifi_saved_get_parses_nmcli(client, monkeypatch):
     calls = []
     uuid = "11111111-1111-1111-1111-111111111111"

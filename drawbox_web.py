@@ -1943,12 +1943,9 @@ def _parse_saved_wifi_profiles(output, ssid_by_uuid=None):
         if not line.strip():
             continue
         parts = _nmcli_split(line)
-        if len(parts) >= 5:
-            name, uuid, typ, ssid, priority = parts[:5]
-        else:
-            parts += [""] * (4 - len(parts))
-            name, uuid, typ, priority = parts[:4]
-            ssid = ssid_by_uuid.get(uuid, "")
+        parts += [""] * (4 - len(parts))
+        name, uuid, typ, priority = parts[:4]
+        ssid = ssid_by_uuid.get(uuid, "")
         if typ.lower() not in {"wifi", "802-11-wireless"}:
             continue
         try:
@@ -1990,7 +1987,6 @@ def _saved_wifi_profiles():
         ssid = _nmcli_connection_ssid(profile["uuid"])
         if ssid:
             profile["ssid"] = ssid
-    profiles.sort(key=lambda p: (-p["priority"], p["name"].lower()))
     return profiles
 
 
