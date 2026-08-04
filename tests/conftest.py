@@ -32,6 +32,8 @@ def drawbox_dir(tmp_path, monkeypatch):
         "PRINT_LOG_FILE": dx / "print_log.jsonl",
         "SCRIPTS_FILE": dx / "voice_scripts.json",
         "CACHE_DIR": dx / "voice_cache",
+        "PAIRING_FILE": dx / "pairing.json",
+        "PAIRED_DEVICES_FILE": dx / "paired_devices.json",
     }
     for name, value in overrides.items():
         monkeypatch.setattr(drawbox_core, name, value)
@@ -49,11 +51,17 @@ def drawbox_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(drawbox_dir, monkeypatch):
-    """Flask test client with an isolated drawbox dir and known fake keys."""
+    """Flask test client paired as a device, with an isolated drawbox dir."""
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("REPLICATE_API_TOKEN", "")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    import drawbox_core
     import drawbox_web
     drawbox_web.app.testing = True
-    return drawbox_web.app.test_client()
+    test_client = drawbox_web.app.test_client()
+    # Pair through the real flow so every test exercises the token guard.
+    code = drawbox_core.open_pairing_window()
+    token = drawbox_core.redeem_pairing_code(code, "tests")
+    test_client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+    return test_client

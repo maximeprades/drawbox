@@ -110,18 +110,8 @@ def test_record_audio_returns_none_when_all_devices_fail(monkeypatch):
     assert drawbox.record_audio(seconds=1) is None
 
 
-def _voice_feedback_without_warmup(tmp_path):
-    feedback = object.__new__(drawbox.VoiceFeedback)
-    feedback._cache = {}
-    feedback._joke_paths = []
-    feedback._silence_path = None
-    feedback._tts_rate_limited_until = 0.0
-    feedback._tts_rate_limit_logged = False
-    return feedback
-
-
 def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, caplog):
-    feedback = _voice_feedback_without_warmup(tmp_path)
+    feedback = drawbox.VoiceFeedback()
     monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
     attempts = []
 
@@ -146,8 +136,8 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
     assert "rate-limited (HTTP 429)" in caplog.text
 
 
-def test_live_tts_uses_espeak_during_rate_limit(monkeypatch, tmp_path):
-    feedback = _voice_feedback_without_warmup(tmp_path)
+def test_live_tts_uses_espeak_during_rate_limit(monkeypatch):
+    feedback = drawbox.VoiceFeedback()
     feedback._tts_rate_limited_until = drawbox.time.time() + 30
     spoken = []
 
@@ -173,10 +163,10 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
     monkeypatch.setattr(drawbox, "KIDS_JOKES", ["cached joke"])
     monkeypatch.setattr(drawbox.VoiceFeedback, "_ensure_silence_file", lambda self: None)
 
-    helper = _voice_feedback_without_warmup(tmp_path)
-    cached_line = helper._tts_path("already cached")
-    cached_option = helper._tts_path("cached option")
-    cached_joke = helper._tts_path("cached joke")
+    feedback = drawbox.VoiceFeedback()
+    cached_line = feedback._tts_path("already cached")
+    cached_option = feedback._tts_path("cached option")
+    cached_joke = feedback._tts_path("cached joke")
     for cached_path in (cached_line, cached_option, cached_joke):
         cached_path.write_bytes(b"mp3")
 
@@ -194,7 +184,7 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
 
     monkeypatch.setattr(drawbox.VoiceFeedback, "_elevenlabs_tts", rate_limited)
 
-    feedback = drawbox.VoiceFeedback()
+    feedback.warm_up()
 
     assert attempts == ["needs network"]
     assert "first" not in feedback._cache
@@ -203,14 +193,13 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
     assert feedback._joke_paths == [cached_joke]
 
 
-def test_play_falls_back_for_empty_cache_list(monkeypatch, tmp_path):
-    feedback = _voice_feedback_without_warmup(tmp_path)
-    feedback._cache = {"empty": []}
+def test_play_falls_back_to_live_tts_for_uncached_key(monkeypatch):
+    feedback = drawbox.VoiceFeedback()
     played_live = []
 
-    monkeypatch.setattr(drawbox, "VOICE_LINES", {"empty": "fallback line"})
+    monkeypatch.setattr(drawbox, "VOICE_LINES", {"missing": "fallback line"})
     monkeypatch.setattr(feedback, "_play_live", lambda text: played_live.append(text))
 
-    feedback.play("empty")
+    feedback.play("missing")
 
     assert played_live == ["fallback line"]
