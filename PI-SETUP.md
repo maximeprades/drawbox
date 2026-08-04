@@ -67,14 +67,16 @@ cd ~/
 If you have the repo cloned:
 
 ```bash
-cd drawbox && git pull && cp drawbox.py drawbox_web.py drawbox-simulator.html ~/
+cd drawbox && git pull && cp drawbox_core.py drawbox.py drawbox_web.py drawbox-simulator.html ~/ && mkdir -p ~/templates && cp templates/index.html ~/templates/
 ```
 
 Or copy files from your Mac (run this **from your Mac**, not the Pi):
 
 ```bash
 cd /Users/maximep/Documents/Code/drawbox
-scp drawbox.py drawbox_web.py drawbox-simulator.html check.sh deploy-web.sh pi@drawbox.local:~/
+scp drawbox_core.py drawbox.py drawbox_web.py drawbox-simulator.html check.sh deploy-web.sh pi@drawbox.local:~/
+ssh pi@drawbox.local "mkdir -p ~/templates"
+scp templates/index.html pi@drawbox.local:~/templates/
 ```
 
 ## 6. Add the Replicate Token to the Service Files

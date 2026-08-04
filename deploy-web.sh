@@ -13,13 +13,18 @@ echo "   From: $DIR"
 echo ""
 
 # ── 1. Copy files ────────────────────────────────
+# drawbox.py ships together with the web files: pairing (button + spoken
+# code) spans both services, so partial deploys could lock you out.
 echo "📦 Copying files to Pi..."
 scp "$DIR/drawbox_core.py" \
+    "$DIR/drawbox.py" \
     "$DIR/drawbox_web.py" \
     "$DIR/drawbox-guide.html" \
     "$DIR/drawbox-simulator.html" \
     "$DIR/check.sh" \
     "$PI":~/
+ssh "$PI" "mkdir -p ~/templates"
+scp "$DIR/templates/index.html" "$PI":~/templates/
 echo "   ✅ Files copied"
 
 # ── 2. Install Flask + set up service (all in one SSH) ──
@@ -121,7 +126,9 @@ echo "   ✅ Service file created"
 sudo systemctl daemon-reload
 sudo systemctl enable drawbox-web
 sudo systemctl restart drawbox-web
-echo "   ✅ Service started"
+# Restart the button service too so voice pairing matches the deployed web code
+sudo systemctl restart drawbox 2>/dev/null || true
+echo "   ✅ Services restarted"
 
 # Quick health check
 sleep 2

@@ -33,10 +33,10 @@ import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, CACHE_DIR, DEFAULT_JOKES, DEFAULT_VOICE_LINES, IMAGE_MODEL,
     SAFETY_MODE_FILE, SETTINGS_FILE, apply_api_keys, generate_image,
-    contains_poop, has_please, is_safe, load_settings, load_scripts,
-    log_print_event, mask_key, parse_admin_poop_command, please_mode_enabled,
-    poop_mode_enabled, print_image, safety_mode_enabled,
-    set_poop_mode_enabled,
+    contains_poop, has_please, is_pairing_command, is_safe, load_settings,
+    load_scripts, log_print_event, mask_key, open_pairing_window,
+    parse_admin_poop_command, please_mode_enabled, poop_mode_enabled,
+    print_image, safety_mode_enabled, set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox")
@@ -94,16 +94,18 @@ _apply_tts_settings()
 
 
 class VoiceFeedback:
-    """Pre-generates ElevenLabs TTS lines once, caches .mp3 by content hash."""
+    """Caches ElevenLabs TTS lines as .mp3 keyed by content hash.
+
+    Construction is cheap and offline; call :meth:`warm_up` once at startup
+    to generate the audio cache (network).
+    """
 
     def __init__(self):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        self._cache = {}            # key → Path or [Path, ...]
+        self._cache = {}            # key → Path or non-empty [Path, ...]
         self._joke_paths = []
         self._silence_path = None
         self._tts_rate_limited_until = 0.0
         self._tts_rate_limit_logged = False
-        self._warm_up()
 
     def _tts_path(self, text):
         """Cache filename keyed on voice + tuning + text."""
@@ -116,22 +118,35 @@ class VoiceFeedback:
         path = self._tts_path(text)
         if path.exists():
             return path
+        return path if self._synthesize(text, str(path)) else None
+
+    def _synthesize(self, text, out_path):
+        """Fetch TTS audio for ``text`` into ``out_path``.
+
+        The single place that talks to ElevenLabs: owns the rate-limit gate
+        and all error handling. Returns True iff audio was written.
+        """
         if self._tts_rate_limit_remaining() > 0:
-            return None
-        log.info("caching TTS: %s…", text[:50])
+            return False
+        log.info("generating TTS: %s…", text[:50])
         try:
-            self._elevenlabs_tts(text, str(path))
+            self._elevenlabs_tts(text, out_path)
+            return True
         except HTTPError as e:
             if e.code == 429:
                 self._handle_tts_rate_limit(e)
             else:
                 log.warning("ElevenLabs TTS HTTP %s failed for %r",
                             e.code, text[:80])
-            return None
         except Exception as e:
             log.warning("ElevenLabs TTS failed for %r: %s", text[:80], e)
-            return None
-        return path
+            # A mid-download failure can leave a partial file; don't let it
+            # poison the cache.
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
+        return False
 
     def _tts_rate_limit_remaining(self):
         return max(0.0, self._tts_rate_limited_until - time.time())
@@ -175,8 +190,11 @@ class VoiceFeedback:
         with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
             shutil.copyfileobj(resp, f, length=8192)
 
-    def _warm_up(self):
+    def warm_up(self):
+        """Generate and cache every voice line and joke. Needs the network;
+        call once at startup, before the button loop."""
         log.info("warming up voice cache…")
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         self._silence_path = self._ensure_silence_file()
         for key, val in VOICE_LINES.items():
             if isinstance(val, list):
@@ -191,8 +209,7 @@ class VoiceFeedback:
                 p = self._generate_one(val)
                 if p:
                     self._cache[key] = p
-        uncached = [j for j in KIDS_JOKES if not self._tts_path(j).exists()]
-        for joke in uncached:
+        for joke in KIDS_JOKES:
             self._generate_one(joke)
         self._joke_paths = [self._tts_path(j) for j in KIDS_JOKES
                             if self._tts_path(j).exists()]
@@ -220,15 +237,13 @@ class VoiceFeedback:
     def play(self, key, block=True):
         """Play a cached line by key. Falls back to live TTS if not cached."""
         entry = self._cache.get(key)
-        if entry is None or entry == []:
+        if entry is None:
             text = VOICE_LINES.get(key, key)
             if isinstance(text, list):
                 text = random.choice(text)
             self._play_live(text)
             return
         path = random.choice(entry) if isinstance(entry, list) else entry
-        if not path:
-            return
         if block:
             self._play_file(path)
         else:
@@ -259,24 +274,13 @@ class VoiceFeedback:
 
     def _play_live(self, text):
         log.info("speaking: %s", text)
-        if self._tts_rate_limit_remaining() > 0:
-            self._speak_with_espeak(text)
-            return
         fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
         try:
-            self._elevenlabs_tts(text, tmp_path)
-            self._play_file(tmp_path)
-        except HTTPError as e:
-            if e.code == 429:
-                self._handle_tts_rate_limit(e)
-                log.warning("live TTS rate-limited; falling back to espeak")
+            if self._synthesize(text, tmp_path):
+                self._play_file(tmp_path)
             else:
-                log.warning("live TTS HTTP %s failed; falling back to espeak", e.code)
-            self._speak_with_espeak(text)
-        except Exception:
-            log.exception("live TTS failed; falling back to espeak")
-            self._speak_with_espeak(text)
+                self._speak_with_espeak(text)
         finally:
             try:
                 os.unlink(tmp_path)
@@ -474,6 +478,7 @@ def main():
 
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
     voice = VoiceFeedback()
+    voice.warm_up()
 
     log.info("ready — press the red button")
     voice.play("ready")
@@ -528,6 +533,14 @@ def _handle_press(voice):
             set_poop_mode_enabled(enabled)
             log.info("poop mode %s via voice command", "enabled" if enabled else "disabled")
             voice.play("poop_mode_enabled" if enabled else "poop_mode_disabled")
+            return
+
+        if is_pairing_command(text):
+            code = open_pairing_window()
+            log.info("pairing window opened via voice command")
+            voice.play_dynamic(
+                "Pairing mode! The code is " + " ".join(code)
+                + ". Type it in your DrawBox app within two minutes.")
             return
 
         if not poop_mode_enabled() and contains_poop(text):
