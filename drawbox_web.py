@@ -135,12 +135,16 @@ def cors_preflight(path):
 _PUBLIC_API_PATHS = {"/api/pair", "/api/status"}
 
 
+# EventSource and plain <a download> navigation can't send headers, so the
+# log endpoints (and only those) may pass the token as a query parameter.
+_QUERY_TOKEN_PATHS = {"/api/logs", "/api/logs/download"}
+
+
 def _request_token():
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[len("Bearer "):].strip()
-    if request.path == "/api/logs":
-        # EventSource can't set headers; only the log stream may use ?token=.
+    if request.path in _QUERY_TOKEN_PATHS:
         return request.args.get("token", "")
     return ""
 
@@ -165,7 +169,10 @@ def api_pair():
     name = data.get("name")
     if not isinstance(code, str) or not code.strip():
         return jsonify(ok=False, error="Pairing code required"), 400
-    token = redeem_pairing_code(code.strip(),
+    code = code.strip()
+    if code.isdigit():
+        code = code.zfill(6)  # spoken codes keep leading zeros; typed may not
+    token = redeem_pairing_code(code,
                                 name if isinstance(name, str) else "")
     if not token:
         return jsonify(ok=False, error="Wrong or expired code. Press the "

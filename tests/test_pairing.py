@@ -1,5 +1,7 @@
 """Device pairing: voice command, code redemption, and the API token guard."""
 
+import types
+
 import drawbox_core
 
 
@@ -27,6 +29,12 @@ def test_pairing_code_redeems_once(drawbox_dir):
     assert drawbox_core.is_valid_device_token(token)
     # success closes the window
     assert drawbox_core.redeem_pairing_code(code, "again") is None
+
+
+def test_wrong_guess_keeps_window_open_for_retry(drawbox_dir):
+    code = drawbox_core.open_pairing_window()
+    assert drawbox_core.redeem_pairing_code(_wrong_code(code), "typo") is None
+    assert drawbox_core.redeem_pairing_code(code, "second try")
 
 
 def test_pairing_window_burns_after_max_attempts(drawbox_dir):
@@ -96,6 +104,17 @@ def test_pair_endpoint_rejects_wrong_code(client, drawbox_dir):
     assert r.status_code == 400
 
 
+def test_pair_accepts_typed_code_without_leading_zero(client, drawbox_dir, monkeypatch):
+    import drawbox_web
+    monkeypatch.setattr(drawbox_core.secrets, "randbelow", lambda n: 12345)
+    code = drawbox_core.open_pairing_window()
+    assert code == "012345"  # spoken with the leading zero
+
+    anon = drawbox_web.app.test_client()
+    body = anon.post("/api/pair", json={"code": "12345", "name": "hasty typist"}).get_json()
+    assert body["ok"] is True
+
+
 def test_paired_devices_list_and_revoke_via_api(client):
     devices = client.get("/api/pair/devices").get_json()["devices"]
     assert [d["name"] for d in devices] == ["tests"]
@@ -107,7 +126,7 @@ def test_paired_devices_list_and_revoke_via_api(client):
     assert client.get("/api/pair/devices").status_code == 401
 
 
-def test_query_token_works_only_for_the_log_stream(client, drawbox_dir, monkeypatch):
+def test_query_token_works_only_for_the_log_endpoints(client, drawbox_dir, monkeypatch):
     import drawbox_web
     anon = drawbox_web.app.test_client()
     code = drawbox_core.open_pairing_window()
@@ -124,11 +143,16 @@ def test_query_token_works_only_for_the_log_stream(client, drawbox_dir, monkeypa
 
     monkeypatch.setattr(drawbox_web.subprocess, "Popen",
                         lambda *a, **k: FakeJournal())
+    monkeypatch.setattr(
+        drawbox_web.subprocess, "run",
+        lambda *a, **k: types.SimpleNamespace(stdout="log text", stderr="", returncode=0))
 
-    # EventSource can't send headers, so /api/logs accepts ?token= ...
+    # EventSource and <a download> can't send headers, so the log endpoints
+    # accept ?token= ...
     r = anon.get(f"/api/logs?token={token}")
     assert r.status_code == 200
     assert "hello from journalctl" in r.get_data(as_text=True)
+    assert anon.get(f"/api/logs/download?token={token}").status_code == 200
 
     # ... but nothing else does.
     assert anon.get(f"/api/analytics?token={token}").status_code == 401

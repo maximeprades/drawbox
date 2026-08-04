@@ -549,7 +549,8 @@ body {
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div class="card-title" style="font-family:ui-monospace,monospace;font-size:13px;color:var(--muted-foreground)">journalctl -u drawbox -u drawbox-web --since "24 hours ago" -f</div>
         <div style="display:flex;gap:8px">
-          <a class="btn btn-outline btn-sm" href="/api/logs/download" download>Download last 24h</a>
+          <a class="btn btn-outline btn-sm" href="/api/logs/download" download
+             onclick="this.href='/api/logs/download?token='+encodeURIComponent(deviceToken())">Download last 24h</a>
           <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
         </div>
       </div>

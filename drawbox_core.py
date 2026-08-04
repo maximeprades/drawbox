@@ -226,25 +226,33 @@ def open_pairing_window():
 def redeem_pairing_code(code, device_name):
     """Exchange a spoken pairing code for a device token, or None if invalid.
 
-    Any success closes the window; so does the fifth wrong guess.
+    The window file is atomically claimed (renamed away) before validation,
+    so one spoken code can never mint two tokens even with concurrent web
+    workers. A wrong guess restores the window with the attempt counted;
+    the fifth wrong guess, expiry, or success all leave the window closed.
     """
+    claim = PAIRING_FILE.with_name(PAIRING_FILE.name + ".claim")
     try:
-        window = json.loads(PAIRING_FILE.read_text())
-    except (OSError, ValueError):
+        os.replace(PAIRING_FILE, claim)  # atomic: exactly one claimer wins
+    except OSError:
         return None
+    try:
+        window = json.loads(claim.read_text())
+    except (OSError, ValueError):
+        window = None
+    finally:
+        claim.unlink(missing_ok=True)
     if not isinstance(window, dict) or time.time() > window.get("expires_at", 0):
         return None
     if not hmac.compare_digest(window.get("code_hash", ""),
                                _hash_secret(code or "")):
         window["attempts"] = window.get("attempts", 0) + 1
         if window["attempts"] >= PAIRING_MAX_ATTEMPTS:
-            PAIRING_FILE.unlink(missing_ok=True)
             log.warning("pairing window closed after %d wrong codes",
                         window["attempts"])
         else:
             _write_secure_json(PAIRING_FILE, window)
         return None
-    PAIRING_FILE.unlink(missing_ok=True)
     token = secrets.token_urlsafe(32)
     devices = list_paired_devices()
     devices.append({
