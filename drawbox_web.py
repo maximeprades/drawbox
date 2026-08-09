@@ -25,11 +25,11 @@ from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
     SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys, _write_secure_json,
     apply_api_keys, contains_poop, default_scripts, ensure_safety_mode_default,
-    generate_image, is_safe, is_valid_device_token, list_paired_devices,
-    load_scripts, load_settings, log_print_event, mask_key,
-    please_mode_enabled, poop_blocked_message, poop_mode_enabled, print_image,
-    redeem_pairing_code, revoke_paired_device, safety_mode_enabled,
-    save_scripts, save_settings, set_poop_mode_enabled,
+    generate_image, has_please, is_safe, is_valid_device_token,
+    list_paired_devices, load_scripts, load_settings, log_print_event,
+    mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
+    print_image, redeem_pairing_code, revoke_paired_device,
+    safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox.web")
@@ -278,6 +278,13 @@ def api_generate():
             ok=False,
             error="That description contains blocked words. "
                   "Try something fun like an animal or a rainbow!",
+        )
+    if please_mode_enabled() and not has_please(desc):
+        scripts = load_scripts()
+        return jsonify(
+            ok=False,
+            error=scripts["voice_lines"].get("say_please") or
+                  drawbox_core.DEFAULT_VOICE_LINES["say_please"]["text"],
         )
 
     if not _gen_lock.acquire(blocking=False):

@@ -185,6 +185,12 @@ _PLEASE_PHRASES = (
     "please", "svp",
     "s'il vous plait", "s'il te plait",
     "s'il vous plaît", "s'il te plaît",
+    "s’il vous plait", "s’il te plait",
+    "s’il vous plaît", "s’il te plaît",
+    "s il vous plait", "s il te plait",
+    "s il vous plaît", "s il te plaît",
+    "sil vous plait", "sil te plait",
+    "sil vous plaît", "sil te plaît",
 )
 
 

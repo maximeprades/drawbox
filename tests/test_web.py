@@ -255,6 +255,36 @@ def test_generate_checks_poop_before_safety(client):
     assert r["error"] == drawbox_core.DEFAULT_VOICE_LINES["poop_blocked"]["text"]
 
 
+def test_generate_rejects_missing_please_when_please_mode_on(client):
+    drawbox_core.PLEASE_MODE_FILE.touch()
+    r = client.post("/api/generate", json={"description": "a happy puppy"}).get_json()
+    assert r["ok"] is False
+    assert r["error"] == drawbox_core.DEFAULT_VOICE_LINES["say_please"]["text"]
+
+
+def test_generate_uses_custom_say_please_message(client):
+    drawbox_core.PLEASE_MODE_FILE.touch()
+    client.post("/api/scripts", json={
+        "voice_lines": {"say_please": "Magic word, tiny human."},
+    })
+    r = client.post("/api/generate", json={"description": "a happy puppy"}).get_json()
+    assert r["ok"] is False
+    assert r["error"] == "Magic word, tiny human."
+
+
+def test_generate_allows_please_mode_request_with_please(client, monkeypatch, tmp_path):
+    drawbox_core.PLEASE_MODE_FILE.touch()
+    img = tmp_path / "out.png"
+    img.write_bytes(b"fake-png")
+    monkeypatch.setattr(drawbox_web, "generate_image", lambda *a, **k: str(img))
+    monkeypatch.setattr(drawbox_web, "print_image", lambda *a, **k: None)
+
+    r = client.post("/api/generate", json={"description": "a happy puppy please"}).get_json()
+
+    assert r["ok"] is True
+    assert r["image"]
+
+
 def test_generate_returns_generic_error_on_failure(client, monkeypatch):
     drawbox_core.SAFETY_MODE_FILE.unlink(missing_ok=True)
     monkeypatch.setattr(drawbox_web, "generate_image",
