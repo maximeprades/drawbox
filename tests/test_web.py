@@ -310,27 +310,19 @@ def test_wifi_connect_rejects_invalid_payloads(client, payload, error_substr):
 
 
 def test_parse_saved_wifi_profiles_sorts_and_unescapes():
-    home_uuid = "11111111-1111-1111-1111-111111111111"
-    grandma_uuid = "33333333-3333-3333-3333-333333333333"
     out = (
-        f"Home\\:Main:{home_uuid}:wifi:20\n"
+        "Home\\:Main:11111111-1111-1111-1111-111111111111:wifi:20\n"
         "Ethernet:22222222-2222-2222-2222-222222222222:ethernet::0\n"
-        f"Grandma:{grandma_uuid}:802-11-wireless:100\n"
+        "Grandma:33333333-3333-3333-3333-333333333333:802-11-wireless:100\n"
     )
-    saved = drawbox_web._parse_saved_wifi_profiles(out, {
-        home_uuid: "Home:Main",
-        grandma_uuid: "Grandma",
-    })
+    saved = drawbox_web._parse_saved_wifi_profiles(out)
     assert [n["ssid"] for n in saved] == ["Grandma", "Home:Main"]
     assert [n["priority"] for n in saved] == [100, 20]
 
 
 def test_parse_saved_wifi_profiles_ignores_extra_summary_fields():
     uuid = "11111111-1111-1111-1111-111111111111"
-    saved = drawbox_web._parse_saved_wifi_profiles(
-        f"Home:{uuid}:wifi:10:unexpected\n",
-        {uuid: "Home"},
-    )
+    saved = drawbox_web._parse_saved_wifi_profiles(f"Home:{uuid}:wifi:10:unexpected\n")
     assert saved == [{
         "name": "Home",
         "uuid": uuid,
@@ -353,8 +345,8 @@ def test_wifi_saved_get_parses_nmcli(client, monkeypatch):
         calls.append(args)
         if args == ["nmcli", "-t", "-f", "NAME,UUID,TYPE,AUTOCONNECT-PRIORITY", "con", "show"]:
             return Result(f"Home:{uuid}:wifi:10\n")
-        if args == ["nmcli", "-g", "802-11-wireless.ssid", "con", "show", uuid]:
-            return Result("Home\\:Main\n")
+        if args == ["nmcli", "-g", "connection.uuid,802-11-wireless.ssid", "con", "show", uuid]:
+            return Result(f"{uuid}\nHome\\:Main\n")
         raise AssertionError(f"unexpected nmcli call: {args}")
 
     monkeypatch.setattr(drawbox_web.subprocess, "run", fake_run)
@@ -366,6 +358,26 @@ def test_wifi_saved_get_parses_nmcli(client, monkeypatch):
         "priority": 10,
     }]
     assert "802-11-wireless.ssid" not in calls[0][3]
+    assert len(calls) == 2  # one listing + one batched SSID lookup
+
+
+def test_wifi_saved_get_falls_back_to_names_when_ssid_lookup_fails(client, monkeypatch):
+    uuid = "11111111-1111-1111-1111-111111111111"
+
+    class Result:
+        def __init__(self, stdout, returncode=0):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, *a, **k):
+        if args[:3] == ["nmcli", "-t", "-f"]:
+            return Result(f"Home:{uuid}:wifi:10\n")
+        return Result("", returncode=1)
+
+    monkeypatch.setattr(drawbox_web.subprocess, "run", fake_run)
+    body = client.get("/api/wifi/saved").get_json()
+    assert body["saved"][0]["ssid"] == "Home"
 
 
 def test_wifi_saved_add_preconfigures_network(client, monkeypatch):

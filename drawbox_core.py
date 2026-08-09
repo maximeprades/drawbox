@@ -7,10 +7,13 @@ import from here so behavior stays consistent.
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import time
@@ -34,6 +37,8 @@ SAFETY_MODE_FILE = DRAWBOX_DIR / "safety_mode"
 PRINT_LOG_FILE = DRAWBOX_DIR / "print_log.jsonl"
 SCRIPTS_FILE = DRAWBOX_DIR / "voice_scripts.json"
 CACHE_DIR = DRAWBOX_DIR / "voice_cache"
+PAIRING_FILE = DRAWBOX_DIR / "pairing.json"
+PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
 
 # ── CONFIG ────────────────────────────────────────
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
@@ -194,6 +199,108 @@ def has_please(text):
     return any(p in t for p in _PLEASE_PHRASES)
 
 
+# ── DEVICE PAIRING ────────────────────────────────
+# Physical-presence auth for the dashboard: press the button, say
+# "authorize", and DrawBox speaks a one-time code. Redeeming the code
+# issues a long-lived device token. Only hashes touch the disk.
+
+PAIRING_WINDOW_SEC = 120
+PAIRING_MAX_ATTEMPTS = 5
+
+
+def is_pairing_command(text):
+    """True when a transcript asks to pair a new device."""
+    tokens = set(normalize_voice_command(text).split())
+    return bool(tokens & {"authorize", "authorise"})
+
+
+def _hash_secret(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def open_pairing_window():
+    """Start a pairing window and return the one-time code to speak aloud."""
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    _write_secure_json(PAIRING_FILE, {
+        "code_hash": _hash_secret(code),
+        "expires_at": time.time() + PAIRING_WINDOW_SEC,
+        "attempts": 0,
+    })
+    return code
+
+
+def redeem_pairing_code(code, device_name):
+    """Exchange a spoken pairing code for a device token, or None if invalid.
+
+    The window file is atomically claimed (renamed away) before validation,
+    so one spoken code can never mint two tokens even with concurrent web
+    workers. A wrong guess restores the window with the attempt counted;
+    the fifth wrong guess, expiry, or success all leave the window closed.
+    """
+    claim = PAIRING_FILE.with_name(PAIRING_FILE.name + ".claim")
+    try:
+        os.replace(PAIRING_FILE, claim)  # atomic: exactly one claimer wins
+    except OSError:
+        return None
+    try:
+        window = json.loads(claim.read_text())
+    except (OSError, ValueError):
+        window = None
+    finally:
+        claim.unlink(missing_ok=True)
+    if not isinstance(window, dict) or time.time() > window.get("expires_at", 0):
+        return None
+    if not hmac.compare_digest(window.get("code_hash", ""),
+                               _hash_secret(code or "")):
+        window["attempts"] = window.get("attempts", 0) + 1
+        if window["attempts"] >= PAIRING_MAX_ATTEMPTS:
+            log.warning("pairing window closed after %d wrong codes",
+                        window["attempts"])
+        else:
+            _write_secure_json(PAIRING_FILE, window)
+        return None
+    token = secrets.token_urlsafe(32)
+    devices = list_paired_devices()
+    devices.append({
+        "id": secrets.token_hex(6),
+        "name": (device_name or "").strip()[:64] or "New device",
+        "token_hash": _hash_secret(token),
+        "created": datetime.now().isoformat(timespec="seconds"),
+    })
+    _write_secure_json(PAIRED_DEVICES_FILE, devices)
+    log.info("paired new device: %s", devices[-1]["name"])
+    return token
+
+
+def list_paired_devices():
+    if not PAIRED_DEVICES_FILE.exists():
+        return []
+    try:
+        devices = json.loads(PAIRED_DEVICES_FILE.read_text())
+    except (OSError, ValueError) as e:
+        log.warning("could not read %s: %s", PAIRED_DEVICES_FILE, e)
+        return []
+    return devices if isinstance(devices, list) else []
+
+
+def is_valid_device_token(token):
+    if not token:
+        return False
+    token_hash = _hash_secret(token)
+    return any(hmac.compare_digest(d.get("token_hash", ""), token_hash)
+               for d in list_paired_devices())
+
+
+def revoke_paired_device(device_id):
+    """Remove a paired device by id. Returns True iff something was removed."""
+    devices = list_paired_devices()
+    kept = [d for d in devices if d.get("id") != device_id]
+    if len(kept) == len(devices):
+        return False
+    _write_secure_json(PAIRED_DEVICES_FILE, kept)
+    return True
+
+
 # ── DEFAULT SCRIPTS ───────────────────────────────
 # Default voice lines, descriptions, and jokes. Lived in two places before
 # and drifted; this is now the single source of truth.
@@ -338,13 +445,16 @@ def load_settings():
 
 
 def _write_secure_json(path, data):
-    """Write JSON with mode 0600. Best-effort chmod since some FS lack POSIX modes."""
+    """Write JSON atomically with mode 0600 (mkstemp's default).
+
+    The atomic replace matters: the web workers and the button daemon read
+    these files while the other process may be mid-write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def save_settings(data):
