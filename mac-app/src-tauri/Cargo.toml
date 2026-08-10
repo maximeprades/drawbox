@@ -1,0 +1,13 @@
+[package]
+name = "drawbox"
+version = "0.1.0"
+description = "DrawBox dashboard as a native Mac app"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

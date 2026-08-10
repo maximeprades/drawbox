@@ -14,8 +14,15 @@ def _wrong_code(code):
 def test_is_pairing_command_matches_authorize_variants():
     assert drawbox_core.is_pairing_command("Authorize!")
     assert drawbox_core.is_pairing_command("please authorise this laptop")
-    assert not drawbox_core.is_pairing_command("draw an authorized personnel sign")
+    # Whisper frequently transcribes the spoken command in the past tense.
+    assert drawbox_core.is_pairing_command("Authorized.")
+    assert drawbox_core.is_pairing_command("Authorised")
+    assert not drawbox_core.is_pairing_command("draw a fire truck")
     assert not drawbox_core.is_pairing_command("")
+    # Accepted trade-off: any prompt containing "authorized" opens a pairing
+    # window instead of drawing. Physical button + 2-minute window + code only
+    # audible in the room keeps this safe; the kid just retries the drawing.
+    assert drawbox_core.is_pairing_command("draw an authorized personnel sign")
 
 
 # ── pairing window ──────────────────────────────────
@@ -51,6 +58,23 @@ def test_pairing_window_expires(drawbox_dir, monkeypatch):
     monkeypatch.setattr(drawbox_core.time, "time",
                         lambda: real_time() + drawbox_core.PAIRING_WINDOW_SEC + 1)
     assert drawbox_core.redeem_pairing_code(code, "x") is None
+
+
+def test_print_pairing_code_renders_and_prints_a_card(monkeypatch, tmp_path):
+    printed = []
+
+    def fake_print(path):
+        from PIL import Image
+        with Image.open(path) as img:
+            # getextrema()[0] == 0 proves black ink landed on the canvas;
+            # a blank white render would report a minimum of 255.
+            printed.append((img.size, img.getextrema()[0]))
+
+    monkeypatch.setattr(drawbox_core, "print_image", fake_print)
+
+    drawbox_core.print_pairing_code("012345")
+
+    assert printed == [((drawbox_core.CANVAS_W, drawbox_core.CANVAS_H), 0)]
 
 
 def test_revoked_device_token_stops_working(drawbox_dir):

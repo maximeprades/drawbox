@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DrawBox</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #8a8a8a;
+    --card: #ffffff;
+    --bg: #f4f4f2;
+    --red: #d62828;
+    --red-hi: #e83e3a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 8px 32px rgba(0,0,0,0.06);
+    padding: 56px 64px;
+    text-align: center;
+    max-width: 420px;
+  }
+  .button-dot {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 28px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--red-hi), var(--red) 70%);
+    border: 6px solid #1e1e1e;
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(0.92); opacity: 0.75; }
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 10px; }
+  p { font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .countdown { margin-top: 18px; font-size: 12px; color: var(--muted); opacity: 0.8; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="button-dot"></div>
+    <div id="connecting">
+      <h1>Connecting to DrawBox&hellip;</h1>
+      <p>Looking for your box.</p>
+    </div>
+    <div id="offline" class="hidden">
+      <h1>DrawBox is offline</h1>
+      <p>Make sure it&rsquo;s plugged in and connected to WiFi.
+         It reconnects on its own &mdash; no buttons needed.</p>
+      <div class="countdown">Checking again every few seconds.</div>
+    </div>
+  </div>
+  <script>
+    // Cosmetic only: the app's Rust side polls the dashboard and navigates
+    // away the moment the box answers. This page just keeps the human
+    // informed while that happens.
+    const OFFLINE_AFTER_MS = 8000;
+
+    setTimeout(() => {
+      document.getElementById('connecting').classList.add('hidden');
+      document.getElementById('offline').classList.remove('hidden');
+    }, OFFLINE_AFTER_MS);
+  </script>
+</body>
+</html>

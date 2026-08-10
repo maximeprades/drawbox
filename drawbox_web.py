@@ -962,9 +962,31 @@ def api_update_deploy():
     except Exception as e:
         return jsonify(ok=False, error=str(e))
 
+_TEMPLATE_FILE = Path(__file__).resolve().parent / "templates" / "index.html"
+
+
+def _restore_missing_template():
+    """Self-heal after an update performed by a pre-templates self-updater.
+
+    Older deployed code copied drawbox_web.py from the repo but not
+    templates/, leaving render_template with nothing to serve. If the repo
+    clone has the template and the app dir doesn't, copy it into place.
+
+    Delete once every deployed box has self-updated past the pre-templates
+    updater (fleet transition began Aug 2026).
+    """
+    repo_template = REPO_DIR / "templates" / "index.html"
+    if _TEMPLATE_FILE.exists() or not repo_template.exists():
+        return
+    _TEMPLATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(repo_template), str(_TEMPLATE_FILE))
+    log.warning("restored missing dashboard template from %s", repo_template)
+
+
 # ── INIT ─────────────────────────────────────────
 DRAWBOX_DIR.mkdir(parents=True, exist_ok=True)
 ensure_safety_mode_default()
+_restore_missing_template()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")

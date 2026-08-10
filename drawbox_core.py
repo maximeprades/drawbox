@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 
 import replicate
 from openai import OpenAI
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 log = logging.getLogger("drawbox")
 
@@ -209,9 +209,13 @@ PAIRING_MAX_ATTEMPTS = 5
 
 
 def is_pairing_command(text):
-    """True when a transcript asks to pair a new device."""
+    """True when a transcript asks to pair a new device.
+
+    Whisper often renders the spoken word as "authorized", so the
+    past-tense variants count too.
+    """
     tokens = set(normalize_voice_command(text).split())
-    return bool(tokens & {"authorize", "authorise"})
+    return bool(tokens & {"authorize", "authorise", "authorized", "authorised"})
 
 
 def _hash_secret(value):
@@ -628,6 +632,42 @@ def _postprocess(img_bytes):
 
 
 # ── PRINTING ──────────────────────────────────────
+
+_DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+
+
+def _pairing_fonts():
+    """DejaVu ships with Raspberry Pi OS; fall back to PIL's built-in."""
+    try:
+        return (ImageFont.truetype(f"{_DEJAVU_DIR}/DejaVuSans-Bold.ttf", 200),
+                ImageFont.truetype(f"{_DEJAVU_DIR}/DejaVuSans.ttf", 56))
+    except OSError:
+        # Sized variants (Pillow >= 10.1) — the unsized default is ~10px,
+        # which renders an unreadable card on a Letter-sized canvas.
+        return ImageFont.load_default(size=200), ImageFont.load_default(size=56)
+
+
+def print_pairing_code(code):
+    """Print a card with the pairing code — paper works even when the
+    speaker doesn't."""
+    big, small = _pairing_fonts()
+    img = Image.new("L", (CANVAS_W, CANVAS_H), 255)
+    draw = ImageDraw.Draw(img)
+
+    def centered(text, font, y):
+        box = draw.textbbox((0, 0), text, font=font)
+        draw.text(((CANVAS_W - (box[2] - box[0])) // 2, y), text,
+                  font=font, fill=0)
+
+    centered("DrawBox pairing code", small, CANVAS_H // 4)
+    centered(" ".join(code), big, CANVAS_H // 4 + 120)
+    centered("Type it in your DrawBox app.", small, CANVAS_H // 4 + 420)
+    centered("It works for two minutes.", small, CANVAS_H // 4 + 500)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        img.save(tmp.name)
+    print_image(tmp.name)
+
 
 def print_image(path):
     """Send ``path`` to the configured printer and remove the temp file."""

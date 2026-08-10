@@ -36,7 +36,8 @@ from drawbox_core import (
     contains_poop, has_please, is_pairing_command, is_safe, load_settings,
     load_scripts, log_print_event, mask_key, open_pairing_window,
     parse_admin_poop_command, please_mode_enabled, poop_mode_enabled,
-    print_image, safety_mode_enabled, set_poop_mode_enabled,
+    print_image, print_pairing_code, safety_mode_enabled,
+    set_poop_mode_enabled,
 )
 
 log = logging.getLogger("drawbox")
@@ -538,9 +539,20 @@ def _handle_press(voice):
         if is_pairing_command(text):
             code = open_pairing_window()
             log.info("pairing window opened via voice command")
-            voice.play_dynamic(
-                "Pairing mode! The code is " + " ".join(code)
-                + ". Type it in your DrawBox app within two minutes.")
+            printed = False
+            try:
+                print_pairing_code(code)
+                printed = True
+            except Exception as e:
+                log.warning("could not print pairing code: %s", e)
+            spoken_code = " ".join(code)
+            if printed:
+                message = ("Pairing mode! I printed the code for you. It is "
+                           + spoken_code + ". Type it within two minutes.")
+            else:
+                message = ("Pairing mode! The code is " + spoken_code
+                           + ". Type it within two minutes.")
+            voice.play_dynamic(message)
             return
 
         if not poop_mode_enabled() and contains_poop(text):

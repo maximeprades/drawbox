@@ -17,7 +17,8 @@ DrawBox is a weekend project that turned into something real. Contributions are 
 - Adding authentication or user management (this is a home toy)
 - Virtual environments or complex packaging (single-file simplicity is intentional)
 - Replacing OpenAI with other providers (feel free to fork for that)
-- Over-engineering the architecture (one script, one dashboard, that's it)
+- Over-engineering the architecture (one script, one dashboard, that's it —
+  plus an optional Mac shell in `mac-app/` that just wraps the dashboard)
 
 ## How to Contribute
 

@@ -380,6 +380,34 @@ def test_wifi_saved_get_falls_back_to_names_when_ssid_lookup_fails(client, monke
     assert body["saved"][0]["ssid"] == "Home"
 
 
+def test_restore_missing_template_copies_from_repo(tmp_path, monkeypatch):
+    app_template = tmp_path / "app" / "templates" / "index.html"
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / "templates" / "index.html").write_text("<html>from repo</html>")
+    monkeypatch.setattr(drawbox_web, "_TEMPLATE_FILE", app_template)
+    monkeypatch.setattr(drawbox_web, "REPO_DIR", repo)
+
+    drawbox_web._restore_missing_template()
+
+    assert app_template.read_text() == "<html>from repo</html>"
+
+
+def test_restore_missing_template_never_overwrites(tmp_path, monkeypatch):
+    app_template = tmp_path / "templates" / "index.html"
+    app_template.parent.mkdir(parents=True)
+    app_template.write_text("<html>deployed</html>")
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / "templates" / "index.html").write_text("<html>older repo copy</html>")
+    monkeypatch.setattr(drawbox_web, "_TEMPLATE_FILE", app_template)
+    monkeypatch.setattr(drawbox_web, "REPO_DIR", repo)
+
+    drawbox_web._restore_missing_template()
+
+    assert app_template.read_text() == "<html>deployed</html>"
+
+
 def test_wifi_saved_add_preconfigures_network(client, monkeypatch):
     calls = []
     monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [])
