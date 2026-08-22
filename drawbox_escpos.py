@@ -16,6 +16,7 @@ Hardware smoke test (prints a built-in test pattern):
 """
 
 import argparse
+import fcntl
 import logging
 import os
 import termios
@@ -29,8 +30,8 @@ PRINTER_WIDTH_DOTS = 384
 BAND_ROWS = 255  # max rows per GS v 0 block
 FEED_LINES = 4
 
-# One physical printer — concurrent jobs would interleave bytes mid-raster.
-_serial_lock = threading.Lock()
+INIT = b"\x1b\x40"
+FEED_BYTES = b"\x0a" * FEED_LINES
 
 
 def render_raster(img):
@@ -39,7 +40,7 @@ def render_raster(img):
     bbox = ImageOps.invert(gray).getbbox()
     if bbox is None:
         log.warning("image is entirely white — printing paper feed only")
-        return b"\x1b\x40" + b"\x0a" * FEED_LINES
+        return INIT + FEED_BYTES
     gray = gray.crop(bbox)
     w, h = gray.size
     gray = gray.resize(
@@ -49,7 +50,7 @@ def render_raster(img):
     # PIL packs mode "1" with white=1; ESC/POS raster wants black=1.
     data = bytes(b ^ 0xFF for b in gray.convert("1").tobytes())
     row_bytes = PRINTER_WIDTH_DOTS // 8
-    job = [b"\x1b\x40"]
+    job = [INIT]
     for start in range(0, len(data), row_bytes * BAND_ROWS):
         band = data[start:start + row_bytes * BAND_ROWS]
         rows = len(band) // row_bytes
@@ -58,7 +59,7 @@ def render_raster(img):
             row_bytes & 0xFF, row_bytes >> 8, rows & 0xFF, rows >> 8,
         ]))
         job.append(band)
-    job.append(b"\x0a" * FEED_LINES)
+    job.append(FEED_BYTES)
     return b"".join(job)
 
 
@@ -80,23 +81,49 @@ def _open_serial(port, baud):
     return fd
 
 
-def _write_serial(job, port, baud):
-    with _serial_lock:
-        fd = _open_serial(port, baud)
-        try:
-            view = memoryview(job)
-            while view:
-                view = view[os.write(fd, view):]
-            termios.tcdrain(fd)
-        finally:
-            os.close(fd)
+def _pump(fd, job):
+    """Write ``job`` to ``fd`` and drain it. Always closes ``fd``."""
+    try:
+        # flock, not a threading lock: the button daemon and the web
+        # dashboard print from separate processes, and interleaved writes
+        # would corrupt the raster mid-job.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        view = memoryview(job)
+        while view:
+            view = view[os.write(fd, view):]
+        termios.tcdrain(fd)
+    finally:
+        os.close(fd)  # also releases the flock
+
+
+def _pump_logged(fd, job):
+    """Thread body — no caller left to catch, so log."""
+    try:
+        _pump(fd, job)
+    except Exception:
+        log.error("serial print failed mid-write", exc_info=True)
 
 
 def print_file(path, port, baud=9600):
-    """Print the image at ``path`` over ``port``. Returns the job byte count."""
+    """Print the image at ``path`` over ``port``, blocking until the whole
+    job is written. Returns the job byte count."""
     with Image.open(path) as img:
         job = render_raster(img)
-    _write_serial(job, port, baud)
+    _pump(_open_serial(port, baud), job)
+    return len(job)
+
+
+def start_print(path, port, baud=9600):
+    """Print the image at ``path`` over ``port`` from a background thread.
+
+    Every predictable failure — missing or corrupt image, missing port,
+    unsupported baud — raises here, before the thread starts; only
+    mid-write I/O errors are log-only. Returns the job byte count.
+    """
+    with Image.open(path) as img:
+        job = render_raster(img)
+    fd = _open_serial(port, baud)
+    threading.Thread(target=_pump_logged, args=(fd, job), daemon=True).start()
     return len(job)
 
 
@@ -130,7 +157,7 @@ def _main():
         sent = print_file(args.image, args.port, args.baud)
     else:
         job = render_raster(_test_pattern())
-        _write_serial(job, args.port, args.baud)
+        _pump(_open_serial(args.port, args.baud), job)
         sent = len(job)
     print(f"sent {sent} bytes to {args.port}")
 

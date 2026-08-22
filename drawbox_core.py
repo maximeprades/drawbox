@@ -16,13 +16,14 @@ import re
 import secrets
 import subprocess
 import tempfile
-import threading
 import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
+
+import drawbox_escpos
 
 log = logging.getLogger("drawbox")
 
@@ -447,6 +448,9 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - If the transcription is garbled but sounds like it could be a vehicle (car, truck, SUV), default to drawing a cool Range Rover or sports car
 - If it sounds like it could be an animal, default to a cute kitty or puppy"""
 
+PRINTER_TYPES = ("cups", "escpos_serial")
+SERIAL_BAUDS = (9600, 19200, 38400, 57600, 115200)
+
 DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
@@ -476,6 +480,8 @@ def load_settings():
         if v or v == 0:
             out[k] = v
     out["tts_voice_id"] = resolve_tts_voice(out.get("tts_voice_id"))
+    if out["printer_type"] not in PRINTER_TYPES:
+        out["printer_type"] = "cups"
     return out
 
 
@@ -662,49 +668,33 @@ def print_pairing_code(code):
     print_image(tmp.name)
 
 
-def _print_serial(path, port, baud):
-    """Thread body for the ESC/POS path — no caller left to catch, so log."""
-    # Lazy import: termios is POSIX-only and CUPS deployments never need it.
-    import drawbox_escpos
+def _unlink_quietly(path):
     try:
-        drawbox_escpos.print_file(path, port, baud)
-    except Exception:
-        log.error("serial print failed", exc_info=True)
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def print_image(path):
     """Send ``path`` to the configured printer and remove the temp file."""
     log.info("printing %s", path)
     settings = load_settings()
-    printer_type = settings.get("printer_type", "cups")
-    if printer_type == "escpos_serial":
-        # A full page takes ~25 s at 9600 baud, while ``lp`` returns instantly
-        # after queueing — thread the serial path so the button flow and the
-        # web request stay equally snappy.
-        threading.Thread(
-            target=_print_serial,
-            args=(path, settings.get("serial_port", "/dev/ttyUSB0"),
-                  settings.get("serial_baud", 9600)),
-            daemon=True,
-        ).start()
+    if settings["printer_type"] == "escpos_serial":
+        # Rendering and opening the port are fast and fail synchronously;
+        # only the ~25 s byte pump runs in the background.
+        try:
+            drawbox_escpos.start_print(path, settings["serial_port"],
+                                       settings["serial_baud"])
+        finally:
+            _unlink_quietly(path)
         return
-    if printer_type != "cups":
-        log.warning("unknown printer_type %r — falling back to lp", printer_type)
     try:
         subprocess.run(
             ["lp", "-d", PRINTER_NAME, "-o", "media=Letter", "-o", "fit-to-page", path],
             check=True,
         )
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        _unlink_quietly(path)
 
 
 # ── ANALYTICS LOGGING ─────────────────────────────

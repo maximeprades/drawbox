@@ -1167,9 +1167,9 @@ async function loadSettings() {
     const voice = d.tts_voice_id || 'alloy';
     $('cfgVoiceId').value = TTS_VOICES.indexOf(voice) >= 0 ? voice : 'alloy';
     $('cfgRecSec').value = d.record_seconds || 10;
-    $('cfgPrinterType').value = d.printer_type || 'cups';
-    $('cfgSerialPort').value = d.serial_port || '/dev/ttyUSB0';
-    $('cfgSerialBaud').value = d.serial_baud || 9600;
+    $('cfgPrinterType').value = d.printer_type;
+    $('cfgSerialPort').value = d.serial_port;
+    $('cfgSerialBaud').value = d.serial_baud;
     updateSerialFields();
   } catch(e) {}
 }
@@ -1188,7 +1188,7 @@ async function saveSettings() {
     record_seconds: parseInt($('cfgRecSec').value) || 10,
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
-    serial_baud: parseInt($('cfgSerialBaud').value) || 9600
+    serial_baud: parseInt($('cfgSerialBaud').value)
   };
   try {
     const r = await fetch('/api/settings', {

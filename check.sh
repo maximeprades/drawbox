@@ -150,10 +150,20 @@ echo ""
 
 # ── 5. PRINTER ───────────────────────────────────
 echo "🖨️  Printer"
-PRINTER_TYPE=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.drawbox/web_settings.json'))).get('printer_type') or 'cups')" 2>/dev/null || echo cups)
+PRINTER_SETTINGS=$(python3 -c "
+import json, os
+try:
+    settings = json.load(open(os.path.expanduser('~/.drawbox/web_settings.json')))
+except (OSError, ValueError):
+    settings = {}
+print(settings.get('printer_type') or 'cups')
+print(settings.get('serial_port') or '/dev/ttyUSB0')
+" 2>/dev/null)
+{ read -r PRINTER_TYPE; read -r SERIAL_PORT; } <<< "$PRINTER_SETTINGS"
+PRINTER_TYPE=${PRINTER_TYPE:-cups}
+SERIAL_PORT=${SERIAL_PORT:-/dev/ttyUSB0}
 
 if [ "$PRINTER_TYPE" = "escpos_serial" ]; then
-    SERIAL_PORT=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.drawbox/web_settings.json'))).get('serial_port') or '/dev/ttyUSB0')" 2>/dev/null || echo /dev/ttyUSB0)
     if [ -e "$SERIAL_PORT" ]; then
         ok "Thermal printer port $SERIAL_PORT present"
     else

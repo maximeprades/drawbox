@@ -2,7 +2,6 @@
 
 import os
 import pty
-import threading
 import time
 
 import pytest
@@ -81,6 +80,28 @@ def test_open_serial_rejects_unsupported_baud():
         drawbox_escpos._open_serial("/dev/null", 12345)
 
 
+def test_start_print_pumps_job_in_background(tmp_path):
+    img_path = tmp_path / "job.png"
+    Image.new("L", (384, 8), 0).save(img_path)
+    master_fd, slave_fd = pty.openpty()
+    try:
+        sent = drawbox_escpos.start_print(str(img_path), os.ttyname(slave_fd))
+        assert sent > 0
+        os.set_blocking(master_fd, False)
+        received = b""
+        deadline = time.monotonic() + 5
+        while len(received) < sent and time.monotonic() < deadline:
+            try:
+                received += os.read(master_fd, 65536)
+            except BlockingIOError:
+                time.sleep(0.01)
+    finally:
+        os.close(master_fd)
+        os.close(slave_fd)
+    assert received.startswith(INIT)
+    assert len(received) == sent
+
+
 # ── print_image dispatch ───────────────────────────
 
 def test_print_image_dispatches_to_escpos(drawbox_dir, monkeypatch, tmp_path):
@@ -89,26 +110,30 @@ def test_print_image_dispatches_to_escpos(drawbox_dir, monkeypatch, tmp_path):
         "serial_port": "/dev/fake0",
         "serial_baud": 9600,
     })
-    done = threading.Event()
     calls = []
-
-    def fake_print_file(path, port, baud=9600):
-        calls.append((path, port, baud))
-        done.set()
-
-    monkeypatch.setattr(drawbox_escpos, "print_file", fake_print_file)
+    monkeypatch.setattr(drawbox_escpos, "start_print",
+                        lambda path, port, baud: calls.append((path, port, baud)))
     img_path = tmp_path / "page.png"
     Image.new("L", (10, 10), 0).save(img_path)
 
     drawbox_core.print_image(str(img_path))
 
-    assert done.wait(timeout=5)
     assert calls == [(str(img_path), "/dev/fake0", 9600)]
-    # The unlink happens after print_file in the thread's finally.
-    for _ in range(100):
-        if not img_path.exists():
-            break
-        time.sleep(0.05)
+    assert not img_path.exists()
+
+
+def test_print_image_escpos_failure_raises_and_unlinks(drawbox_dir, tmp_path):
+    drawbox_core.save_settings({
+        "printer_type": "escpos_serial",
+        "serial_port": "/dev/nonexistent-drawbox-test",
+        "serial_baud": 9600,
+    })
+    img_path = tmp_path / "page.png"
+    Image.new("L", (10, 10), 0).save(img_path)
+
+    with pytest.raises(OSError):
+        drawbox_core.print_image(str(img_path))
+
     assert not img_path.exists()
 
 
@@ -126,8 +151,10 @@ def test_print_image_defaults_to_lp(drawbox_dir, monkeypatch, tmp_path):
     assert not img_path.exists()
 
 
-def test_print_image_unknown_type_falls_back_to_lp(drawbox_dir, monkeypatch, tmp_path):
+def test_bogus_printer_type_normalizes_to_cups(drawbox_dir, monkeypatch, tmp_path):
     drawbox_core.save_settings({"printer_type": "bogus"})
+    assert drawbox_core.load_settings()["printer_type"] == "cups"
+
     calls = []
     monkeypatch.setattr(drawbox_core.subprocess, "run",
                         lambda argv, **kw: calls.append(argv))

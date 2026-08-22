@@ -119,6 +119,18 @@ def test_settings_rejects_bogus_printer_type(client):
     assert client.get("/api/settings").get_json()["printer_type"] == "cups"
 
 
+def test_settings_rejects_unsupported_baud(client):
+    client.post("/api/settings", json={"serial_baud": 19200})
+    r = client.post("/api/settings", json={"serial_baud": 12345})
+    assert r.status_code == 400
+    assert client.get("/api/settings").get_json()["serial_baud"] == 19200
+
+
+def test_settings_rejects_blank_or_non_string_serial_port(client):
+    assert client.post("/api/settings", json={"serial_port": ""}).status_code == 400
+    assert client.post("/api/settings", json={"serial_port": 123}).status_code == 400
+
+
 # ── /api/scripts ───────────────────────────────────
 
 def test_scripts_get_includes_defaults(client):

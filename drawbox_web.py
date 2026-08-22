@@ -23,7 +23,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
-    OPENAI_TTS_VOICES, SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys,
+    OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
+    SUPPORTED_MODELS, _load_api_keys,
     _write_secure_json, apply_api_keys, contains_poop, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
     generate_image, has_please, is_safe, is_valid_device_token,
@@ -371,15 +372,18 @@ def api_settings():
         if "record_seconds" in data:
             settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
         if "printer_type" in data:
-            if data["printer_type"] not in ("cups", "escpos_serial"):
+            if data["printer_type"] not in PRINTER_TYPES:
                 raise ValueError(f"unknown printer_type: {data['printer_type']!r}")
             settings["printer_type"] = data["printer_type"]
-        if isinstance(data.get("serial_port"), str) and data["serial_port"].strip():
-            settings["serial_port"] = data["serial_port"].strip()
+        if "serial_port" in data:
+            port = data["serial_port"]
+            if not isinstance(port, str) or not port.strip():
+                raise ValueError(f"serial_port must be a non-empty string: {port!r}")
+            settings["serial_port"] = port.strip()
         if "serial_baud" in data:
             baud = int(data["serial_baud"])
-            if baud <= 0:
-                raise ValueError(f"serial_baud must be positive: {baud}")
+            if baud not in SERIAL_BAUDS:
+                raise ValueError(f"serial_baud must be one of {SERIAL_BAUDS}: {baud}")
             settings["serial_baud"] = baud
     except (TypeError, ValueError) as e:
         return jsonify(ok=False, error=f"Invalid value: {e}"), 400
