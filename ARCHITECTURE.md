@@ -56,7 +56,7 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
 | AI - Image | OpenAI gpt-image-1 | Generates coloring pages |
 | AI - Speech-to-Text | OpenAI Whisper (whisper-1) | Transcribes kid's voice |
-| AI - Text-to-Speech | OpenAI TTS (tts-1, voice: nova) | Voice feedback |
+| AI - Text-to-Speech | ElevenLabs or Grok (xAI Voice API) | Selected by the `voice_provider` setting |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |
@@ -174,7 +174,7 @@ DrawBox loads API keys with this precedence (first match wins per key):
 
 1. `~/.drawbox/api_keys.json` (mode 0600, managed from the dashboard)
 2. Environment variables: `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`,
-   `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`
+   `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `AI_GATEWAY_API_KEY`, `XAI_API_KEY`
 
 The dashboard writes to the JSON file; `deploy-web.sh` migrates existing
 systemd `Environment=` values into it on first run. New deployments don't
@@ -184,7 +184,7 @@ need keys in the service file at all.
 
 | Variable | Effect |
 |---|---|
-| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, or `gpt-image` |
+| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, `gpt-image`, or any Vercel AI Gateway image model id (see `GATEWAY_IMAGE_MODELS` in `drawbox_core.py`) |
 | `DRAWBOX_ALLOWED_ORIGINS` | Comma-separated CORS allowlist for the dashboard. Defaults cover `*.drawbox.pages.dev`. Accepts exact hosts or `*.domain.tld` patterns. |
 
 ### ALSA Audio (~/.asoundrc)

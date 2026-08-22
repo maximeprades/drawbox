@@ -20,9 +20,9 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
 ### API keys and image generation
 - The dashboard starts and works without API keys. The safety filter, settings,
   scripts, and all local logic run without keys.
-- Real image generation calls a third-party API (OpenAI, Replicate, or Gemini).
-  Set one of `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`, or `GEMINI_API_KEY` to test
-  end-to-end generation. Without a key, `/api/generate` returns a graceful
+- Real image generation calls a third-party API (OpenAI, Replicate, Gemini, or
+ the Vercel AI Gateway). Set one of `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`,
+ `GEMINI_API_KEY`, or `AI_GATEWAY_API_KEY` to test end-to-end generation. Without a key, `/api/generate` returns a graceful
   "Generation failed" for safe prompts. Blocked prompts return the safety message
   before any API call.
 - The active image model is set in the dashboard Settings page (`image_model`).
