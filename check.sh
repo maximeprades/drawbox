@@ -31,39 +31,39 @@ echo ""
 
 # ── 1. INTERNET ─────────────────────────────────
 echo "🌐 Internet"
-if ping -c 1 -W 3 api.openai.com > /dev/null 2>&1; then
-    ok "Internet connected (api.openai.com reachable)"
+if ping -c 1 -W 3 ai-gateway.vercel.sh > /dev/null 2>&1; then
+    ok "Internet connected (ai-gateway.vercel.sh reachable)"
 else
-    fail "No internet — can't reach api.openai.com"
+    fail "No internet — can't reach ai-gateway.vercel.sh"
 fi
 echo ""
 
-# ── 2. OPENAI API KEY ───────────────────────────
-echo "🔑 OpenAI API Key"
-# Check systemd service file
-SVC_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-BASHRC_KEY=$(grep -oP 'OPENAI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-ENV_KEY="${OPENAI_API_KEY:-}"
+# ── 2. AI GATEWAY API KEY ───────────────────────
+echo "🔑 AI Gateway API Key"
+FILE_KEY=""
+if [ -f ~/.drawbox/api_keys.json ]; then
+    FILE_KEY=$(python3 -c 'import json,os; print(json.load(open(os.path.expanduser("~/.drawbox/api_keys.json"))).get("ai_gateway",""))' 2>/dev/null || true)
+fi
+SVC_KEY=$(grep -oP 'AI_GATEWAY_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+ENV_KEY="${AI_GATEWAY_API_KEY:-}"
 
-if [ -n "$SVC_KEY" ] && [ "$SVC_KEY" != "sk-your-actual-key-here" ]; then
+if [ -n "$FILE_KEY" ]; then
+    ok "API key found in ~/.drawbox/api_keys.json (${FILE_KEY:0:8}...)"
+elif [ -n "$SVC_KEY" ]; then
     ok "API key found in drawbox.service (${SVC_KEY:0:8}...)"
-elif [ -n "$BASHRC_KEY" ] && [ "$BASHRC_KEY" != "sk-your-key-here" ]; then
-    ok "API key found in ~/.bashrc (${BASHRC_KEY:0:8}...)"
-    warn "Key not in drawbox.service — systemd won't see it. Add Environment=OPENAI_API_KEY=... to the service file"
 elif [ -n "$ENV_KEY" ]; then
     ok "API key found in environment (${ENV_KEY:0:8}...)"
 else
-    fail "No API key found. Set it in drawbox.service or ~/.bashrc"
+    fail "No AI Gateway key found. Add it in the dashboard Settings page."
 fi
 
-# Quick API test
-KEY="${SVC_KEY:-${BASHRC_KEY:-${ENV_KEY:-}}}"
-if [ -n "$KEY" ] && [ "$KEY" != "sk-your-actual-key-here" ] && [ "$KEY" != "sk-your-key-here" ]; then
+KEY="${FILE_KEY:-${SVC_KEY:-${ENV_KEY:-}}}"
+if [ -n "$KEY" ]; then
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
         -H "Authorization: Bearer $KEY" \
-        https://api.openai.com/v1/models 2>/dev/null || echo "000")
+        https://ai-gateway.vercel.sh/v1/models 2>/dev/null || echo "000")
     if [ "$HTTP_CODE" = "200" ]; then
-        ok "API key is valid (OpenAI API responds 200)"
+        ok "API key is valid (AI Gateway responds 200)"
     elif [ "$HTTP_CODE" = "401" ]; then
         fail "API key is INVALID (401 Unauthorized)"
     elif [ "$HTTP_CODE" = "000" ]; then
@@ -71,42 +71,6 @@ if [ -n "$KEY" ] && [ "$KEY" != "sk-your-actual-key-here" ] && [ "$KEY" != "sk-y
     else
         warn "API returned HTTP $HTTP_CODE"
     fi
-fi
-echo ""
-
-# ── 2b. REPLICATE API TOKEN ─────────────────────
-echo "🔑 Replicate API Token"
-SVC_REP=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-BASHRC_REP=$(grep -oP 'REPLICATE_API_TOKEN="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-ENV_REP="${REPLICATE_API_TOKEN:-}"
-
-if [ -n "$SVC_REP" ] && [ "$SVC_REP" != "r8_your-token-here" ]; then
-    ok "Replicate token found in drawbox.service (${SVC_REP:0:8}...)"
-elif [ -n "$BASHRC_REP" ]; then
-    ok "Replicate token found in ~/.bashrc (${BASHRC_REP:0:8}...)"
-    warn "Token not in drawbox.service — systemd won't see it. Add Environment=REPLICATE_API_TOKEN=... to the service file"
-elif [ -n "$ENV_REP" ]; then
-    ok "Replicate token found in environment (${ENV_REP:0:8}...)"
-else
-    fail "No Replicate token found. Set it in drawbox.service or ~/.bashrc"
-fi
-echo ""
-
-# ── 2c. GEMINI API KEY (optional) ─────────────────
-echo "🔑 Gemini API Key (optional — for Nano Banana 2)"
-SVC_GEM=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-BASHRC_GEM=$(grep -oP 'GEMINI_API_KEY="\K[^"]+' ~/.bashrc 2>/dev/null || true)
-ENV_GEM="${GEMINI_API_KEY:-}"
-
-if [ -n "$SVC_GEM" ] && [ "$SVC_GEM" != "" ]; then
-    ok "Gemini key found in drawbox.service (${SVC_GEM:0:8}...)"
-elif [ -n "$BASHRC_GEM" ]; then
-    ok "Gemini key found in ~/.bashrc (${BASHRC_GEM:0:8}...)"
-    warn "Key not in drawbox.service — systemd won't see it. Add Environment=GEMINI_API_KEY=... to the service file"
-elif [ -n "$ENV_GEM" ]; then
-    ok "Gemini key found in environment (${ENV_GEM:0:8}...)"
-else
-    warn "No Gemini key found (optional — only needed if IMAGE_MODEL=nano-banana)"
 fi
 echo ""
 
@@ -222,8 +186,8 @@ echo ""
 
 # ── 7. PYTHON DEPENDENCIES ──────────────────────
 echo "📦 Python Dependencies"
-DEPS=("openai" "replicate" "sounddevice" "soundfile" "numpy" "PIL" "gpiozero")
-DEP_NAMES=("openai" "replicate" "sounddevice" "soundfile" "numpy" "Pillow" "gpiozero")
+DEPS=("openai" "sounddevice" "soundfile" "numpy" "PIL" "gpiozero")
+DEP_NAMES=("openai" "sounddevice" "soundfile" "numpy" "Pillow" "gpiozero")
 for i in "${!DEPS[@]}"; do
     if python3 -c "import ${DEPS[$i]}" 2>/dev/null; then
         ok "${DEP_NAMES[$i]}"

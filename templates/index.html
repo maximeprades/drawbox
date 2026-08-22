@@ -585,9 +585,9 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Image Model</label>
           <select class="select" id="cfgModel">
-            <option value="flux-schnell">FLUX Schnell (Replicate) — fastest</option>
-            <option value="nano-banana">Nano Banana 2 (Gemini)</option>
-            <option value="gpt-image">GPT Image (OpenAI) — slowest</option>
+            <option value="flux-schnell">FLUX Schnell — fastest</option>
+            <option value="nano-banana">Nano Banana 2</option>
+            <option value="gpt-image">GPT Image — slowest</option>
           </select>
         </div>
       </div>
@@ -625,19 +625,13 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
       <div class="card-header"><div class="card-title">Voice & Audio</div></div>
       <div class="card-content">
         <div class="form-group">
-          <label class="form-label">ElevenLabs Voice ID</label>
-          <input class="input" type="text" id="cfgVoiceId" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
-          <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
-          <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
-          <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
+          <label class="form-label">TTS Voice</label>
+          <select class="select" id="cfgVoiceId" style="max-width:300px">
+            {% for voice in tts_voices %}
+            <option value="{{ voice }}">{{ voice }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">OpenAI TTS voices via Vercel AI Gateway</div>
         </div>
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
@@ -684,28 +678,13 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
     <div class="card">
       <div class="card-header"><div class="card-title">API Keys</div></div>
       <div class="card-content">
-        <div class="form-hint" style="margin-bottom:12px">Keys are stored on the Pi in ~/.drawbox/api_keys.json. Leave a field empty to keep the current key.</div>
+        <div class="form-hint" style="margin-bottom:12px">One Vercel AI Gateway key covers images, speech, and transcription. Stored on the Pi in ~/.drawbox/api_keys.json. Leave the field empty to keep the current key.</div>
         <div class="form-group">
-          <label class="form-label">OpenAI API Key</label>
-          <input class="input" type="password" id="keyOpenai" placeholder="sk-..." autocomplete="off" />
-          <div class="form-hint" id="keyOpenaiHint"></div>
+          <label class="form-label">AI Gateway API Key</label>
+          <input class="input" type="password" id="keyGateway" placeholder="vck_..." autocomplete="off" />
+          <div class="form-hint" id="keyGatewayHint"></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Replicate API Token</label>
-          <input class="input" type="password" id="keyReplicate" placeholder="r8_..." autocomplete="off" />
-          <div class="form-hint" id="keyReplicateHint"></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Gemini API Key</label>
-          <input class="input" type="password" id="keyGemini" placeholder="AI..." autocomplete="off" />
-          <div class="form-hint" id="keyGeminiHint"></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">ElevenLabs API Key</label>
-          <input class="input" type="password" id="keyElevenlabs" placeholder="sk_..." autocomplete="off" />
-          <div class="form-hint" id="keyElevenlabsHint"></div>
-        </div>
-        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
+        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Key</button>
       </div>
     </div>
 
@@ -936,6 +915,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
 <script>
 // ── GLOBALS ───────────────────────────────────
 const $ = id => document.getElementById(id);
+const TTS_VOICES = {{ tts_voices | tojson }};
 let evtSrc = null, wifiTarget = '';
 
 // ── DEVICE PAIRING AUTH ───────────────────────
@@ -1184,11 +1164,8 @@ async function loadSettings() {
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
     $('cfgModel').value = d.image_model || 'nano-banana';
-    $('cfgVoiceId').value = d.tts_voice_id || 'xNtG3W2oqJs0cJZuTyBc';
-    $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStyle').value = d.tts_style != null ? d.tts_style : 0.0;
-    $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
+    const voice = d.tts_voice_id || 'alloy';
+    $('cfgVoiceId').value = TTS_VOICES.indexOf(voice) >= 0 ? voice : 'alloy';
     $('cfgRecSec').value = d.record_seconds || 10;
     $('cfgPrinterType').value = d.printer_type || 'cups';
     $('cfgSerialPort').value = d.serial_port || '/dev/ttyUSB0';
@@ -1208,8 +1185,6 @@ async function saveSettings() {
     coloring_prompt: $('cfgPrompt').value,
     image_model: $('cfgModel').value,
     tts_voice_id: $('cfgVoiceId').value.trim(),
-    tts_stability: parseFloat($('cfgStability').value),
-    tts_style: parseFloat($('cfgStyle').value),
     record_seconds: parseInt($('cfgRecSec').value) || 10,
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
@@ -1232,24 +1207,15 @@ async function loadApiKeys() {
   try {
     const r = await fetch('/api/keys');
     const d = await r.json();
-    $('keyOpenaiHint').textContent = d.openai ? 'Current: ' + d.openai : 'Not set';
-    $('keyReplicateHint').textContent = d.replicate ? 'Current: ' + d.replicate : 'Not set';
-    $('keyGeminiHint').textContent = d.gemini ? 'Current: ' + d.gemini : 'Not set';
-    $('keyElevenlabsHint').textContent = d.elevenlabs ? 'Current: ' + d.elevenlabs : 'Not set';
-    $('keyOpenai').value = '';
-    $('keyReplicate').value = '';
-    $('keyGemini').value = '';
-    $('keyElevenlabs').value = '';
+    $('keyGatewayHint').textContent = d.ai_gateway ? 'Current: ' + d.ai_gateway : 'Not set';
+    $('keyGateway').value = '';
   } catch(e) {}
 }
 
 async function saveApiKeys() {
   const data = {};
-  if ($('keyOpenai').value.trim()) data.openai = $('keyOpenai').value.trim();
-  if ($('keyReplicate').value.trim()) data.replicate = $('keyReplicate').value.trim();
-  if ($('keyGemini').value.trim()) data.gemini = $('keyGemini').value.trim();
-  if ($('keyElevenlabs').value.trim()) data.elevenlabs = $('keyElevenlabs').value.trim();
-  if (!Object.keys(data).length) { toast('No keys entered', false); return; }
+  if ($('keyGateway').value.trim()) data.ai_gateway = $('keyGateway').value.trim();
+  if (!Object.keys(data).length) { toast('No key entered', false); return; }
   try {
     const r = await fetch('/api/keys', {
       method: 'POST',
@@ -1257,7 +1223,7 @@ async function saveApiKeys() {
       body: JSON.stringify(data)
     });
     const d = await r.json();
-    if (d.ok) { toast('API keys saved!'); loadApiKeys(); }
+    if (d.ok) { toast('API key saved!'); loadApiKeys(); }
     else toast('Save failed', false);
   } catch(e) { toast('Error: ' + e.message, false); }
 }
