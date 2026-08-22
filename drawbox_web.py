@@ -201,7 +201,8 @@ def api_revoke_device(device_id):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html",
+                           gateway_models=drawbox_core.GATEWAY_IMAGE_MODELS)
 
 @app.route("/guide")
 def guide():

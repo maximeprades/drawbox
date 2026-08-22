@@ -585,9 +585,14 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Image Model</label>
           <select class="select" id="cfgModel">
-            <option value="flux-schnell">FLUX Schnell (Replicate) — fastest</option>
-            <option value="nano-banana">Nano Banana 2 (Gemini)</option>
-            <option value="gpt-image">GPT Image (OpenAI) — slowest</option>
+            <optgroup label="Direct providers">
+              <option value="flux-schnell">FLUX Schnell (Replicate) — fastest</option>
+              <option value="nano-banana">Nano Banana 2 (Gemini)</option>
+              <option value="gpt-image">GPT Image (OpenAI) — slowest</option>
+            </optgroup>
+            <optgroup label="Vercel AI Gateway">
+              {% for m in gateway_models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </optgroup>
           </select>
         </div>
       </div>
@@ -676,6 +681,16 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <label class="form-label">ElevenLabs API Key</label>
           <input class="input" type="password" id="keyElevenlabs" placeholder="sk_..." autocomplete="off" />
           <div class="form-hint" id="keyElevenlabsHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Vercel AI Gateway API Key</label>
+          <input class="input" type="password" id="keyAiGateway" placeholder="vck_..." autocomplete="off" />
+          <div class="form-hint" id="keyAiGatewayHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">xAI API Key</label>
+          <input class="input" type="password" id="keyXai" placeholder="xai-..." autocomplete="off" />
+          <div class="form-hint" id="keyXaiHint"></div>
         </div>
         <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
       </div>
@@ -1195,10 +1210,14 @@ async function loadApiKeys() {
     $('keyReplicateHint').textContent = d.replicate ? 'Current: ' + d.replicate : 'Not set';
     $('keyGeminiHint').textContent = d.gemini ? 'Current: ' + d.gemini : 'Not set';
     $('keyElevenlabsHint').textContent = d.elevenlabs ? 'Current: ' + d.elevenlabs : 'Not set';
+    $('keyAiGatewayHint').textContent = d.ai_gateway ? 'Current: ' + d.ai_gateway : 'Not set';
+    $('keyXaiHint').textContent = d.xai ? 'Current: ' + d.xai : 'Not set';
     $('keyOpenai').value = '';
     $('keyReplicate').value = '';
     $('keyGemini').value = '';
     $('keyElevenlabs').value = '';
+    $('keyAiGateway').value = '';
+    $('keyXai').value = '';
   } catch(e) {}
 }
 
@@ -1208,6 +1227,8 @@ async function saveApiKeys() {
   if ($('keyReplicate').value.trim()) data.replicate = $('keyReplicate').value.trim();
   if ($('keyGemini').value.trim()) data.gemini = $('keyGemini').value.trim();
   if ($('keyElevenlabs').value.trim()) data.elevenlabs = $('keyElevenlabs').value.trim();
+  if ($('keyAiGateway').value.trim()) data.ai_gateway = $('keyAiGateway').value.trim();
+  if ($('keyXai').value.trim()) data.xai = $('keyXai').value.trim();
   if (!Object.keys(data).length) { toast('No keys entered', false); return; }
   try {
     const r = await fetch('/api/keys', {

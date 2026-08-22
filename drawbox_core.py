@@ -43,22 +43,81 @@ PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
 # ── CONFIG ────────────────────────────────────────
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 PRINTER_NAME = "drawbox-printer"
-SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image")
+
+AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+
+# Multimodal LLMs: the gateway serves these via /chat/completions, not
+# /images/generations.
+GATEWAY_CHAT_IMAGE_MODELS = frozenset({
+    "google/gemini-2.5-flash-image",
+    "google/gemini-3-pro-image",
+    "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-image-preview",
+    "google/gemini-3.1-flash-lite-image",
+})
+
+# Snapshot of the image-output models from the AI Gateway catalog
+# (GET https://ai-gateway.vercel.sh/v1/models, the models with image output
+# modality; same set as https://vercel.com/ai-gateway/models?modality=image),
+# snapshotted 2026-08-22.
+GATEWAY_IMAGE_MODELS = (
+    "google/gemini-2.5-flash-image",
+    "google/gemini-3-pro-image",
+    "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-image-preview",
+    "google/gemini-3.1-flash-lite-image",
+    "bfl/flux-2-flex",
+    "bfl/flux-2-klein-4b",
+    "bfl/flux-2-klein-9b",
+    "bfl/flux-2-max",
+    "bfl/flux-2-pro",
+    "bfl/flux-kontext-max",
+    "bfl/flux-kontext-pro",
+    "bfl/flux-pro-1.0-fill",
+    "bfl/flux-pro-1.1",
+    "bfl/flux-pro-1.1-ultra",
+    "bytedance/seedream-4.0",
+    "bytedance/seedream-4.5",
+    "bytedance/seedream-5.0-lite",
+    "bytedance/seedream-5.0-pro",
+    "openai/gpt-image-1",
+    "openai/gpt-image-1-mini",
+    "openai/gpt-image-1.5",
+    "openai/gpt-image-2",
+    "prodia/flux-fast-schnell",
+    "quiverai/arrow-1.1",
+    "recraft/recraft-v2",
+    "recraft/recraft-v3",
+    "recraft/recraft-v4",
+    "recraft/recraft-v4-pro",
+    "recraft/recraft-v4.1",
+    "recraft/recraft-v4.1-pro",
+    "recraft/recraft-v4.1-utility",
+    "recraft/recraft-v4.1-utility-pro",
+    "spacexai/grok-imagine-image",
+    "spacexai/grok-imagine-image-2.0",
+)
+
+SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image") + GATEWAY_IMAGE_MODELS
 
 # ── API KEYS ──────────────────────────────────────
 OPENAI_API_KEY = ""
 REPLICATE_API_TOKEN = ""
 GEMINI_API_KEY = ""
 ELEVENLABS_API_KEY = ""
+AI_GATEWAY_API_KEY = ""
+XAI_API_KEY = ""
 client = None  # OpenAI client, rebuilt on apply_api_keys()
 
 
-API_KEY_NAMES = ("openai", "replicate", "gemini", "elevenlabs")
+API_KEY_NAMES = ("openai", "replicate", "gemini", "elevenlabs", "ai_gateway", "xai")
 _API_KEY_ENV_VARS = {
     "openai": "OPENAI_API_KEY",
     "replicate": "REPLICATE_API_TOKEN",
     "gemini": "GEMINI_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "ai_gateway": "AI_GATEWAY_API_KEY",
+    "xai": "XAI_API_KEY",
 }
 
 
@@ -78,12 +137,15 @@ def _load_api_keys():
 
 def apply_api_keys():
     """Refresh module-level keys from disk/env and rebuild the OpenAI client."""
-    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, ELEVENLABS_API_KEY, client
+    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, ELEVENLABS_API_KEY, \
+        AI_GATEWAY_API_KEY, XAI_API_KEY, client
     keys = _load_api_keys()
     OPENAI_API_KEY = keys["openai"]
     REPLICATE_API_TOKEN = keys["replicate"]
     GEMINI_API_KEY = keys["gemini"]
     ELEVENLABS_API_KEY = keys["elevenlabs"]
+    AI_GATEWAY_API_KEY = keys["ai_gateway"]
+    XAI_API_KEY = keys["xai"]
     if REPLICATE_API_TOKEN:
         os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
     client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
@@ -511,6 +573,12 @@ def generate_image(desc, model=None):
                 "OPENAI_API_KEY not set (needed for gpt-image). "
                 "Set it via the web dashboard or service file.")
         img_bytes = _generate_gpt_image(prompt)
+    elif model in GATEWAY_IMAGE_MODELS:
+        if not AI_GATEWAY_API_KEY:
+            raise RuntimeError(
+                "AI_GATEWAY_API_KEY not set (needed for AI Gateway models). "
+                "Set it via the web dashboard or service file.")
+        img_bytes = _generate_ai_gateway(prompt, model)
     else:  # flux-schnell
         if not REPLICATE_API_TOKEN:
             raise RuntimeError(
@@ -602,6 +670,58 @@ def _generate_gpt_image(prompt):
     )
     img_bytes = base64.b64decode(r.data[0].b64_json)
     log.info("openai responded in %.1fs (%dKB)",
+             time.time() - t0, len(img_bytes) // 1024)
+    return img_bytes
+
+
+def _generate_ai_gateway(prompt, model):
+    """Generate via the Vercel AI Gateway (chat or image endpoint per model)."""
+    t0 = time.time()
+    chat = model in GATEWAY_CHAT_IMAGE_MODELS
+    if chat:
+        url = f"{AI_GATEWAY_BASE_URL}/chat/completions"
+        body = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode()
+    else:
+        url = f"{AI_GATEWAY_BASE_URL}/images/generations"
+        body = json.dumps({
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "response_format": "b64_json",
+        }).encode()
+    req = Request(url, data=body, headers={
+        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
+        "Content-Type": "application/json",
+    })
+    try:
+        with urlopen(req, timeout=120) as resp:  # big image models are slow
+            data = json.loads(resp.read())
+    except Exception:
+        log.exception("ai gateway request failed")
+        raise
+
+    if chat:
+        choice = data.get("choices", [{}])[0]
+        images = choice.get("message", {}).get("images") or []
+        if not images:
+            err = data.get("error", {}).get("message", "")
+            raise RuntimeError(
+                f"No image in AI Gateway response "
+                f"(finish_reason={choice.get('finish_reason')!r}, error={err!r})")
+        data_url = images[0]["image_url"]["url"]
+        img_bytes = base64.b64decode(data_url.split("base64,", 1)[1])
+    else:
+        items = data.get("data") or []
+        if not items or not items[0].get("b64_json"):
+            err = data.get("error", {}).get("message", "")
+            raise RuntimeError(
+                f"No image in AI Gateway response (data={items!r}, error={err!r})")
+        img_bytes = base64.b64decode(items[0]["b64_json"])
+
+    log.info("ai gateway responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 

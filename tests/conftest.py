@@ -56,6 +56,8 @@ def client(drawbox_dir, monkeypatch):
     monkeypatch.setenv("REPLICATE_API_TOKEN", "")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "")
+    monkeypatch.setenv("XAI_API_KEY", "")
     import drawbox_core
     import drawbox_web
     drawbox_web.app.testing = True

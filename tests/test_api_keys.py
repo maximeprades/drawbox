@@ -7,10 +7,12 @@ import drawbox_core
 
 def test_keys_default_to_empty(drawbox_dir, monkeypatch):
     for v in ("OPENAI_API_KEY", "REPLICATE_API_TOKEN",
-              "GEMINI_API_KEY", "ELEVENLABS_API_KEY"):
+              "GEMINI_API_KEY", "ELEVENLABS_API_KEY",
+              "AI_GATEWAY_API_KEY", "XAI_API_KEY"):
         monkeypatch.delenv(v, raising=False)
     keys = drawbox_core._load_api_keys()
-    assert keys == {"openai": "", "replicate": "", "gemini": "", "elevenlabs": ""}
+    assert keys == {"openai": "", "replicate": "", "gemini": "",
+                    "elevenlabs": "", "ai_gateway": "", "xai": ""}
 
 
 def test_keys_from_env(drawbox_dir, monkeypatch):
@@ -18,11 +20,15 @@ def test_keys_from_env(drawbox_dir, monkeypatch):
     monkeypatch.setenv("REPLICATE_API_TOKEN", "r8-env")
     monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "el-env")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-env")
+    monkeypatch.setenv("XAI_API_KEY", "xai-env")
     keys = drawbox_core._load_api_keys()
     assert keys["openai"] == "sk-env"
     assert keys["replicate"] == "r8-env"
     assert keys["gemini"] == "AIza-env"
     assert keys["elevenlabs"] == "el-env"
+    assert keys["ai_gateway"] == "vck-env"
+    assert keys["xai"] == "xai-env"
 
 
 def test_keys_file_overrides_env(drawbox_dir, monkeypatch):

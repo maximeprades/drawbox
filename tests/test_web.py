@@ -78,6 +78,11 @@ def test_settings_accepts_valid_model(client):
     assert client.get("/api/settings").get_json()["image_model"] == "flux-schnell"
 
 
+def test_settings_accepts_gateway_model(client):
+    client.post("/api/settings", json={"image_model": "bfl/flux-pro-1.1"})
+    assert client.get("/api/settings").get_json()["image_model"] == "bfl/flux-pro-1.1"
+
+
 def test_settings_caps_prompt_length(client):
     huge = "x" * 10000
     client.post("/api/settings", json={"coloring_prompt": huge})
@@ -633,3 +638,10 @@ def test_dashboard_setting_toggles_use_the_whole_row(client):
             html,
         )
     assert 'id="pleaseToggle" onclick=' not in html
+
+
+def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="keyXai"' in html
+    assert 'id="keyAiGateway"' in html
+    assert 'value="spacexai/grok-imagine-image"' in html
