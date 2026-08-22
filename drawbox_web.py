@@ -959,6 +959,20 @@ def api_update_check():
     except Exception as e:
         return jsonify(error=str(e), has_update=False)
 
+def _files_to_deploy(repo_dir):
+    """Every file the running Pi needs copied out of the repo clone.
+
+    Python modules are globbed, not listed, so a new drawbox_*.py can never
+    be left behind by a stale list. A stale list has bricked deployed boxes
+    twice: templates/index.html (see _restore_missing_template) and
+    drawbox_escpos.py (2026-08-22, import error killed both services).
+    """
+    modules = sorted(p.name for p in repo_dir.glob("drawbox*.py"))
+    return modules + ["templates/index.html",
+                      "drawbox-guide.html", "drawbox-simulator.html",
+                      "check.sh"]
+
+
 @app.route("/api/update/deploy", methods=["POST"])
 def api_update_deploy():
     if not REPO_DIR.exists():
@@ -970,10 +984,7 @@ def api_update_deploy():
         output = pull.stdout + "\n" + pull.stderr
 
         home = Path.home()
-        files_to_copy = ["drawbox_core.py", "drawbox.py", "drawbox_web.py",
-                         "templates/index.html",
-                         "drawbox-guide.html", "drawbox-simulator.html",
-                         "check.sh"]
+        files_to_copy = _files_to_deploy(REPO_DIR)
         for fname in files_to_copy:
             src = REPO_DIR / fname
             if src.exists():
