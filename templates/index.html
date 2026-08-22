@@ -376,6 +376,7 @@ body {
 .pair-overlay.show { display: flex; }
 .pair-card { max-width: 420px; width: 100%; }
 .pair-code-input { font-family: monospace; font-size: 1.4rem; letter-spacing: 0.4em; text-align: center; }
+.confirm-message { margin: 0 0 16px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -844,7 +845,7 @@ body {
     <div class="card">
       <div class="card-header"><div class="card-title">Power</div></div>
       <div class="card-content">
-        <button class="btn btn-destructive btn-sm" onclick="if(confirm('Reboot the Raspberry Pi?'))rebootPi()">Reboot Pi</button>
+        <button class="btn btn-destructive btn-sm" onclick="confirmReboot()">Reboot Pi</button>
         <div class="form-hint" style="margin-top:8px">This will restart the entire Raspberry Pi. The dashboard will be unavailable for about a minute.</div>
       </div>
     </div>
@@ -853,6 +854,24 @@ body {
 </main>
 
 <div class="toast" id="toast"></div>
+
+<!-- CONFIRM OVERLAY
+     Native window.confirm() is a silent no-op in the Mac app (Tauri 2 /
+     WKWebView never shows JS dialogs and always returns false). -->
+<div class="pair-overlay" id="confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="card pair-card">
+    <div class="card-header">
+      <div class="card-title" id="confirmTitle">Are you sure?</div>
+    </div>
+    <div class="card-content">
+      <p class="confirm-message" id="confirmMessage"></p>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="confirmCancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="confirmOk" type="button">Continue</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- PAIRING OVERLAY -->
 <div class="pair-overlay" id="pairOverlay">
@@ -924,6 +943,41 @@ function toast(msg, ok=true) {
   t.textContent = msg;
   t.className = 'toast show ' + (ok ? 'toast-ok' : 'toast-err');
   setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// In-page confirm. window.confirm() returns false immediately in the Mac
+// app's WKWebView, so every "are you sure?" button looked broken.
+function askConfirm(message, {okText = 'Continue', danger = false, title = 'Are you sure?'} = {}) {
+  return new Promise((resolve) => {
+    const overlay = $('confirmOverlay');
+    const okBtn = $('confirmOk');
+    const cancelBtn = $('confirmCancel');
+    $('confirmTitle').textContent = title;
+    $('confirmMessage').textContent = message;
+    okBtn.textContent = okText;
+    okBtn.className = 'btn ' + (danger ? 'btn-destructive' : 'btn-primary');
+    overlay.classList.add('show');
+    okBtn.focus();
+
+    let settled = false;
+    const cleanup = (ok) => {
+      if (settled) return;
+      settled = true;
+      overlay.classList.remove('show');
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      overlay.onclick = null;
+      overlay.removeEventListener('keydown', onKey);
+      resolve(ok);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+    };
+    okBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(false); };
+    overlay.addEventListener('keydown', onKey);
+  });
 }
 
 // ── PAGE SWITCHING ────────────────────────────
@@ -1193,7 +1247,10 @@ async function toggleSafety() {
   try {
     const r = await fetch('/api/safety-mode');
     const d = await r.json();
-    if (d.enabled && !confirm('Turn OFF the safety word filter?\nThe AI prompt still instructs child-safe output, but blocked words will be allowed.')) return;
+    if (d.enabled && !await askConfirm(
+      'Turn OFF the safety word filter?\nThe AI prompt still instructs child-safe output, but blocked words will be allowed.',
+      {okText: 'Turn off', danger: true}
+    )) return;
     await fetch('/api/safety-mode', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -1290,7 +1347,7 @@ async function saveScripts() {
 }
 
 async function resetScriptsDefaults() {
-  if (!confirm('Reset all voice lines and jokes to defaults?')) return;
+  if (!await askConfirm('Reset all voice lines and jokes to defaults?', {okText: 'Reset', danger: true})) return;
   try {
     const r = await fetch('/api/scripts', {
       method: 'POST',
@@ -1354,7 +1411,7 @@ async function handleSavedWifiAction(uuid, action) {
   const idx = wifiSaved.findIndex(n => n.uuid === uuid);
   if (idx < 0) return;
   if (action === 'delete') {
-    if (!confirm('Forget saved network "' + (wifiSaved[idx].ssid || wifiSaved[idx].name) + '"?')) return;
+    if (!await askConfirm('Forget saved network "' + (wifiSaved[idx].ssid || wifiSaved[idx].name) + '"?', {okText: 'Forget', danger: true})) return;
     try {
       const r = await fetch('/api/wifi/saved/' + encodeURIComponent(uuid), {method: 'DELETE'});
       const d = await r.json();
@@ -1530,7 +1587,10 @@ async function checkUpdate() {
 }
 
 async function deployUpdate() {
-  if (!confirm('Install the update and restart DrawBox services? The dashboard will reload automatically when ready.')) return;
+  if (!await askConfirm(
+    'Install the update and restart DrawBox services? The dashboard will reload automatically when ready.',
+    {okText: 'Install & Restart'}
+  )) return;
   const btn = $('deployBtn');
   const log = $('updateLog');
   btn.disabled = true; btn.textContent = 'Installing...';
@@ -1578,6 +1638,11 @@ async function svcAction(action) {
   } catch(e) { toast('Error: ' + e.message, false); }
 }
 
+async function confirmReboot() {
+  if (!await askConfirm('Reboot the Raspberry Pi?', {okText: 'Reboot', danger: true})) return;
+  rebootPi();
+}
+
 async function rebootPi() {
   try {
     await fetch('/api/reboot', {method: 'POST'});
@@ -1607,7 +1672,7 @@ async function loadPairedDevices() {
 }
 
 async function revokeDevice(id) {
-  if (!confirm('Revoke dashboard access for this device?')) return;
+  if (!await askConfirm('Revoke dashboard access for this device?', {okText: 'Revoke', danger: true})) return;
   try {
     const r = await fetch('/api/pair/devices/' + encodeURIComponent(id), {method: 'DELETE'});
     const d = await r.json();

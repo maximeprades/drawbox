@@ -17,6 +17,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 // While the dashboard is open, require a few failed polls before yanking the
 // user back to the offline screen, so a box reboot doesn't cause flapping.
 const OFFLINE_STRIKES: u32 = 3;
+// WKWebView never implements window.confirm/alert/prompt (confirm() returns
+// false with no UI). Destructive dashboard actions use an in-page modal.
 
 /// HTTP status of the dashboard, or 0 on network failure.
 fn dashboard_status() -> u32 {
