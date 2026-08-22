@@ -20,12 +20,11 @@ import tempfile
 import threading
 import time
 import traceback
-from urllib.error import HTTPError
-
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 from gpiozero import Button as GpioButton
+from openai import APIStatusError, RateLimitError
 
 import drawbox_core
 from drawbox_core import (
@@ -50,8 +49,6 @@ MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
 
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
 TTS_VOICE_ID = "alloy"
-TTS_STABILITY = 0.5
-TTS_STYLE = 0.0
 
 # ── VOICE LINES ─────────────────────────────────
 # Built from the shared defaults; the dashboard's Scripts page can override
@@ -79,13 +76,10 @@ KIDS_JOKES = _load_jokes()
 
 
 def _apply_tts_settings():
-    """Pull TTS voice + tuning from settings.json on disk."""
-    global TTS_VOICE_ID, TTS_STABILITY, TTS_STYLE
+    """Pull the TTS voice from settings.json on disk."""
+    global TTS_VOICE_ID
     s = load_settings()
-    if s.get("tts_voice_id"):
-        TTS_VOICE_ID = drawbox_core.resolve_tts_voice(s["tts_voice_id"])
-    TTS_STABILITY = max(0.0, min(1.0, float(s.get("tts_stability", TTS_STABILITY))))
-    TTS_STYLE = max(0.0, min(1.0, float(s.get("tts_style", TTS_STYLE))))
+    TTS_VOICE_ID = drawbox_core.resolve_tts_voice(s.get("tts_voice_id"))
 
 
 _apply_tts_settings()
@@ -107,9 +101,7 @@ class VoiceFeedback:
 
     def _tts_path(self, text):
         """Cache filename keyed on voice + tuning + text."""
-        h = hashlib.md5(
-            f"{TTS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}".encode()
-        ).hexdigest()[:12]
+        h = hashlib.md5(f"{TTS_VOICE_ID}:{text}".encode()).hexdigest()[:12]
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
@@ -130,12 +122,11 @@ class VoiceFeedback:
         try:
             self._gateway_tts(text, out_path)
             return True
-        except HTTPError as e:
-            if e.code == 429:
-                self._handle_tts_rate_limit(e)
-            else:
-                log.warning("Gateway TTS HTTP %s failed for %r",
-                            e.code, text[:80])
+        except RateLimitError as e:
+            self._handle_tts_rate_limit(e)
+        except APIStatusError as e:
+            log.warning("Gateway TTS HTTP %s failed for %r",
+                        e.status_code, text[:80])
         except Exception as e:
             log.warning("Gateway TTS failed for %r: %s", text[:80], e)
             # A mid-download failure can leave a partial file; don't let it
@@ -151,9 +142,13 @@ class VoiceFeedback:
 
     def _handle_tts_rate_limit(self, error):
         retry_after = 60.0
+        headers = getattr(getattr(error, "response", None), "headers", None)
+        raw = None
+        if headers is not None:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
         try:
-            retry_after = max(1.0, float(error.headers.get("Retry-After", retry_after)))
-        except (AttributeError, TypeError, ValueError):
+            retry_after = max(1.0, float(raw))
+        except (TypeError, ValueError):
             pass
         self._tts_rate_limited_until = max(
             self._tts_rate_limited_until,
@@ -173,7 +168,7 @@ class VoiceFeedback:
         # Leading pause helps the USB speaker wake.
         response = drawbox_core.client.audio.speech.create(
             model=drawbox_core.GATEWAY_TTS_MODEL,
-            voice=drawbox_core.resolve_tts_voice(TTS_VOICE_ID),
+            voice=TTS_VOICE_ID,
             input="... " + text,
             response_format="mp3",
         )

@@ -23,8 +23,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
-    SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys, _write_secure_json,
-    apply_api_keys, contains_poop, default_scripts, ensure_safety_mode_default,
+    OPENAI_TTS_VOICES, SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys,
+    _write_secure_json, apply_api_keys, contains_poop, default_scripts,
+    ensure_safety_mode_default, resolve_tts_voice,
     generate_image, has_please, is_safe, is_valid_device_token,
     list_paired_devices, load_scripts, load_settings, log_print_event,
     mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
@@ -201,7 +202,10 @@ def api_revoke_device(device_id):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        tts_voices=sorted(OPENAI_TTS_VOICES),
+    )
 
 @app.route("/guide")
 def guide():
@@ -349,9 +353,6 @@ def api_logs_download():
         download_name=f"drawbox-logs-{ts}.txt",
     )
 
-def _clamp_float(v, lo, hi):
-    return max(lo, min(hi, float(v)))
-
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "GET":
@@ -366,11 +367,7 @@ def api_settings():
         if data.get("image_model") in SUPPORTED_MODELS:
             settings["image_model"] = data["image_model"]
         if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
-            settings["tts_voice_id"] = data["tts_voice_id"].strip()[:64]
-        if "tts_stability" in data:
-            settings["tts_stability"] = _clamp_float(data["tts_stability"], 0.0, 1.0)
-        if "tts_style" in data:
-            settings["tts_style"] = _clamp_float(data["tts_style"], 0.0, 1.0)
+            settings["tts_voice_id"] = resolve_tts_voice(data["tts_voice_id"])
         if "record_seconds" in data:
             settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
     except (TypeError, ValueError) as e:

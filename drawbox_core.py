@@ -20,8 +20,6 @@ import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from urllib.request import urlopen
-
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 
@@ -42,7 +40,6 @@ PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
 # ── CONFIG ────────────────────────────────────────
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 PRINTER_NAME = "drawbox-printer"
-SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image")
 
 # ── API KEYS ──────────────────────────────────────
 AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
@@ -54,12 +51,32 @@ _API_KEY_ENV_VARS = {
     "ai_gateway": "AI_GATEWAY_API_KEY",
 }
 
-# Dashboard aliases → AI Gateway model slugs (provider/model).
-GATEWAY_IMAGE_MODELS = {
-    "nano-banana": "google/gemini-3.1-flash-image-preview",
-    "flux-schnell": "bfl/flux-schnell",
-    "gpt-image": "openai/gpt-image-2",
+# Dashboard alias → (api, gateway slug, extra SDK kwargs).
+# "chat" is Gemini image-preview; "images" is the OpenAI images API.
+IMAGE_ROUTES = {
+    "nano-banana": (
+        "chat",
+        "google/gemini-3.1-flash-image-preview",
+        {"extra_body": {"modalities": ["text", "image"]}},
+    ),
+    "flux-schnell": (
+        "images",
+        "bfl/flux-schnell",
+        {
+            "n": 1,
+            "response_format": "b64_json",
+            "extra_body": {
+                "providerOptions": {"blackForestLabs": {"outputFormat": "png"}},
+            },
+        },
+    ),
+    "gpt-image": (
+        "images",
+        "openai/gpt-image-2",
+        {"n": 1, "size": "1024x1536", "response_format": "b64_json"},
+    ),
 }
+SUPPORTED_MODELS = tuple(IMAGE_ROUTES)
 GATEWAY_TTS_MODEL = "openai/tts-1"
 GATEWAY_STT_MODEL = "openai/whisper-1"
 OPENAI_TTS_VOICES = frozenset({
@@ -433,8 +450,6 @@ DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
     "tts_voice_id": "alloy",
-    "tts_stability": 0.5,
-    "tts_style": 0.0,
     "record_seconds": 10,
     "poop_mode_enabled": True,
 }
@@ -452,9 +467,11 @@ def load_settings():
         return out
     if not isinstance(saved, dict):
         return out
-    for k, v in saved.items():
+    for k in DEFAULT_SETTINGS:
+        v = saved.get(k)
         if v or v == 0:
             out[k] = v
+    out["tts_voice_id"] = resolve_tts_voice(out.get("tts_voice_id"))
     return out
 
 
@@ -472,7 +489,8 @@ def _write_secure_json(path, data):
 
 
 def save_settings(data):
-    _write_secure_json(SETTINGS_FILE, data)
+    clean = {k: data[k] for k in DEFAULT_SETTINGS if k in data}
+    _write_secure_json(SETTINGS_FILE, clean)
 
 
 def poop_mode_enabled():
@@ -503,24 +521,21 @@ def generate_image(desc, model=None):
 
     if model is None:
         model = IMAGE_MODEL
-    if model not in SUPPORTED_MODELS:
+    route = IMAGE_ROUTES.get(model)
+    if route is None:
         raise ValueError(f"unsupported model: {model}")
     if not client:
         raise RuntimeError(
             "AI_GATEWAY_API_KEY not set. "
             "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
 
+    via, slug, kwargs = route
     prompt = f"{load_coloring_prompt()}\n\nChild requested: {desc}"
-    slug = GATEWAY_IMAGE_MODELS[model]
     log.info("generating with %s (%s): %s", model, slug, desc)
-
-    if model == "nano-banana":
-        img_bytes = _generate_nano_banana(prompt, slug)
-    elif model == "gpt-image":
-        img_bytes = _generate_gpt_image(prompt, slug)
+    if via == "chat":
+        img_bytes = _generate_chat_image(prompt, slug, kwargs)
     else:
-        img_bytes = _generate_flux_schnell(prompt, slug)
-
+        img_bytes = _generate_images_api(prompt, slug, kwargs)
     return _postprocess(img_bytes)
 
 
@@ -535,95 +550,47 @@ def _b64_to_bytes(value):
         return None
 
 
-def _image_url_from_part(part):
-    if isinstance(part, dict):
-        image_url = part.get("image_url")
-        if isinstance(image_url, dict):
-            return image_url.get("url")
-        return image_url
-    image_url = getattr(part, "image_url", None)
-    if isinstance(image_url, dict):
-        return image_url.get("url")
-    return getattr(image_url, "url", None) if image_url is not None else None
-
-
 def _image_bytes_from_chat(completion):
-    """Pull the first image out of a Gateway chat-completions response."""
-    if not getattr(completion, "choices", None):
-        raise RuntimeError("No choices in gateway chat response")
-    message = completion.choices[0].message
-    for collection_name in ("images", "content"):
-        items = getattr(message, collection_name, None)
-        if isinstance(items, str) or not items:
-            continue
-        for item in items:
-            url = _image_url_from_part(item)
-            data = _b64_to_bytes(url)
-            if data:
-                return data
-            if isinstance(item, dict) and item.get("inlineData"):
-                data = _b64_to_bytes(item["inlineData"].get("data"))
-                if data:
-                    return data
-    raise RuntimeError("No image in gateway chat response")
+    """Gateway chat image-preview: message.images[0].image_url.url."""
+    try:
+        url = completion.choices[0].message.images[0].image_url.url
+    except (AttributeError, IndexError, TypeError):
+        raise RuntimeError("No image in gateway chat response") from None
+    data = _b64_to_bytes(url)
+    if not data:
+        raise RuntimeError("No image in gateway chat response")
+    return data
 
 
 def _image_bytes_from_images_response(result):
-    if not getattr(result, "data", None):
-        raise RuntimeError("No image in gateway images response")
-    item = result.data[0]
-    data = _b64_to_bytes(getattr(item, "b64_json", None))
-    if data:
-        return data
-    url = getattr(item, "url", None)
-    if url and str(url).startswith("data:"):
-        data = _b64_to_bytes(url)
-        if data:
-            return data
-    if url:
-        with urlopen(url, timeout=60) as resp:
-            return resp.read()
-    raise RuntimeError("No image payload in gateway images response")
+    try:
+        raw = result.data[0].b64_json
+    except (AttributeError, IndexError, TypeError):
+        raise RuntimeError("No image in gateway images response") from None
+    data = _b64_to_bytes(raw)
+    if not data:
+        raise RuntimeError("No image payload in gateway images response")
+    return data
 
 
-def _generate_flux_schnell(prompt, slug):
-    t0 = time.time()
-    result = client.images.generate(
-        model=slug,
-        prompt=prompt,
-        n=1,
-        extra_body={"providerOptions": {"blackForestLabs": {"outputFormat": "png"}}},
-    )
-    img_bytes = _image_bytes_from_images_response(result)
-    log.info("flux-schnell responded in %.1fs (%dKB)",
-             time.time() - t0, len(img_bytes) // 1024)
-    return img_bytes
-
-
-def _generate_nano_banana(prompt, slug):
-    """Generate via Gemini image preview on AI Gateway."""
+def _generate_chat_image(prompt, slug, kwargs):
     t0 = time.time()
     completion = client.chat.completions.create(
         model=slug,
         messages=[{"role": "user", "content": prompt}],
-        extra_body={"modalities": ["text", "image"]},
+        **kwargs,
     )
     img_bytes = _image_bytes_from_chat(completion)
-    log.info("nano-banana responded in %.1fs (%dKB)",
+    log.info("gateway chat responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 
 
-def _generate_gpt_image(prompt, slug):
+def _generate_images_api(prompt, slug, kwargs):
     t0 = time.time()
-    result = client.images.generate(
-        model=slug,
-        prompt=prompt,
-        n=1,
-        size="1024x1536",
-    )
+    result = client.images.generate(model=slug, prompt=prompt, **kwargs)
     img_bytes = _image_bytes_from_images_response(result)
-    log.info("gpt-image responded in %.1fs (%dKB)",
+    log.info("gateway image responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 

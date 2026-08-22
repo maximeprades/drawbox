@@ -56,6 +56,7 @@ def test_generate_gpt_image_uses_gateway_slug(drawbox_dir, monkeypatch):
     _gateway_client(monkeypatch, images_generate=fake_generate)
     path = drawbox_core.generate_image("a rocket", model="gpt-image")
     assert seen["model"] == "openai/gpt-image-2"
+    assert seen["response_format"] == "b64_json"
     assert seen["prompt"].endswith("Child requested: a rocket")
     assert path.endswith(".png")
 
@@ -73,6 +74,7 @@ def test_generate_flux_uses_gateway_slug(drawbox_dir, monkeypatch):
     _gateway_client(monkeypatch, images_generate=fake_generate)
     drawbox_core.generate_image("a boat", model="flux-schnell")
     assert seen["model"] == "bfl/flux-schnell"
+    assert seen["response_format"] == "b64_json"
 
 
 def test_generate_nano_banana_uses_chat_modalities(drawbox_dir, monkeypatch):

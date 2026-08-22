@@ -54,9 +54,9 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | OS | Raspberry Pi OS Bookworm 64-bit Lite | Headless, no desktop |
 | Language | Python 3 | System Python, no virtualenv |
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
-| AI - Image | OpenAI gpt-image-1 | Generates coloring pages |
-| AI - Speech-to-Text | OpenAI Whisper (whisper-1) | Transcribes kid's voice |
-| AI - Text-to-Speech | OpenAI TTS (tts-1, voice: nova) | Voice feedback |
+| AI - Image | Vercel AI Gateway | nano-banana, flux-schnell, or gpt-image |
+| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1`) | Transcribes kid's voice |
+| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1`, voice: alloy) | Voice feedback |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |

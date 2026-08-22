@@ -9,16 +9,31 @@ def test_load_settings_returns_defaults_when_missing(drawbox_dir):
     s = drawbox_core.load_settings()
     assert s["coloring_prompt"] == drawbox_core.DEFAULT_COLORING_PROMPT
     assert s["record_seconds"] == 10
-    assert s["tts_stability"] == 0.5
+    assert s["tts_voice_id"] == "alloy"
+    assert "tts_stability" not in s
 
 
 def test_save_then_load_round_trips(drawbox_dir):
-    drawbox_core.save_settings({"record_seconds": 7, "tts_voice_id": "abc"})
+    drawbox_core.save_settings({"record_seconds": 7, "tts_voice_id": "nova"})
     s = drawbox_core.load_settings()
     assert s["record_seconds"] == 7
-    assert s["tts_voice_id"] == "abc"
+    assert s["tts_voice_id"] == "nova"
     # Other defaults remain
     assert s["coloring_prompt"] == drawbox_core.DEFAULT_COLORING_PROMPT
+
+
+def test_load_settings_resolves_unknown_voice_and_drops_dead_keys(drawbox_dir):
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({
+        "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc",
+        "tts_stability": 0.8,
+        "tts_style": 0.4,
+        "record_seconds": 12,
+    }))
+    s = drawbox_core.load_settings()
+    assert s["tts_voice_id"] == "alloy"
+    assert s["record_seconds"] == 12
+    assert "tts_stability" not in s
+    assert "tts_style" not in s
 
 
 def test_corrupted_settings_falls_back_to_defaults(drawbox_dir):

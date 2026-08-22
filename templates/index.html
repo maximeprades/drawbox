@@ -599,28 +599,11 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">TTS Voice</label>
           <select class="select" id="cfgVoiceId" style="max-width:300px">
-            <option value="alloy">alloy</option>
-            <option value="ash">ash</option>
-            <option value="ballad">ballad</option>
-            <option value="coral">coral</option>
-            <option value="echo">echo</option>
-            <option value="fable">fable</option>
-            <option value="nova">nova</option>
-            <option value="onyx">onyx</option>
-            <option value="sage">sage</option>
-            <option value="shimmer">shimmer</option>
+            {% for voice in tts_voices %}
+            <option value="{{ voice }}">{{ voice }}</option>
+            {% endfor %}
           </select>
           <div class="form-hint">OpenAI TTS voices via Vercel AI Gateway</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
-          <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
-          <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
         </div>
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
@@ -904,6 +887,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
 <script>
 // ── GLOBALS ───────────────────────────────────
 const $ = id => document.getElementById(id);
+const TTS_VOICES = {{ tts_voices | tojson }};
 let evtSrc = null, wifiTarget = '';
 
 // ── DEVICE PAIRING AUTH ───────────────────────
@@ -1152,13 +1136,8 @@ async function loadSettings() {
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
     $('cfgModel').value = d.image_model || 'nano-banana';
-    const voices = ['alloy','ash','ballad','coral','echo','fable','nova','onyx','sage','shimmer'];
     const voice = d.tts_voice_id || 'alloy';
-    $('cfgVoiceId').value = voices.indexOf(voice) >= 0 ? voice : 'alloy';
-    $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStyle').value = d.tts_style != null ? d.tts_style : 0.0;
-    $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
+    $('cfgVoiceId').value = TTS_VOICES.indexOf(voice) >= 0 ? voice : 'alloy';
     $('cfgRecSec').value = d.record_seconds || 10;
   } catch(e) {}
 }
@@ -1168,8 +1147,6 @@ async function saveSettings() {
     coloring_prompt: $('cfgPrompt').value,
     image_model: $('cfgModel').value,
     tts_voice_id: $('cfgVoiceId').value.trim(),
-    tts_stability: parseFloat($('cfgStability').value),
-    tts_style: parseFloat($('cfgStyle').value),
     record_seconds: parseInt($('cfgRecSec').value) || 10
   };
   try {

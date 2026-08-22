@@ -54,11 +54,11 @@ def test_settings_get_returns_defaults(client):
     assert body["record_seconds"] == 10
 
 
-def test_settings_post_clamps_floats(client):
-    client.post("/api/settings", json={"tts_stability": 5.0, "tts_style": -1.0})
-    r = client.get("/api/settings").get_json()
-    assert r["tts_stability"] == 1.0
-    assert r["tts_style"] == 0.0
+def test_settings_post_resolves_tts_voice(client):
+    client.post("/api/settings", json={"tts_voice_id": "NOVA"})
+    assert client.get("/api/settings").get_json()["tts_voice_id"] == "nova"
+    client.post("/api/settings", json={"tts_voice_id": "not-a-voice"})
+    assert client.get("/api/settings").get_json()["tts_voice_id"] == "alloy"
 
 
 def test_settings_post_clamps_record_seconds(client):
@@ -641,6 +641,9 @@ def test_dashboard_uses_single_gateway_key(client):
     assert 'id="keyGemini"' not in html
     assert 'id="keyElevenlabs"' not in html
     assert "elevenlabs.io" not in html
+    assert 'id="cfgStability"' not in html
+    assert 'id="cfgStyle"' not in html
+    assert "TTS_VOICES" in html
 
 
 def test_dashboard_setting_toggles_use_the_whole_row(client):

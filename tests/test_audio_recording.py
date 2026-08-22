@@ -3,9 +3,10 @@
 import logging
 import sys
 import types
-from urllib.error import HTTPError
 
+import httpx
 import numpy as np
+from openai import RateLimitError
 
 # The cloud test image does not have the native PortAudio library installed.
 # Provide the tiny sounddevice surface this test patches before importing the
@@ -19,6 +20,14 @@ fake_sounddevice = types.SimpleNamespace(
 sys.modules.setdefault("sounddevice", fake_sounddevice)
 
 import drawbox
+
+
+def _rate_limit_error(retry_after="120"):
+    request = httpx.Request("POST", "https://ai-gateway.vercel.sh/v1/audio/speech")
+    response = httpx.Response(
+        429, request=request, headers={"retry-after": retry_after},
+    )
+    return RateLimitError("Too Many Requests", response=response, body=None)
 
 
 def test_candidate_input_devices_prioritizes_usb_then_default(monkeypatch):
@@ -117,13 +126,7 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
 
     def rate_limited(text, _out_path):
         attempts.append(text)
-        raise HTTPError(
-            url="https://ai-gateway.vercel.sh/v1/audio/speech",
-            code=429,
-            msg="Too Many Requests",
-            hdrs={"Retry-After": "120"},
-            fp=None,
-        )
+        raise _rate_limit_error()
 
     monkeypatch.setattr(feedback, "_gateway_tts", rate_limited)
 
@@ -174,13 +177,7 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
 
     def rate_limited(self, text, _out_path):
         attempts.append(text)
-        raise HTTPError(
-            url="https://ai-gateway.vercel.sh/v1/audio/speech",
-            code=429,
-            msg="Too Many Requests",
-            hdrs={"Retry-After": "120"},
-            fp=None,
-        )
+        raise _rate_limit_error()
 
     monkeypatch.setattr(drawbox.VoiceFeedback, "_gateway_tts", rate_limited)
 
