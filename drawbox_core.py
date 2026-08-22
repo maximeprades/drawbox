@@ -16,6 +16,7 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime
 from io import BytesIO
@@ -427,6 +428,9 @@ DEFAULT_SETTINGS = {
     "tts_style": 0.0,
     "record_seconds": 10,
     "poop_mode_enabled": True,
+    "printer_type": "cups",
+    "serial_port": "/dev/ttyUSB0",
+    "serial_baud": 9600,
 }
 
 
@@ -669,9 +673,39 @@ def print_pairing_code(code):
     print_image(tmp.name)
 
 
+def _print_serial(path, port, baud):
+    """Thread body for the ESC/POS path — no caller left to catch, so log."""
+    # Lazy import: termios is POSIX-only and CUPS deployments never need it.
+    import drawbox_escpos
+    try:
+        drawbox_escpos.print_file(path, port, baud)
+    except Exception:
+        log.error("serial print failed", exc_info=True)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def print_image(path):
     """Send ``path`` to the configured printer and remove the temp file."""
     log.info("printing %s", path)
+    settings = load_settings()
+    printer_type = settings.get("printer_type", "cups")
+    if printer_type == "escpos_serial":
+        # A full page takes ~25 s at 9600 baud, while ``lp`` returns instantly
+        # after queueing — thread the serial path so the button flow and the
+        # web request stay equally snappy.
+        threading.Thread(
+            target=_print_serial,
+            args=(path, settings.get("serial_port", "/dev/ttyUSB0"),
+                  settings.get("serial_baud", 9600)),
+            daemon=True,
+        ).start()
+        return
+    if printer_type != "cups":
+        log.warning("unknown printer_type %r — falling back to lp", printer_type)
     try:
         subprocess.run(
             ["lp", "-d", PRINTER_NAME, "-o", "media=Letter", "-o", "fit-to-page", path],
