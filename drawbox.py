@@ -58,6 +58,15 @@ TTS_STABILITY = 0.5
 TTS_STYLE = 0.0
 TTS_SIMILARITY_BOOST = 0.75
 
+# The drawbox_core key attribute each voice provider needs; keeps the startup
+# key gate in lockstep with the providers _synthesize can dispatch to.
+TTS_PROVIDER_KEYS = {
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "grok": "XAI_API_KEY",
+}
+
+_TTS_WAKE_PREFIX = "... "   # leading pause helps the USB speaker wake
+
 # ── VOICE LINES ─────────────────────────────────
 # Built from the shared defaults; the dashboard's Scripts page can override
 # either single strings or "one-per-line" pick-lists.
@@ -111,7 +120,10 @@ class VoiceFeedback:
     to generate the audio cache (network).
     """
 
-    def __init__(self):
+    def __init__(self, provider="elevenlabs"):
+        # Explicit so dispatch never depends on whatever the host's
+        # ~/.drawbox/web_settings.json happens to say (tests included).
+        self.provider = provider
         self._cache = {}            # key → Path or non-empty [Path, ...]
         self._joke_paths = []
         self._silence_path = None
@@ -120,7 +132,7 @@ class VoiceFeedback:
 
     def _tts_path(self, text):
         """Cache filename keyed on provider + voice + tuning + text."""
-        if VOICE_PROVIDER == "grok":
+        if self.provider == "grok":
             key = f"grok:{GROK_VOICE_ID}:{text}"
         else:
             # Byte-identical to the historical ElevenLabs format so existing
@@ -145,7 +157,7 @@ class VoiceFeedback:
             return False
         log.info("generating TTS: %s…", text[:50])
         try:
-            if VOICE_PROVIDER == "grok":
+            if self.provider == "grok":
                 self._grok_tts(text, out_path)
             else:
                 self._elevenlabs_tts(text, out_path)
@@ -155,9 +167,9 @@ class VoiceFeedback:
                 self._handle_tts_rate_limit(e)
             else:
                 log.warning("%s TTS HTTP %s failed for %r",
-                            VOICE_PROVIDER, e.code, text[:80])
+                            self.provider, e.code, text[:80])
         except Exception as e:
-            log.warning("%s TTS failed for %r: %s", VOICE_PROVIDER, text[:80], e)
+            log.warning("%s TTS failed for %r: %s", self.provider, text[:80], e)
             # A mid-download failure can leave a partial file; don't let it
             # poison the cache.
             try:
@@ -183,44 +195,46 @@ class VoiceFeedback:
             log.warning(
                 "%s TTS rate-limited (HTTP 429); using cached audio "
                 "and espeak fallback for %.0fs",
-                VOICE_PROVIDER,
+                self.provider,
                 self._tts_rate_limit_remaining(),
             )
             self._tts_rate_limit_logged = True
 
     def _elevenlabs_tts(self, text, out_path):
-        import urllib.request
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{TTS_VOICE_ID}"
-        body = json.dumps({
-            "text": "... " + text,   # leading pause helps the USB speaker wake
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": TTS_STABILITY,
-                "similarity_boost": TTS_SIMILARITY_BOOST,
-                "style": TTS_STYLE,
-                "use_speaker_boost": True,
+        self._fetch_audio(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{TTS_VOICE_ID}",
+            {
+                "text": _TTS_WAKE_PREFIX + text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": TTS_STABILITY,
+                    "similarity_boost": TTS_SIMILARITY_BOOST,
+                    "style": TTS_STYLE,
+                    "use_speaker_boost": True,
+                },
             },
-        }).encode()
-        req = urllib.request.Request(url, data=body, headers={
-            "Content-Type": "application/json",
-            "xi-api-key": drawbox_core.ELEVENLABS_API_KEY,
-            "Accept": "audio/mpeg",
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
-            shutil.copyfileobj(resp, f, length=8192)
+            {"xi-api-key": drawbox_core.ELEVENLABS_API_KEY},
+            out_path,
+        )
 
     def _grok_tts(self, text, out_path):
+        self._fetch_audio(
+            "https://api.x.ai/v1/tts",
+            {
+                "text": _TTS_WAKE_PREFIX + text,
+                "voice_id": GROK_VOICE_ID,
+                "language": "en",
+            },
+            {"Authorization": f"Bearer {drawbox_core.XAI_API_KEY}"},
+            out_path,
+        )
+
+    def _fetch_audio(self, url, payload, auth_headers, out_path):
         import urllib.request
-        url = "https://api.x.ai/v1/tts"
-        body = json.dumps({
-            "text": "... " + text,   # leading pause helps the USB speaker wake
-            "voice_id": GROK_VOICE_ID,
-            "language": "en",
-        }).encode()
-        req = urllib.request.Request(url, data=body, headers={
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}",
             "Accept": "audio/mpeg",
+            **auth_headers,
         })
         with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
             shutil.copyfileobj(resp, f, length=8192)
@@ -502,13 +516,10 @@ def main():
     if not drawbox_core.OPENAI_API_KEY:
         log.error("OPENAI_API_KEY not set; aborting.")
         return
-    if VOICE_PROVIDER == "grok":
-        if not drawbox_core.XAI_API_KEY:
-            log.error("XAI_API_KEY not set (needed for grok voice); aborting.")
-            return
-    elif not drawbox_core.ELEVENLABS_API_KEY:
-        log.error("ELEVENLABS_API_KEY not set (needed for elevenlabs voice); "
-                  "aborting.")
+    key_name = TTS_PROVIDER_KEYS[VOICE_PROVIDER]
+    if not getattr(drawbox_core, key_name):
+        log.error("%s not set (needed for %s voice); aborting.",
+                  key_name, VOICE_PROVIDER)
         return
 
     if IMAGE_MODEL == "flux-schnell" and not drawbox_core.REPLICATE_API_TOKEN:
@@ -520,7 +531,7 @@ def main():
     log.info("safety filter: %s", "on" if safety_mode_enabled() else "off")
 
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
-    voice = VoiceFeedback()
+    voice = VoiceFeedback(provider=VOICE_PROVIDER)
     voice.warm_up()
 
     log.info("ready — press the red button")

@@ -1,22 +1,9 @@
 """Audio recording fallback behavior."""
 
 import logging
-import sys
-import types
 from urllib.error import HTTPError
 
 import numpy as np
-
-# The cloud test image does not have the native PortAudio library installed.
-# Provide the tiny sounddevice surface this test patches before importing the
-# Pi runtime module.
-fake_sounddevice = types.SimpleNamespace(
-    default=types.SimpleNamespace(device=[-1, None]),
-    PortAudioError=RuntimeError,
-    query_devices=lambda device=None: [],
-    InputStream=None,
-)
-sys.modules.setdefault("sounddevice", fake_sounddevice)
 
 import drawbox
 

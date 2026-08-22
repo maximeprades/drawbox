@@ -2,28 +2,14 @@
 
 import hashlib
 import json
-import sys
-import types
 import urllib.request
 from io import BytesIO
-
-# The cloud test image does not have the native PortAudio library installed.
-# Provide the tiny sounddevice surface this test patches before importing the
-# Pi runtime module.
-fake_sounddevice = types.SimpleNamespace(
-    default=types.SimpleNamespace(device=[-1, None]),
-    PortAudioError=RuntimeError,
-    query_devices=lambda device=None: [],
-    InputStream=None,
-)
-sys.modules.setdefault("sounddevice", fake_sounddevice)
 
 import drawbox
 import drawbox_core
 
 
 def test_synthesize_routes_to_elevenlabs_by_default(monkeypatch, tmp_path):
-    monkeypatch.setattr(drawbox, "VOICE_PROVIDER", "elevenlabs")
     feedback = drawbox.VoiceFeedback()
     calls = []
     monkeypatch.setattr(feedback, "_elevenlabs_tts",
@@ -34,7 +20,6 @@ def test_synthesize_routes_to_elevenlabs_by_default(monkeypatch, tmp_path):
 
 
 def test_grok_tts_request_shape(monkeypatch, tmp_path):
-    monkeypatch.setattr(drawbox, "VOICE_PROVIDER", "grok")
     monkeypatch.setattr(drawbox, "GROK_VOICE_ID", "ara")
     monkeypatch.setattr(drawbox_core, "XAI_API_KEY", "xai-test")
 
@@ -60,7 +45,7 @@ def test_grok_tts_request_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
     out_path = tmp_path / "grok.mp3"
-    feedback = drawbox.VoiceFeedback()
+    feedback = drawbox.VoiceFeedback(provider="grok")
     assert feedback._synthesize("hello kids", str(out_path)) is True
 
     assert out_path.read_bytes() == b"fake-mp3-bytes"
@@ -74,22 +59,25 @@ def test_grok_tts_request_shape(monkeypatch, tmp_path):
 
 def test_tts_cache_paths_differ_by_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
-    feedback = drawbox.VoiceFeedback()
     text = "same line"
 
-    monkeypatch.setattr(drawbox, "VOICE_PROVIDER", "elevenlabs")
-    eleven_path = feedback._tts_path(text)
+    eleven_path = drawbox.VoiceFeedback()._tts_path(text)
     historical = hashlib.md5(
         f"{drawbox.TTS_VOICE_ID}:{drawbox.TTS_STABILITY}:"
         f"{drawbox.TTS_STYLE}:{text}".encode()
     ).hexdigest()[:12]
     assert eleven_path.name == f"{historical}.mp3"
 
-    monkeypatch.setattr(drawbox, "VOICE_PROVIDER", "grok")
-    assert feedback._tts_path(text) != eleven_path
+    assert drawbox.VoiceFeedback(provider="grok")._tts_path(text) != eleven_path
+
+
+def test_provider_key_table_matches_supported_providers():
+    assert set(drawbox.TTS_PROVIDER_KEYS) == set(drawbox_core.VOICE_PROVIDERS)
 
 
 def test_apply_tts_settings_falls_back_for_unknown_provider(drawbox_dir, monkeypatch):
+    # setattr-to-current-value registers the globals `_apply_tts_settings`
+    # mutates, so monkeypatch restores them after the test.
     for name in ("VOICE_PROVIDER", "GROK_VOICE_ID", "TTS_VOICE_ID",
                  "TTS_STABILITY", "TTS_STYLE"):
         monkeypatch.setattr(drawbox, name, getattr(drawbox, name))
