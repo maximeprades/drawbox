@@ -96,7 +96,6 @@ def test_unsupported_model_still_raises(drawbox_dir):
 def test_model_registry_shape():
     for legacy in ("nano-banana", "flux-schnell", "gpt-image"):
         assert legacy in drawbox_core.SUPPORTED_MODELS
-    for chat_model in drawbox_core.GATEWAY_CHAT_IMAGE_MODELS:
-        assert chat_model in drawbox_core.SUPPORTED_MODELS
-    assert drawbox_core.GATEWAY_CHAT_IMAGE_MODELS <= frozenset(
-        drawbox_core.GATEWAY_IMAGE_MODELS)
+    assert set(drawbox_core.GATEWAY_IMAGE_MODELS.values()) == {"chat", "image"}
+    for model_id in drawbox_core.GATEWAY_IMAGE_MODELS:
+        assert model_id in drawbox_core.SUPPORTED_MODELS

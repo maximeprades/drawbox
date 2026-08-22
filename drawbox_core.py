@@ -46,59 +46,51 @@ PRINTER_NAME = "drawbox-printer"
 
 AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
 
-# Multimodal LLMs: the gateway serves these via /chat/completions, not
-# /images/generations.
-GATEWAY_CHAT_IMAGE_MODELS = frozenset({
-    "google/gemini-2.5-flash-image",
-    "google/gemini-3-pro-image",
-    "google/gemini-3.1-flash-image",
-    "google/gemini-3.1-flash-image-preview",
-    "google/gemini-3.1-flash-lite-image",
-})
-
 # Snapshot of the image-output models from the AI Gateway catalog
 # (GET https://ai-gateway.vercel.sh/v1/models, the models with image output
 # modality; same set as https://vercel.com/ai-gateway/models?modality=image),
-# snapshotted 2026-08-22.
-GATEWAY_IMAGE_MODELS = (
-    "google/gemini-2.5-flash-image",
-    "google/gemini-3-pro-image",
-    "google/gemini-3.1-flash-image",
-    "google/gemini-3.1-flash-image-preview",
-    "google/gemini-3.1-flash-lite-image",
-    "bfl/flux-2-flex",
-    "bfl/flux-2-klein-4b",
-    "bfl/flux-2-klein-9b",
-    "bfl/flux-2-max",
-    "bfl/flux-2-pro",
-    "bfl/flux-kontext-max",
-    "bfl/flux-kontext-pro",
-    "bfl/flux-pro-1.0-fill",
-    "bfl/flux-pro-1.1",
-    "bfl/flux-pro-1.1-ultra",
-    "bytedance/seedream-4.0",
-    "bytedance/seedream-4.5",
-    "bytedance/seedream-5.0-lite",
-    "bytedance/seedream-5.0-pro",
-    "openai/gpt-image-1",
-    "openai/gpt-image-1-mini",
-    "openai/gpt-image-1.5",
-    "openai/gpt-image-2",
-    "prodia/flux-fast-schnell",
-    "quiverai/arrow-1.1",
-    "recraft/recraft-v2",
-    "recraft/recraft-v3",
-    "recraft/recraft-v4",
-    "recraft/recraft-v4-pro",
-    "recraft/recraft-v4.1",
-    "recraft/recraft-v4.1-pro",
-    "recraft/recraft-v4.1-utility",
-    "recraft/recraft-v4.1-utility-pro",
-    "spacexai/grok-imagine-image",
-    "spacexai/grok-imagine-image-2.0",
-)
+# snapshotted 2026-08-22. Each id maps to the gateway endpoint that serves it:
+# the Gemini multimodal LLMs speak "chat" (/chat/completions), image-only
+# models speak "image" (/images/generations).
+GATEWAY_IMAGE_MODELS = {
+    "google/gemini-2.5-flash-image": "chat",
+    "google/gemini-3-pro-image": "chat",
+    "google/gemini-3.1-flash-image": "chat",
+    "google/gemini-3.1-flash-image-preview": "chat",
+    "google/gemini-3.1-flash-lite-image": "chat",
+    "bfl/flux-2-flex": "image",
+    "bfl/flux-2-klein-4b": "image",
+    "bfl/flux-2-klein-9b": "image",
+    "bfl/flux-2-max": "image",
+    "bfl/flux-2-pro": "image",
+    "bfl/flux-kontext-max": "image",
+    "bfl/flux-kontext-pro": "image",
+    "bfl/flux-pro-1.0-fill": "image",
+    "bfl/flux-pro-1.1": "image",
+    "bfl/flux-pro-1.1-ultra": "image",
+    "bytedance/seedream-4.0": "image",
+    "bytedance/seedream-4.5": "image",
+    "bytedance/seedream-5.0-lite": "image",
+    "bytedance/seedream-5.0-pro": "image",
+    "openai/gpt-image-1": "image",
+    "openai/gpt-image-1-mini": "image",
+    "openai/gpt-image-1.5": "image",
+    "openai/gpt-image-2": "image",
+    "prodia/flux-fast-schnell": "image",
+    "quiverai/arrow-1.1": "image",
+    "recraft/recraft-v2": "image",
+    "recraft/recraft-v3": "image",
+    "recraft/recraft-v4": "image",
+    "recraft/recraft-v4-pro": "image",
+    "recraft/recraft-v4.1": "image",
+    "recraft/recraft-v4.1-pro": "image",
+    "recraft/recraft-v4.1-utility": "image",
+    "recraft/recraft-v4.1-utility-pro": "image",
+    "spacexai/grok-imagine-image": "image",
+    "spacexai/grok-imagine-image-2.0": "image",
+}
 
-SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image") + GATEWAY_IMAGE_MODELS
+SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image") + tuple(GATEWAY_IMAGE_MODELS)
 VOICE_PROVIDERS = ("elevenlabs", "grok")
 
 # ── API KEYS ──────────────────────────────────────
@@ -677,53 +669,58 @@ def _generate_gpt_image(prompt):
     return img_bytes
 
 
-def _generate_ai_gateway(prompt, model):
-    """Generate via the Vercel AI Gateway (chat or image endpoint per model)."""
-    t0 = time.time()
-    chat = model in GATEWAY_CHAT_IMAGE_MODELS
-    if chat:
-        url = f"{AI_GATEWAY_BASE_URL}/chat/completions"
-        body = json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode()
-    else:
-        url = f"{AI_GATEWAY_BASE_URL}/images/generations"
-        body = json.dumps({
-            "model": model,
-            "prompt": prompt,
-            "n": 1,
-            "response_format": "b64_json",
-        }).encode()
-    req = Request(url, data=body, headers={
-        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
-        "Content-Type": "application/json",
-    })
+def _gateway_post(path, payload):
+    req = Request(f"{AI_GATEWAY_BASE_URL}{path}", data=json.dumps(payload).encode(),
+                  headers={
+                      "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
+                      "Content-Type": "application/json",
+                  })
     try:
         with urlopen(req, timeout=120) as resp:  # big image models are slow
-            data = json.loads(resp.read())
+            return json.loads(resp.read())
     except Exception:
         log.exception("ai gateway request failed")
         raise
 
-    if chat:
-        choice = data.get("choices", [{}])[0]
-        images = choice.get("message", {}).get("images") or []
-        if not images:
-            err = data.get("error", {}).get("message", "")
-            raise RuntimeError(
-                f"No image in AI Gateway response "
-                f"(finish_reason={choice.get('finish_reason')!r}, error={err!r})")
-        data_url = images[0]["image_url"]["url"]
-        img_bytes = base64.b64decode(data_url.split("base64,", 1)[1])
-    else:
-        items = data.get("data") or []
-        if not items or not items[0].get("b64_json"):
-            err = data.get("error", {}).get("message", "")
-            raise RuntimeError(
-                f"No image in AI Gateway response (data={items!r}, error={err!r})")
-        img_bytes = base64.b64decode(items[0]["b64_json"])
 
+def _gateway_chat_image(prompt, model):
+    data = _gateway_post("/chat/completions", {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    })
+    choice = data.get("choices", [{}])[0]
+    images = choice.get("message", {}).get("images") or []
+    if not images:
+        err = data.get("error", {}).get("message", "")
+        raise RuntimeError(
+            f"No image in AI Gateway response "
+            f"(finish_reason={choice.get('finish_reason')!r}, error={err!r})")
+    data_url = images[0]["image_url"]["url"]
+    return base64.b64decode(data_url.split("base64,", 1)[1])
+
+
+def _gateway_generated_image(prompt, model):
+    data = _gateway_post("/images/generations", {
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "response_format": "b64_json",
+    })
+    items = data.get("data") or []
+    if not items or not items[0].get("b64_json"):
+        err = data.get("error", {}).get("message", "")
+        raise RuntimeError(
+            f"No image in AI Gateway response (data={items!r}, error={err!r})")
+    return base64.b64decode(items[0]["b64_json"])
+
+
+def _generate_ai_gateway(prompt, model):
+    """Generate via the Vercel AI Gateway, on the endpoint the model needs."""
+    t0 = time.time()
+    if GATEWAY_IMAGE_MODELS[model] == "chat":
+        img_bytes = _gateway_chat_image(prompt, model)
+    else:
+        img_bytes = _gateway_generated_image(prompt, model)
     log.info("ai gateway responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
