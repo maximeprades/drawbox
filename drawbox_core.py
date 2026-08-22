@@ -23,8 +23,6 @@ from pathlib import Path
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 
-import drawbox_escpos
-
 log = logging.getLogger("drawbox")
 
 # ── FILE PATHS ────────────────────────────────────
@@ -748,6 +746,12 @@ def print_image(path):
     log.info("printing %s", path)
     settings = load_settings()
     if settings["printer_type"] == "escpos_serial":
+        # Imported here, not at module top: the serial backend is optional,
+        # and a partial deploy that misses the module must degrade to a
+        # print-time error instead of killing both services at import
+        # (this bricked boxes on 2026-08-22).
+        import drawbox_escpos
+
         # Rendering and opening the port are fast and fail synchronously;
         # only the ~25 s byte pump runs in the background.
         try:
