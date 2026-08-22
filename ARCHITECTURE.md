@@ -85,7 +85,7 @@ main()
             └→ transcribe()            # Whisper API
             └→ is_safe()               # Blocklist check
             └→ voice.play("thinking")  # Random variation (5 options)
-            └→ generate_image()        # gpt-image-1, 1024x1024
+            └→ generate_image()        # AI Gateway image model
             └→ voice.play("printing")
             └→ print_image()           # lp command to CUPS
             └→ voice.play("done")
@@ -170,15 +170,15 @@ requirements.txt        # Python dependencies
 
 ### API Keys
 
-DrawBox loads API keys with this precedence (first match wins per key):
+DrawBox loads one AI Gateway key with this precedence (first match wins):
 
-1. `~/.drawbox/api_keys.json` (mode 0600, managed from the dashboard)
-2. Environment variables: `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`,
-   `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`
+1. `~/.drawbox/api_keys.json` field `ai_gateway` (mode 0600, managed from the dashboard)
+2. Environment variable `AI_GATEWAY_API_KEY`
 
-The dashboard writes to the JSON file; `deploy-web.sh` migrates existing
-systemd `Environment=` values into it on first run. New deployments don't
-need keys in the service file at all.
+The OpenAI Python client talks to `https://ai-gateway.vercel.sh/v1` for
+images, TTS, and Whisper. The dashboard writes the JSON file;
+`deploy-web.sh` migrates an existing systemd `AI_GATEWAY_API_KEY` into it
+on first run. New deployments don't need keys in the service file at all.
 
 ### Optional Environment Variables
 

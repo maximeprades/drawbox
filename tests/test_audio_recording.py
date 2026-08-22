@@ -118,14 +118,14 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
     def rate_limited(text, _out_path):
         attempts.append(text)
         raise HTTPError(
-            url="https://api.elevenlabs.io",
+            url="https://ai-gateway.vercel.sh/v1/audio/speech",
             code=429,
             msg="Too Many Requests",
             hdrs={"Retry-After": "120"},
             fp=None,
         )
 
-    monkeypatch.setattr(feedback, "_elevenlabs_tts", rate_limited)
+    monkeypatch.setattr(feedback, "_gateway_tts", rate_limited)
 
     with caplog.at_level(logging.WARNING, logger="drawbox"):
         assert feedback._generate_one("first line") is None
@@ -143,8 +143,8 @@ def test_live_tts_uses_espeak_during_rate_limit(monkeypatch):
 
     monkeypatch.setattr(
         feedback,
-        "_elevenlabs_tts",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("should not call ElevenLabs")),
+        "_gateway_tts",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("should not call Gateway TTS")),
     )
     monkeypatch.setattr(drawbox.subprocess, "run", lambda args, check=False: spoken.append(args))
 
@@ -175,14 +175,14 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
     def rate_limited(self, text, _out_path):
         attempts.append(text)
         raise HTTPError(
-            url="https://api.elevenlabs.io",
+            url="https://ai-gateway.vercel.sh/v1/audio/speech",
             code=429,
             msg="Too Many Requests",
             hdrs={"Retry-After": "120"},
             fp=None,
         )
 
-    monkeypatch.setattr(drawbox.VoiceFeedback, "_elevenlabs_tts", rate_limited)
+    monkeypatch.setattr(drawbox.VoiceFeedback, "_gateway_tts", rate_limited)
 
     feedback.warm_up()
 

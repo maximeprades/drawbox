@@ -1,7 +1,7 @@
 """DrawBox core — shared logic for the button script and the web dashboard.
 
 This module owns configuration on disk (API keys, settings, scripts, sentinels),
-the safety blocklist, image generation across three providers, image post-
+the safety blocklist, image generation via Vercel AI Gateway, image post-
 processing, and analytics logging. Both ``drawbox.py`` and ``drawbox_web.py``
 import from here so behavior stays consistent.
 """
@@ -20,9 +20,8 @@ import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
-import replicate
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 
@@ -46,20 +45,27 @@ PRINTER_NAME = "drawbox-printer"
 SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image")
 
 # ── API KEYS ──────────────────────────────────────
-OPENAI_API_KEY = ""
-REPLICATE_API_TOKEN = ""
-GEMINI_API_KEY = ""
-ELEVENLABS_API_KEY = ""
-client = None  # OpenAI client, rebuilt on apply_api_keys()
+AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+AI_GATEWAY_API_KEY = ""
+client = None  # OpenAI-compatible client pointed at AI Gateway
 
-
-API_KEY_NAMES = ("openai", "replicate", "gemini", "elevenlabs")
+API_KEY_NAMES = ("ai_gateway",)
 _API_KEY_ENV_VARS = {
-    "openai": "OPENAI_API_KEY",
-    "replicate": "REPLICATE_API_TOKEN",
-    "gemini": "GEMINI_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
+    "ai_gateway": "AI_GATEWAY_API_KEY",
 }
+
+# Dashboard aliases → AI Gateway model slugs (provider/model).
+GATEWAY_IMAGE_MODELS = {
+    "nano-banana": "google/gemini-3.1-flash-image-preview",
+    "flux-schnell": "bfl/flux-schnell",
+    "gpt-image": "openai/gpt-image-2",
+}
+GATEWAY_TTS_MODEL = "openai/tts-1"
+GATEWAY_STT_MODEL = "openai/whisper-1"
+OPENAI_TTS_VOICES = frozenset({
+    "alloy", "ash", "ballad", "coral", "echo",
+    "fable", "nova", "onyx", "sage", "shimmer",
+})
 
 
 def _load_api_keys():
@@ -77,19 +83,23 @@ def _load_api_keys():
 
 
 def apply_api_keys():
-    """Refresh module-level keys from disk/env and rebuild the OpenAI client."""
-    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, ELEVENLABS_API_KEY, client
+    """Refresh the Gateway key from disk/env and rebuild the client."""
+    global AI_GATEWAY_API_KEY, client
     keys = _load_api_keys()
-    OPENAI_API_KEY = keys["openai"]
-    REPLICATE_API_TOKEN = keys["replicate"]
-    GEMINI_API_KEY = keys["gemini"]
-    ELEVENLABS_API_KEY = keys["elevenlabs"]
-    if REPLICATE_API_TOKEN:
-        os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
-    client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+    AI_GATEWAY_API_KEY = keys["ai_gateway"]
+    client = OpenAI(
+        api_key=AI_GATEWAY_API_KEY,
+        base_url=AI_GATEWAY_BASE_URL,
+    ) if AI_GATEWAY_API_KEY else None
 
 
 apply_api_keys()
+
+
+def resolve_tts_voice(voice_id):
+    """Map a stored voice id to an OpenAI TTS voice. Unknown ids become alloy."""
+    voice = (voice_id or "").strip().lower()
+    return voice if voice in OPENAI_TTS_VOICES else "alloy"
 
 
 def mask_key(key, head=4, tail=0):
@@ -422,7 +432,7 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
-    "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc",
+    "tts_voice_id": "alloy",
     "tts_stability": 0.5,
     "tts_style": 0.0,
     "record_seconds": 10,
@@ -495,113 +505,125 @@ def generate_image(desc, model=None):
         model = IMAGE_MODEL
     if model not in SUPPORTED_MODELS:
         raise ValueError(f"unsupported model: {model}")
+    if not client:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
 
     prompt = f"{load_coloring_prompt()}\n\nChild requested: {desc}"
-    log.info("generating with %s: %s", model, desc)
+    slug = GATEWAY_IMAGE_MODELS[model]
+    log.info("generating with %s (%s): %s", model, slug, desc)
 
     if model == "nano-banana":
-        if not GEMINI_API_KEY:
-            raise RuntimeError(
-                "GEMINI_API_KEY not set (needed for nano-banana). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_nano_banana(prompt)
+        img_bytes = _generate_nano_banana(prompt, slug)
     elif model == "gpt-image":
-        if not client:
-            raise RuntimeError(
-                "OPENAI_API_KEY not set (needed for gpt-image). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_gpt_image(prompt)
-    else:  # flux-schnell
-        if not REPLICATE_API_TOKEN:
-            raise RuntimeError(
-                "REPLICATE_API_TOKEN not set (needed for flux-schnell). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_flux_schnell(prompt)
+        img_bytes = _generate_gpt_image(prompt, slug)
+    else:
+        img_bytes = _generate_flux_schnell(prompt, slug)
 
     return _postprocess(img_bytes)
 
 
-def _read_replicate_output(output):
-    """Replicate's flux-schnell has returned both file objects and URL strings
-    over time; accept either shape."""
-    if isinstance(output, list):
-        if not output:
-            raise RuntimeError("Replicate returned an empty list")
-        output = output[0]
-    if hasattr(output, "read"):
-        return output.read()
-    if isinstance(output, (bytes, bytearray)):
-        return bytes(output)
-    if isinstance(output, str):
-        with urlopen(output, timeout=60) as r:
-            return r.read()
-    raise RuntimeError(f"Unexpected Replicate output type: {type(output).__name__}")
+def _b64_to_bytes(value):
+    if not value or not isinstance(value, str):
+        return None
+    if value.startswith("data:"):
+        value = value.split(",", 1)[-1]
+    try:
+        return base64.b64decode(value)
+    except (ValueError, TypeError):
+        return None
 
 
-def _generate_flux_schnell(prompt):
+def _image_url_from_part(part):
+    if isinstance(part, dict):
+        image_url = part.get("image_url")
+        if isinstance(image_url, dict):
+            return image_url.get("url")
+        return image_url
+    image_url = getattr(part, "image_url", None)
+    if isinstance(image_url, dict):
+        return image_url.get("url")
+    return getattr(image_url, "url", None) if image_url is not None else None
+
+
+def _image_bytes_from_chat(completion):
+    """Pull the first image out of a Gateway chat-completions response."""
+    if not getattr(completion, "choices", None):
+        raise RuntimeError("No choices in gateway chat response")
+    message = completion.choices[0].message
+    for collection_name in ("images", "content"):
+        items = getattr(message, collection_name, None)
+        if isinstance(items, str) or not items:
+            continue
+        for item in items:
+            url = _image_url_from_part(item)
+            data = _b64_to_bytes(url)
+            if data:
+                return data
+            if isinstance(item, dict) and item.get("inlineData"):
+                data = _b64_to_bytes(item["inlineData"].get("data"))
+                if data:
+                    return data
+    raise RuntimeError("No image in gateway chat response")
+
+
+def _image_bytes_from_images_response(result):
+    if not getattr(result, "data", None):
+        raise RuntimeError("No image in gateway images response")
+    item = result.data[0]
+    data = _b64_to_bytes(getattr(item, "b64_json", None))
+    if data:
+        return data
+    url = getattr(item, "url", None)
+    if url and str(url).startswith("data:"):
+        data = _b64_to_bytes(url)
+        if data:
+            return data
+    if url:
+        with urlopen(url, timeout=60) as resp:
+            return resp.read()
+    raise RuntimeError("No image payload in gateway images response")
+
+
+def _generate_flux_schnell(prompt, slug):
     t0 = time.time()
-    output = replicate.run(
-        "black-forest-labs/flux-schnell",
-        input={
-            "prompt": prompt,
-            "num_outputs": 1,
-            "aspect_ratio": "3:4",
-            "output_format": "png",
-            "num_inference_steps": 4,
-            "go_fast": True,
-        },
+    result = client.images.generate(
+        model=slug,
+        prompt=prompt,
+        n=1,
+        extra_body={"providerOptions": {"blackForestLabs": {"outputFormat": "png"}}},
     )
-    img_bytes = _read_replicate_output(output)
-    log.info("replicate responded in %.1fs (%dKB)",
+    img_bytes = _image_bytes_from_images_response(result)
+    log.info("flux-schnell responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 
 
-def _generate_nano_banana(prompt):
-    """Generate via Google Gemini API (Nano Banana 2)."""
+def _generate_nano_banana(prompt, slug):
+    """Generate via Gemini image preview on AI Gateway."""
     t0 = time.time()
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash-image:generateContent"
-        f"?key={GEMINI_API_KEY}"
+    completion = client.chat.completions.create(
+        model=slug,
+        messages=[{"role": "user", "content": prompt}],
+        extra_body={"modalities": ["text", "image"]},
     )
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["IMAGE"],
-            "imageConfig": {"aspectRatio": "3:4"},
-        },
-    }).encode()
-    req = Request(url, data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-    except Exception:
-        log.exception("gemini request failed")
-        raise
-
-    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
-        if "inlineData" in part:
-            img_bytes = base64.b64decode(part["inlineData"]["data"])
-            log.info("gemini responded in %.1fs (%dKB)",
-                     time.time() - t0, len(img_bytes) // 1024)
-            return img_bytes
-
-    # No image — surface diagnostic info via exception, not stdout side effects.
-    finish_reasons = [c.get("finishReason") for c in data.get("candidates", [])]
-    err = data.get("error", {}).get("message", "")
-    raise RuntimeError(
-        f"No image in Gemini response (finishReason={finish_reasons}, error={err!r})")
+    img_bytes = _image_bytes_from_chat(completion)
+    log.info("nano-banana responded in %.1fs (%dKB)",
+             time.time() - t0, len(img_bytes) // 1024)
+    return img_bytes
 
 
-def _generate_gpt_image(prompt):
+def _generate_gpt_image(prompt, slug):
     t0 = time.time()
-    r = client.images.generate(
-        model="gpt-image-1", prompt=prompt,
-        size="1024x1536", quality="low",
+    result = client.images.generate(
+        model=slug,
+        prompt=prompt,
+        n=1,
+        size="1024x1536",
     )
-    img_bytes = base64.b64decode(r.data[0].b64_json)
-    log.info("openai responded in %.1fs (%dKB)",
+    img_bytes = _image_bytes_from_images_response(result)
+    log.info("gpt-image responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 

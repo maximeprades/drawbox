@@ -451,11 +451,15 @@ def api_keys():
             existing = {}
     except (OSError, ValueError):
         existing = {}
+    clean = {}
     for k in drawbox_core.API_KEY_NAMES:
+        prior = existing.get(k)
+        if isinstance(prior, str) and prior.strip():
+            clean[k] = prior.strip()
         val = data.get(k)
         if isinstance(val, str) and val.strip():
-            existing[k] = val.strip()
-    _write_secure_json(API_KEYS_FILE, existing)
+            clean[k] = val.strip()
+    _write_secure_json(API_KEYS_FILE, clean)
     apply_api_keys()
     return jsonify(ok=True)
 
@@ -1003,8 +1007,8 @@ _restore_missing_template()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    if not drawbox_core.OPENAI_API_KEY:
-        log.warning("OPENAI_API_KEY not set — voice features won't work.")
+    if not drawbox_core.AI_GATEWAY_API_KEY:
+        log.warning("AI_GATEWAY_API_KEY not set — generation will fail until you add it.")
     log.info("image_model=%s safety_filter=%s",
              IMAGE_MODEL, "on" if safety_mode_enabled() else "off")
     log.info("starting on http://0.0.0.0:5000")

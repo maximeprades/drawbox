@@ -158,35 +158,43 @@ def test_poop_mode_toggle(client):
 # ── /api/keys ──────────────────────────────────────
 
 def test_keys_get_returns_masked(client, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdef123456")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-abcdef123456")
     body = client.get("/api/keys").get_json()
-    assert body["openai"].startswith("sk-a")
-    assert body["openai"].endswith("3456")
-    assert "abcdef" not in body["openai"]
+    assert body["ai_gateway"].startswith("vck-")
+    assert body["ai_gateway"].endswith("3456")
+    assert "abcdef" not in body["ai_gateway"]
+    assert "openai" not in body
 
 
 def test_keys_post_writes_file(client):
-    r = client.post("/api/keys", json={"openai": "sk-new", "replicate": "r8-new"})
+    r = client.post("/api/keys", json={"ai_gateway": "vck-new"})
     assert r.status_code == 200
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-new"
-    assert on_disk["replicate"] == "r8-new"
+    assert on_disk == {"ai_gateway": "vck-new"}
 
 
 def test_keys_post_skips_blank_values(client):
-    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"openai": "sk-old"}))
-    client.post("/api/keys", json={"openai": "   ", "replicate": "r8-new"})
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"ai_gateway": "vck-old"}))
+    client.post("/api/keys", json={"ai_gateway": "   "})
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-old"
-    assert on_disk["replicate"] == "r8-new"
+    assert on_disk == {"ai_gateway": "vck-old"}
 
 
 def test_keys_post_ignores_non_string_values(client):
-    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"openai": "sk-old"}))
-    client.post("/api/keys", json={"openai": 42, "replicate": ["r8"]})
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"ai_gateway": "vck-old"}))
+    client.post("/api/keys", json={"ai_gateway": 42})
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-old"
-    assert "replicate" not in on_disk
+    assert on_disk == {"ai_gateway": "vck-old"}
+
+
+def test_keys_post_drops_legacy_provider_keys(client):
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({
+        "openai": "sk-old",
+        "ai_gateway": "vck-keep",
+    }))
+    client.post("/api/keys", json={"ai_gateway": "vck-new"})
+    on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
+    assert on_disk == {"ai_gateway": "vck-new"}
 
 
 # ── /api/generate input validation (mocked image generator) ──
@@ -622,6 +630,17 @@ def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
     assert 'id="confirmOverlay"' in html
     assert "await askConfirm(" in html
     assert not re.search(r"""(?<!ask)confirm\s*\(\s*['"`]""", html)
+
+
+def test_dashboard_uses_single_gateway_key(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="keyGateway"' in html
+    assert "AI Gateway API Key" in html
+    assert 'id="keyOpenai"' not in html
+    assert 'id="keyReplicate"' not in html
+    assert 'id="keyGemini"' not in html
+    assert 'id="keyElevenlabs"' not in html
+    assert "elevenlabs.io" not in html
 
 
 def test_dashboard_setting_toggles_use_the_whole_row(client):
