@@ -12,22 +12,19 @@ Hold for 5 seconds to reboot.
 """
 
 import hashlib
-import json
 import logging
 import os
 import random
-import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import traceback
-from urllib.error import HTTPError
-
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 from gpiozero import Button as GpioButton
+from openai import APIStatusError, RateLimitError
 
 import drawbox_core
 from drawbox_core import (
@@ -51,10 +48,7 @@ REBOOT_HOLD_SEC = 5              # hold button this long to trigger reboot
 MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
 
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
-TTS_VOICE_ID = "xNtG3W2oqJs0cJZuTyBc"
-TTS_STABILITY = 0.5
-TTS_STYLE = 0.0
-TTS_SIMILARITY_BOOST = 0.75
+TTS_VOICE_ID = "alloy"
 
 # ── VOICE LINES ─────────────────────────────────
 # Built from the shared defaults; the dashboard's Scripts page can override
@@ -82,20 +76,17 @@ KIDS_JOKES = _load_jokes()
 
 
 def _apply_tts_settings():
-    """Pull TTS voice + tuning from settings.json on disk."""
-    global TTS_VOICE_ID, TTS_STABILITY, TTS_STYLE
+    """Pull the TTS voice from settings.json on disk."""
+    global TTS_VOICE_ID
     s = load_settings()
-    if s.get("tts_voice_id"):
-        TTS_VOICE_ID = s["tts_voice_id"]
-    TTS_STABILITY = max(0.0, min(1.0, float(s.get("tts_stability", TTS_STABILITY))))
-    TTS_STYLE = max(0.0, min(1.0, float(s.get("tts_style", TTS_STYLE))))
+    TTS_VOICE_ID = drawbox_core.resolve_tts_voice(s.get("tts_voice_id"))
 
 
 _apply_tts_settings()
 
 
 class VoiceFeedback:
-    """Caches ElevenLabs TTS lines as .mp3 keyed by content hash.
+    """Caches Gateway TTS lines as .mp3 keyed by content hash.
 
     Construction is cheap and offline; call :meth:`warm_up` once at startup
     to generate the audio cache (network).
@@ -110,9 +101,7 @@ class VoiceFeedback:
 
     def _tts_path(self, text):
         """Cache filename keyed on voice + tuning + text."""
-        h = hashlib.md5(
-            f"{TTS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}".encode()
-        ).hexdigest()[:12]
+        h = hashlib.md5(f"{TTS_VOICE_ID}:{text}".encode()).hexdigest()[:12]
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
@@ -124,23 +113,22 @@ class VoiceFeedback:
     def _synthesize(self, text, out_path):
         """Fetch TTS audio for ``text`` into ``out_path``.
 
-        The single place that talks to ElevenLabs: owns the rate-limit gate
-        and all error handling. Returns True iff audio was written.
+        The single place that talks to AI Gateway TTS: owns the rate-limit
+        gate and all error handling. Returns True iff audio was written.
         """
         if self._tts_rate_limit_remaining() > 0:
             return False
         log.info("generating TTS: %s…", text[:50])
         try:
-            self._elevenlabs_tts(text, out_path)
+            self._gateway_tts(text, out_path)
             return True
-        except HTTPError as e:
-            if e.code == 429:
-                self._handle_tts_rate_limit(e)
-            else:
-                log.warning("ElevenLabs TTS HTTP %s failed for %r",
-                            e.code, text[:80])
+        except RateLimitError as e:
+            self._handle_tts_rate_limit(e)
+        except APIStatusError as e:
+            log.warning("Gateway TTS HTTP %s failed for %r",
+                        e.status_code, text[:80])
         except Exception as e:
-            log.warning("ElevenLabs TTS failed for %r: %s", text[:80], e)
+            log.warning("Gateway TTS failed for %r: %s", text[:80], e)
             # A mid-download failure can leave a partial file; don't let it
             # poison the cache.
             try:
@@ -154,9 +142,13 @@ class VoiceFeedback:
 
     def _handle_tts_rate_limit(self, error):
         retry_after = 60.0
+        headers = getattr(getattr(error, "response", None), "headers", None)
+        raw = None
+        if headers is not None:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
         try:
-            retry_after = max(1.0, float(error.headers.get("Retry-After", retry_after)))
-        except (AttributeError, TypeError, ValueError):
+            retry_after = max(1.0, float(raw))
+        except (TypeError, ValueError):
             pass
         self._tts_rate_limited_until = max(
             self._tts_rate_limited_until,
@@ -164,32 +156,23 @@ class VoiceFeedback:
         )
         if not self._tts_rate_limit_logged:
             log.warning(
-                "ElevenLabs TTS rate-limited (HTTP 429); using cached audio "
+                "Gateway TTS rate-limited (HTTP 429); using cached audio "
                 "and espeak fallback for %.0fs",
                 self._tts_rate_limit_remaining(),
             )
             self._tts_rate_limit_logged = True
 
-    def _elevenlabs_tts(self, text, out_path):
-        import urllib.request
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{TTS_VOICE_ID}"
-        body = json.dumps({
-            "text": "... " + text,   # leading pause helps the USB speaker wake
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": TTS_STABILITY,
-                "similarity_boost": TTS_SIMILARITY_BOOST,
-                "style": TTS_STYLE,
-                "use_speaker_boost": True,
-            },
-        }).encode()
-        req = urllib.request.Request(url, data=body, headers={
-            "Content-Type": "application/json",
-            "xi-api-key": drawbox_core.ELEVENLABS_API_KEY,
-            "Accept": "audio/mpeg",
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
-            shutil.copyfileobj(resp, f, length=8192)
+    def _gateway_tts(self, text, out_path):
+        if not drawbox_core.client:
+            raise RuntimeError("AI_GATEWAY_API_KEY not set")
+        # Leading pause helps the USB speaker wake.
+        response = drawbox_core.client.audio.speech.create(
+            model=drawbox_core.GATEWAY_TTS_MODEL,
+            voice=TTS_VOICE_ID,
+            input="... " + text,
+            response_format="mp3",
+        )
+        response.write_to_file(out_path)
 
     def warm_up(self):
         """Generate and cache every voice line and joke. Needs the network;
@@ -415,7 +398,7 @@ def transcribe(path):
     try:
         with open(path, "rb") as f:
             r = drawbox_core.client.audio.transcriptions.create(
-                model="whisper-1", file=f)
+                model=drawbox_core.GATEWAY_STT_MODEL, file=f)
     finally:
         try:
             os.unlink(path)
@@ -444,10 +427,7 @@ def _is_busy():
 def _print_config():
     log.info("DrawBox configuration:")
     log.info("  image_model = %s", IMAGE_MODEL)
-    log.info("  openai      = %s", mask_key(drawbox_core.OPENAI_API_KEY) or "missing")
-    log.info("  elevenlabs  = %s", mask_key(drawbox_core.ELEVENLABS_API_KEY) or "missing")
-    log.info("  replicate   = %s", mask_key(drawbox_core.REPLICATE_API_TOKEN) or "missing")
-    log.info("  gemini      = %s", mask_key(drawbox_core.GEMINI_API_KEY) or "missing")
+    log.info("  ai_gateway  = %s", mask_key(drawbox_core.AI_GATEWAY_API_KEY) or "missing")
     log.info("  keys file   = %s (%s)",
              API_KEYS_FILE,
              "present" if API_KEYS_FILE.exists() else "missing, using env")
@@ -462,17 +442,9 @@ def main():
     apply_api_keys()
     _print_config()
 
-    if not drawbox_core.OPENAI_API_KEY:
-        log.error("OPENAI_API_KEY not set; aborting.")
+    if not drawbox_core.AI_GATEWAY_API_KEY:
+        log.error("AI_GATEWAY_API_KEY not set; aborting.")
         return
-    if not drawbox_core.ELEVENLABS_API_KEY:
-        log.error("ELEVENLABS_API_KEY not set; aborting.")
-        return
-
-    if IMAGE_MODEL == "flux-schnell" and not drawbox_core.REPLICATE_API_TOKEN:
-        log.warning("REPLICATE_API_TOKEN not set (needed for flux-schnell).")
-    if IMAGE_MODEL == "nano-banana" and not drawbox_core.GEMINI_API_KEY:
-        log.warning("GEMINI_API_KEY not set (needed for nano-banana).")
 
     drawbox_core.ensure_safety_mode_default()
     log.info("safety filter: %s", "on" if safety_mode_enabled() else "off")

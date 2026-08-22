@@ -9,4 +9,3 @@ soundfile>=0.12.1
 gpiozero>=2.0
 flask>=3.0
 gunicorn>=21.2
-replicate>=0.25

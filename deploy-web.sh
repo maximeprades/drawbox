@@ -32,7 +32,7 @@ echo "🔧 Setting up on Pi..."
 ssh "$PI" bash -s << 'REMOTE'
 set -e
 
-# Install Flask, gunicorn, replicate if missing
+# Install Flask + gunicorn if missing
 python3 -c "import flask" 2>/dev/null || {
     echo "   Installing Flask..."
     sudo pip3 install --break-system-packages flask
@@ -41,11 +41,7 @@ python3 -c "import gunicorn" 2>/dev/null || {
     echo "   Installing gunicorn..."
     sudo pip3 install --break-system-packages gunicorn
 }
-python3 -c "import replicate" 2>/dev/null || {
-    echo "   Installing replicate..."
-    sudo pip3 install --break-system-packages replicate
-}
-echo "   ✅ Flask + gunicorn + replicate ready"
+echo "   ✅ Flask + gunicorn ready"
 
 # Clone repo for software updates (skip if already exists)
 if [ ! -d ~/drawbox-repo ]; then
@@ -72,31 +68,24 @@ mkdir -p ~/.drawbox
 chmod 700 ~/.drawbox
 if [ ! -f ~/.drawbox/api_keys.json ]; then
     echo "   Migrating API keys to ~/.drawbox/api_keys.json..."
-    OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-    [ -z "$OPENAI_KEY" ] && OPENAI_KEY=$(grep -oP 'OPENAI_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
-    REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-    [ -z "$REP_KEY" ] && REP_KEY=$(grep -oP 'REPLICATE_API_TOKEN=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
-    GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
-    [ -z "$GEM_KEY" ] && GEM_KEY=$(grep -oP 'GEMINI_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
+    GATEWAY_KEY=$(grep -oP 'AI_GATEWAY_API_KEY=\K.*' /etc/systemd/system/drawbox.service 2>/dev/null || true)
+    [ -z "$GATEWAY_KEY" ] && GATEWAY_KEY=$(grep -oP 'AI_GATEWAY_API_KEY=\K.*' /etc/systemd/system/drawbox-web.service 2>/dev/null || true)
     # Pass keys via env vars (NOT shell interpolation into the source) so
     # values containing quotes or shell metacharacters can't break the script.
-    OPENAI_KEY="$OPENAI_KEY" REP_KEY="$REP_KEY" GEM_KEY="$GEM_KEY" python3 - <<'PYTHON'
+    GATEWAY_KEY="$GATEWAY_KEY" python3 - <<'PYTHON'
 import json, os
 keys = {}
-for env_name, key_name in (("OPENAI_KEY", "openai"),
-                           ("REP_KEY", "replicate"),
-                           ("GEM_KEY", "gemini")):
-    v = os.environ.get(env_name, "").strip()
-    if v:
-        keys[key_name] = v
+v = os.environ.get("GATEWAY_KEY", "").strip()
+if v:
+    keys["ai_gateway"] = v
 with open(os.path.expanduser("~/.drawbox/api_keys.json"), "w") as f:
     json.dump(keys, f, indent=2)
 PYTHON
     chmod 600 ~/.drawbox/api_keys.json
     if [ -s ~/.drawbox/api_keys.json ] && [ "$(cat ~/.drawbox/api_keys.json)" != "{}" ]; then
-        echo "   ✅ API keys migrated (manage them from Settings > API Keys in the dashboard)"
+        echo "   ✅ API key migrated (manage it from Settings > API Keys in the dashboard)"
     else
-        echo "   ⚠️  No API keys found. Add them from the dashboard: Settings > API Keys"
+        echo "   ⚠️  No AI Gateway key found. Add it from the dashboard: Settings > API Keys"
     fi
 else
     echo "   ✅ API keys file already exists"
