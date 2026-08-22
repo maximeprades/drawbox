@@ -186,17 +186,28 @@ echo ""
 
 # ── 5. PRINTER ───────────────────────────────────
 echo "🖨️  Printer"
-if lpstat -p drawbox-printer > /dev/null 2>&1; then
-    STATUS=$(lpstat -p drawbox-printer 2>/dev/null | head -1)
-    ok "drawbox-printer configured: $STATUS"
-else
-    fail "Printer 'drawbox-printer' not found. Run: lpstat -p -d"
-fi
+PRINTER_TYPE=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.drawbox/web_settings.json'))).get('printer_type') or 'cups')" 2>/dev/null || echo cups)
 
-if lsusb 2>/dev/null | grep -qi "Brother"; then
-    ok "Brother printer connected via USB"
+if [ "$PRINTER_TYPE" = "escpos_serial" ]; then
+    SERIAL_PORT=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.drawbox/web_settings.json'))).get('serial_port') or '/dev/ttyUSB0')" 2>/dev/null || echo /dev/ttyUSB0)
+    if [ -e "$SERIAL_PORT" ]; then
+        ok "Thermal printer port $SERIAL_PORT present"
+    else
+        fail "Thermal printer port $SERIAL_PORT not found. Check the USB cable and that the bridge firmware is flashed (firmware/atom_printer_bridge)"
+    fi
 else
-    warn "Brother printer not seen on USB. It may be asleep or disconnected."
+    if lpstat -p drawbox-printer > /dev/null 2>&1; then
+        STATUS=$(lpstat -p drawbox-printer 2>/dev/null | head -1)
+        ok "drawbox-printer configured: $STATUS"
+    else
+        fail "Printer 'drawbox-printer' not found. Run: lpstat -p -d"
+    fi
+
+    if lsusb 2>/dev/null | grep -qi "Brother"; then
+        ok "Brother printer connected via USB"
+    else
+        warn "Brother printer not seen on USB. It may be asleep or disconnected."
+    fi
 fi
 echo ""
 

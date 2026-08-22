@@ -206,6 +206,14 @@ sudo lpadmin -p drawbox-printer -E \
 sudo lpoptions -d drawbox-printer
 ```
 
+For the M5Stack ATOM Printer (or any ESC/POS serial thermal printer), CUPS is
+not involved. Set `printer_type` to `escpos_serial` in the dashboard Settings
+— stored in `~/.drawbox/web_settings.json` along with `serial_port` and
+`serial_baud` — and `print_image()` hands the page to `drawbox_escpos.py`,
+which renders it to ESC/POS raster bytes and writes them straight to the
+serial port. The ATOM must be flashed once with the USB bridge sketch in
+`firmware/atom_printer_bridge/`.
+
 ## Known Issues
 
 | Issue | Cause | Fix |

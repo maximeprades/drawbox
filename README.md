@@ -66,6 +66,20 @@ DrawBox supports three image generation backends. Switch models from the web das
 
 **Tools:** box cutter, metal ruler, pencil, hot glue gun, wire strippers (for spade terminals).
 
+### Thermal Printer Option
+
+No laser printer? DrawBox can also drive the [M5Stack ATOM Printer](https://docs.m5stack.com/en/guide/hobby_kit/atom_printer/usage) — a little 58mm receipt printer — or any ESC/POS serial thermal printer:
+
+1. Flash `firmware/atom_printer_bridge` onto the ATOM once (see its README). It replaces the stock WiFi firmware with a dumb USB-to-print-head bridge.
+2. Plug the printer into the Pi over USB.
+3. In the dashboard, switch **Settings → Printer** to "Thermal receipt" and set the serial port (usually `/dev/ttyUSB0`).
+
+Pages come out as receipt strips and take ~20-30 seconds at 9600 baud — the suspense is free. Keep the printer on its 12V power supply or prints come out faint. Smoke test without DrawBox:
+
+```bash
+python3 drawbox_escpos.py --port /dev/ttyUSB0
+```
+
 ## Quick Start
 
 ### 1. Open the Build Guide
