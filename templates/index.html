@@ -602,19 +602,36 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
       <div class="card-header"><div class="card-title">Voice & Audio</div></div>
       <div class="card-content">
         <div class="form-group">
-          <label class="form-label">ElevenLabs Voice ID</label>
-          <input class="input" type="text" id="cfgVoiceId" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
-          <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
+          <label class="form-label">Voice Provider</label>
+          <select class="select" id="cfgVoiceProvider" style="max-width:300px" onchange="updateVoiceProviderFields()">
+            <option value="elevenlabs">ElevenLabs</option>
+            <option value="grok">Grok (xAI)</option>
+          </select>
+          <div class="form-hint">Grok uses the xAI Voice API and needs the xAI API key.</div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
-          <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
+        <div class="form-group" id="elevenlabsFields">
+          <div class="form-group">
+            <label class="form-label">ElevenLabs Voice ID</label>
+            <input class="input" type="text" id="cfgVoiceId" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
+            <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
+            <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
+            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
+            <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
+            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
-          <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
-          <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
+        <div class="form-group" id="grokFields" style="display:none">
+          <div class="form-group">
+            <label class="form-label">Grok Voice</label>
+            <input class="input" type="text" id="cfgGrokVoice" placeholder="eve" style="max-width:300px;font-family:monospace" />
+            <div class="form-hint">Built-in voice name like eve, or a custom voice_id from the xAI console</div>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
@@ -1165,12 +1182,21 @@ connectLogs();
 function clearLog() { $('logArea').textContent = ''; }
 
 // ── SETTINGS ──────────────────────────────────
+function updateVoiceProviderFields() {
+  const grok = $('cfgVoiceProvider').value === 'grok';
+  $('elevenlabsFields').style.display = grok ? 'none' : 'block';
+  $('grokFields').style.display = grok ? 'block' : 'none';
+}
+
 async function loadSettings() {
   try {
     const r = await fetch('/api/settings');
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
     $('cfgModel').value = d.image_model || 'nano-banana';
+    $('cfgVoiceProvider').value = d.voice_provider || 'elevenlabs';
+    $('cfgGrokVoice').value = d.grok_voice_id || 'eve';
+    updateVoiceProviderFields();
     $('cfgVoiceId').value = d.tts_voice_id || 'xNtG3W2oqJs0cJZuTyBc';
     $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
     $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
@@ -1184,6 +1210,8 @@ async function saveSettings() {
   const data = {
     coloring_prompt: $('cfgPrompt').value,
     image_model: $('cfgModel').value,
+    voice_provider: $('cfgVoiceProvider').value,
+    grok_voice_id: $('cfgGrokVoice').value.trim(),
     tts_voice_id: $('cfgVoiceId').value.trim(),
     tts_stability: parseFloat($('cfgStability').value),
     tts_style: parseFloat($('cfgStyle').value),

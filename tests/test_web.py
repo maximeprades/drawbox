@@ -83,6 +83,19 @@ def test_settings_accepts_gateway_model(client):
     assert client.get("/api/settings").get_json()["image_model"] == "bfl/flux-pro-1.1"
 
 
+def test_settings_accepts_voice_provider_and_grok_voice(client):
+    client.post("/api/settings",
+                json={"voice_provider": "grok", "grok_voice_id": "ara"})
+    body = client.get("/api/settings").get_json()
+    assert body["voice_provider"] == "grok"
+    assert body["grok_voice_id"] == "ara"
+
+
+def test_settings_rejects_unknown_voice_provider(client):
+    client.post("/api/settings", json={"voice_provider": "alexa"})
+    assert client.get("/api/settings").get_json()["voice_provider"] == "elevenlabs"
+
+
 def test_settings_caps_prompt_length(client):
     huge = "x" * 10000
     client.post("/api/settings", json={"coloring_prompt": huge})
@@ -642,6 +655,7 @@ def test_dashboard_setting_toggles_use_the_whole_row(client):
 
 def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
     html = client.get("/").get_data(as_text=True)
+    assert 'id="cfgVoiceProvider"' in html
     assert 'id="keyXai"' in html
     assert 'id="keyAiGateway"' in html
     assert 'value="spacexai/grok-imagine-image"' in html

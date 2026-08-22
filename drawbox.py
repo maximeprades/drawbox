@@ -51,6 +51,8 @@ REBOOT_HOLD_SEC = 5              # hold button this long to trigger reboot
 MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
 
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
+VOICE_PROVIDER = "elevenlabs"
+GROK_VOICE_ID = "eve"
 TTS_VOICE_ID = "xNtG3W2oqJs0cJZuTyBc"
 TTS_STABILITY = 0.5
 TTS_STYLE = 0.0
@@ -83,8 +85,16 @@ KIDS_JOKES = _load_jokes()
 
 def _apply_tts_settings():
     """Pull TTS voice + tuning from settings.json on disk."""
-    global TTS_VOICE_ID, TTS_STABILITY, TTS_STYLE
+    global VOICE_PROVIDER, GROK_VOICE_ID, TTS_VOICE_ID, TTS_STABILITY, TTS_STYLE
     s = load_settings()
+    # The settings file is a hand-editable boundary; reject unknown providers.
+    if s.get("voice_provider") in drawbox_core.VOICE_PROVIDERS:
+        VOICE_PROVIDER = s["voice_provider"]
+    else:
+        VOICE_PROVIDER = "elevenlabs"
+    grok_voice = s.get("grok_voice_id")
+    if isinstance(grok_voice, str) and grok_voice.strip():
+        GROK_VOICE_ID = grok_voice.strip()
     if s.get("tts_voice_id"):
         TTS_VOICE_ID = s["tts_voice_id"]
     TTS_STABILITY = max(0.0, min(1.0, float(s.get("tts_stability", TTS_STABILITY))))
@@ -95,7 +105,7 @@ _apply_tts_settings()
 
 
 class VoiceFeedback:
-    """Caches ElevenLabs TTS lines as .mp3 keyed by content hash.
+    """Caches TTS lines as .mp3 keyed by content hash.
 
     Construction is cheap and offline; call :meth:`warm_up` once at startup
     to generate the audio cache (network).
@@ -109,10 +119,14 @@ class VoiceFeedback:
         self._tts_rate_limit_logged = False
 
     def _tts_path(self, text):
-        """Cache filename keyed on voice + tuning + text."""
-        h = hashlib.md5(
-            f"{TTS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}".encode()
-        ).hexdigest()[:12]
+        """Cache filename keyed on provider + voice + tuning + text."""
+        if VOICE_PROVIDER == "grok":
+            key = f"grok:{GROK_VOICE_ID}:{text}"
+        else:
+            # Byte-identical to the historical ElevenLabs format so existing
+            # on-disk caches stay valid.
+            key = f"{TTS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}"
+        h = hashlib.md5(key.encode()).hexdigest()[:12]
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
@@ -124,23 +138,26 @@ class VoiceFeedback:
     def _synthesize(self, text, out_path):
         """Fetch TTS audio for ``text`` into ``out_path``.
 
-        The single place that talks to ElevenLabs: owns the rate-limit gate
-        and all error handling. Returns True iff audio was written.
+        The single place that talks to the TTS provider: owns the rate-limit
+        gate and all error handling. Returns True iff audio was written.
         """
         if self._tts_rate_limit_remaining() > 0:
             return False
         log.info("generating TTS: %s…", text[:50])
         try:
-            self._elevenlabs_tts(text, out_path)
+            if VOICE_PROVIDER == "grok":
+                self._grok_tts(text, out_path)
+            else:
+                self._elevenlabs_tts(text, out_path)
             return True
         except HTTPError as e:
             if e.code == 429:
                 self._handle_tts_rate_limit(e)
             else:
-                log.warning("ElevenLabs TTS HTTP %s failed for %r",
-                            e.code, text[:80])
+                log.warning("%s TTS HTTP %s failed for %r",
+                            VOICE_PROVIDER, e.code, text[:80])
         except Exception as e:
-            log.warning("ElevenLabs TTS failed for %r: %s", text[:80], e)
+            log.warning("%s TTS failed for %r: %s", VOICE_PROVIDER, text[:80], e)
             # A mid-download failure can leave a partial file; don't let it
             # poison the cache.
             try:
@@ -164,8 +181,9 @@ class VoiceFeedback:
         )
         if not self._tts_rate_limit_logged:
             log.warning(
-                "ElevenLabs TTS rate-limited (HTTP 429); using cached audio "
+                "%s TTS rate-limited (HTTP 429); using cached audio "
                 "and espeak fallback for %.0fs",
+                VOICE_PROVIDER,
                 self._tts_rate_limit_remaining(),
             )
             self._tts_rate_limit_logged = True
@@ -186,6 +204,22 @@ class VoiceFeedback:
         req = urllib.request.Request(url, data=body, headers={
             "Content-Type": "application/json",
             "xi-api-key": drawbox_core.ELEVENLABS_API_KEY,
+            "Accept": "audio/mpeg",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
+            shutil.copyfileobj(resp, f, length=8192)
+
+    def _grok_tts(self, text, out_path):
+        import urllib.request
+        url = "https://api.x.ai/v1/tts"
+        body = json.dumps({
+            "text": "... " + text,   # leading pause helps the USB speaker wake
+            "voice_id": GROK_VOICE_ID,
+            "language": "en",
+        }).encode()
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}",
             "Accept": "audio/mpeg",
         })
         with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
@@ -444,10 +478,13 @@ def _is_busy():
 def _print_config():
     log.info("DrawBox configuration:")
     log.info("  image_model = %s", IMAGE_MODEL)
+    log.info("  voice       = %s", VOICE_PROVIDER)
     log.info("  openai      = %s", mask_key(drawbox_core.OPENAI_API_KEY) or "missing")
     log.info("  elevenlabs  = %s", mask_key(drawbox_core.ELEVENLABS_API_KEY) or "missing")
     log.info("  replicate   = %s", mask_key(drawbox_core.REPLICATE_API_TOKEN) or "missing")
     log.info("  gemini      = %s", mask_key(drawbox_core.GEMINI_API_KEY) or "missing")
+    log.info("  ai_gateway  = %s", mask_key(drawbox_core.AI_GATEWAY_API_KEY) or "missing")
+    log.info("  xai         = %s", mask_key(drawbox_core.XAI_API_KEY) or "missing")
     log.info("  keys file   = %s (%s)",
              API_KEYS_FILE,
              "present" if API_KEYS_FILE.exists() else "missing, using env")
@@ -465,8 +502,13 @@ def main():
     if not drawbox_core.OPENAI_API_KEY:
         log.error("OPENAI_API_KEY not set; aborting.")
         return
-    if not drawbox_core.ELEVENLABS_API_KEY:
-        log.error("ELEVENLABS_API_KEY not set; aborting.")
+    if VOICE_PROVIDER == "grok":
+        if not drawbox_core.XAI_API_KEY:
+            log.error("XAI_API_KEY not set (needed for grok voice); aborting.")
+            return
+    elif not drawbox_core.ELEVENLABS_API_KEY:
+        log.error("ELEVENLABS_API_KEY not set (needed for elevenlabs voice); "
+                  "aborting.")
         return
 
     if IMAGE_MODEL == "flux-schnell" and not drawbox_core.REPLICATE_API_TOKEN:

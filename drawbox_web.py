@@ -23,7 +23,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
-    SAFETY_MODE_FILE, SUPPORTED_MODELS, _load_api_keys, _write_secure_json,
+    SAFETY_MODE_FILE, SUPPORTED_MODELS, VOICE_PROVIDERS,
+    _load_api_keys, _write_secure_json,
     apply_api_keys, contains_poop, default_scripts, ensure_safety_mode_default,
     generate_image, has_please, is_safe, is_valid_device_token,
     list_paired_devices, load_scripts, load_settings, log_print_event,
@@ -366,6 +367,10 @@ def api_settings():
             settings["coloring_prompt"] = data["coloring_prompt"][:5000]
         if data.get("image_model") in SUPPORTED_MODELS:
             settings["image_model"] = data["image_model"]
+        if data.get("voice_provider") in VOICE_PROVIDERS:
+            settings["voice_provider"] = data["voice_provider"]
+        if isinstance(data.get("grok_voice_id"), str) and data["grok_voice_id"].strip():
+            settings["grok_voice_id"] = data["grok_voice_id"].strip()[:64]
         if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
             settings["tts_voice_id"] = data["tts_voice_id"].strip()[:64]
         if "tts_stability" in data:

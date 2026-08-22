@@ -99,6 +99,7 @@ GATEWAY_IMAGE_MODELS = (
 )
 
 SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image") + GATEWAY_IMAGE_MODELS
+VOICE_PROVIDERS = ("elevenlabs", "grok")
 
 # ── API KEYS ──────────────────────────────────────
 OPENAI_API_KEY = ""
@@ -484,6 +485,8 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
+    "voice_provider": "elevenlabs",
+    "grok_voice_id": "eve",
     "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc",
     "tts_stability": 0.5,
     "tts_style": 0.0,
