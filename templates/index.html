@@ -288,9 +288,9 @@ body {
 /* ── TOGGLE ────────────────────────── */
 .toggle {
   position: relative; width: 44px; height: 24px;
-  background: var(--border); border-radius: 12px;
+  background: #a3a3a3; border-radius: 12px;
   cursor: pointer; transition: background 0.2s;
-  flex-shrink: 0; border: none;
+  flex-shrink: 0; border: none; pointer-events: none;
 }
 .toggle.on { background: var(--success); }
 .toggle::after {
@@ -300,6 +300,14 @@ body {
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 .toggle.on::after { transform: translateX(20px); }
+button.setting-row {
+  width: 100%; font: inherit; color: inherit;
+  background: transparent; text-align: left; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  border: none; border-bottom: 1px solid var(--border); border-radius: 0;
+}
+button.setting-row:last-child { border-bottom: none; }
+button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-left: 24px; padding-right: 24px; }
 
 /* ── MOBILE HEADER ─────────────────── */
 .mobile-header {
@@ -613,27 +621,27 @@ body {
     <div class="card">
       <div class="card-header"><div class="card-title">Safety & Behavior</div></div>
       <div class="card-content">
-        <div class="setting-row">
+        <button type="button" class="setting-row" onclick="togglePlease()" aria-pressed="false">
           <div class="setting-info">
             <div class="setting-name">"Please" Mode</div>
             <div class="setting-desc">Kids must say "please" to get a drawing</div>
           </div>
-          <button class="toggle" id="pleaseToggle" onclick="togglePlease()"></button>
-        </div>
-        <div class="setting-row">
+          <span class="toggle" id="pleaseToggle"></span>
+        </button>
+        <button type="button" class="setting-row" onclick="toggleSafety()" aria-pressed="true">
           <div class="setting-info">
             <div class="setting-name">Safety Filter</div>
             <div class="setting-desc">Word blocklist. When off, the AI prompt still instructs child-safe output.</div>
           </div>
-          <button class="toggle" id="safetyToggle" onclick="toggleSafety()"></button>
-        </div>
-        <div class="setting-row">
+          <span class="toggle" id="safetyToggle"></span>
+        </button>
+        <button type="button" class="setting-row" onclick="togglePoop()" aria-pressed="true">
           <div class="setting-info">
             <div class="setting-name">Poop Mode</div>
             <div class="setting-desc">When on, kids can ask for funny poop drawings. When off, requests using "poop", "pooped", "pooping", or "poopy" are rejected.</div>
           </div>
-          <button class="toggle" id="poopToggle" onclick="togglePoop()"></button>
-        </div>
+          <span class="toggle" id="poopToggle"></span>
+        </button>
       </div>
     </div>
 
@@ -910,7 +918,9 @@ const deviceToken = () => localStorage.getItem('drawbox_token') || '';
 
 window.fetch = async (url, opts = {}) => {
   if (typeof url === 'string' && url.startsWith('/api/') && deviceToken()) {
-    opts.headers = {...(opts.headers || {}), 'Authorization': 'Bearer ' + deviceToken()};
+    const headers = new Headers(opts.headers || undefined);
+    headers.set('Authorization', 'Bearer ' + deviceToken());
+    opts = {...opts, headers};
   }
   const r = await _rawFetch(url, opts);
   if (r.status === 401) showPairing();
@@ -1211,77 +1221,71 @@ async function saveApiKeys() {
   } catch(e) { toast('Error: ' + e.message, false); }
 }
 
-// ── PLEASE MODE ───────────────────────────────
-async function loadPleaseMode() {
+// ── PLEASE / SAFETY / POOP TOGGLES ────────────
+function setToggle(id, on) {
+  const el = $(id);
+  el.className = 'toggle' + (on ? ' on' : '');
+  const row = el.closest('.setting-row');
+  if (row) row.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+async function loadFlag(id, url) {
   try {
-    const r = await fetch('/api/please-mode');
+    const r = await fetch(url);
     const d = await r.json();
-    $('pleaseToggle').className = 'toggle' + (d.enabled ? ' on' : '');
+    setToggle(id, !!d.enabled);
   } catch(e) {}
 }
 
-async function togglePlease() {
+async function toggleFlag(id, url, {onMsg, offMsg, confirmOff} = {}) {
+  const el = $(id);
+  const next = !el.classList.contains('on');
+  if (!next && confirmOff && !await askConfirm(confirmOff, {okText: 'Turn off', danger: true})) return;
+  setToggle(id, next);
   try {
-    const r = await fetch('/api/please-mode');
-    const d = await r.json();
-    await fetch('/api/please-mode', {
+    const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: !d.enabled})
+      body: JSON.stringify({enabled: next})
     });
-    loadPleaseMode();
-    toast(d.enabled ? '"Please" mode disabled' : '"Please" mode enabled!');
-  } catch(e) { toast('Error: ' + e.message, false); }
+    const d = await r.json();
+    if (!r.ok || d.ok === false) {
+      setToggle(id, !next);
+      toast(d.error || 'Could not update setting', false);
+      return;
+    }
+    if (typeof d.enabled === 'boolean') setToggle(id, d.enabled);
+    toast(next ? onMsg : offMsg);
+  } catch(e) {
+    setToggle(id, !next);
+    toast('Error: ' + e.message, false);
+  }
 }
 
-// ── SAFETY MODE ───────────────────────────────
-async function loadSafetyMode() {
-  try {
-    const r = await fetch('/api/safety-mode');
-    const d = await r.json();
-    $('safetyToggle').className = 'toggle' + (d.enabled ? ' on' : '');
-  } catch(e) {}
+function loadPleaseMode() { return loadFlag('pleaseToggle', '/api/please-mode'); }
+function loadSafetyMode() { return loadFlag('safetyToggle', '/api/safety-mode'); }
+function loadPoopMode() { return loadFlag('poopToggle', '/api/poop-mode'); }
+
+function togglePlease() {
+  return toggleFlag('pleaseToggle', '/api/please-mode', {
+    onMsg: '"Please" mode enabled!',
+    offMsg: '"Please" mode disabled',
+  });
 }
 
-async function toggleSafety() {
-  try {
-    const r = await fetch('/api/safety-mode');
-    const d = await r.json();
-    if (d.enabled && !await askConfirm(
-      'Turn OFF the safety word filter?\nThe AI prompt still instructs child-safe output, but blocked words will be allowed.',
-      {okText: 'Turn off', danger: true}
-    )) return;
-    await fetch('/api/safety-mode', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: !d.enabled})
-    });
-    loadSafetyMode();
-    toast(d.enabled ? 'Safety filter disabled' : 'Safety filter enabled!');
-  } catch(e) { toast('Error: ' + e.message, false); }
+function toggleSafety() {
+  return toggleFlag('safetyToggle', '/api/safety-mode', {
+    onMsg: 'Safety filter enabled!',
+    offMsg: 'Safety filter disabled',
+    confirmOff: 'Turn OFF the safety word filter?\nThe AI prompt still instructs child-safe output, but blocked words will be allowed.',
+  });
 }
 
-// ── POOP MODE ─────────────────────────────────
-async function loadPoopMode() {
-  try {
-    const r = await fetch('/api/poop-mode');
-    const d = await r.json();
-    $('poopToggle').className = 'toggle' + (d.enabled ? ' on' : '');
-  } catch(e) {}
-}
-
-async function togglePoop() {
-  try {
-    const r = await fetch('/api/poop-mode');
-    const d = await r.json();
-    await fetch('/api/poop-mode', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: !d.enabled})
-    });
-    loadPoopMode();
-    toast(d.enabled ? 'Poop mode disabled' : 'Poop mode enabled!');
-  } catch(e) { toast('Error: ' + e.message, false); }
+function togglePoop() {
+  return toggleFlag('poopToggle', '/api/poop-mode', {
+    onMsg: 'Poop mode enabled!',
+    offMsg: 'Poop mode disabled',
+  });
 }
 
 // ── SCRIPTS ──────────────────────────────────
