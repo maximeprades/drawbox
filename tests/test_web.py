@@ -588,3 +588,14 @@ def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
     assert 'id="confirmOverlay"' in html
     assert "await askConfirm(" in html
     assert not re.search(r"""(?<!ask)confirm\s*\(\s*['"`]""", html)
+
+
+def test_dashboard_setting_toggles_use_the_whole_row(client):
+    html = client.get("/").get_data(as_text=True)
+    assert "function toggleFlag(" in html
+    for name in ("togglePlease", "toggleSafety", "togglePoop"):
+        assert re.search(
+            rf'<button type="button" class="setting-row"[^>]*onclick="{name}\(\)"',
+            html,
+        )
+    assert 'id="pleaseToggle" onclick=' not in html
