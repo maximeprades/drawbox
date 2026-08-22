@@ -409,6 +409,22 @@ def test_restore_missing_template_never_overwrites(tmp_path, monkeypatch):
     assert app_template.read_text() == "<html>deployed</html>"
 
 
+def test_wifi_saved_add_caps_priority_at_networkmanager_max(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [
+        {"name": "Home", "uuid": "11111111-1111-1111-1111-111111111111",
+         "ssid": "Home", "priority": 995},
+    ])
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    body = client.post("/api/wifi/saved", json={"ssid": "Cafe", "password": "x"}).get_json()
+
+    assert body["ok"] is True
+    args = calls[0]
+    prio = args[args.index("connection.autoconnect-priority") + 1]
+    assert prio == "999"
+
+
 def test_wifi_saved_add_preconfigures_network(client, monkeypatch):
     calls = []
     monkeypatch.setattr(drawbox_web, "_saved_wifi_profiles", lambda: [])
@@ -475,7 +491,25 @@ def test_wifi_saved_reorder_sets_priorities(client, monkeypatch):
     body = client.post("/api/wifi/saved/reorder", json={"uuids": uuids}).get_json()
 
     assert body["ok"] is True
-    assert calls == [(uuids[0], 1000), (uuids[1], 990)]
+    assert calls == [(uuids[0], 990), (uuids[1], 980)]
+
+
+def test_wifi_priority_stays_inside_networkmanager_range():
+    assert drawbox_web._clamp_wifi_priority(1000) == 999
+    assert drawbox_web._clamp_wifi_priority(-2000) == -999
+    assert drawbox_web._clamp_wifi_priority(50) == 50
+    assert drawbox_web._next_wifi_priority([{"priority": 995}]) == 999
+    assert drawbox_web._next_wifi_priority([]) == 10
+
+
+def test_set_wifi_priority_clamps_before_nmcli(monkeypatch):
+    calls = []
+    uuid = "11111111-1111-1111-1111-111111111111"
+    monkeypatch.setattr(drawbox_web, "_run_sudo_nmcli", lambda args, timeout=30: calls.append(args))
+
+    drawbox_web._set_wifi_priority(uuid, 1000)
+
+    assert calls[0][-2:] == ["connection.autoconnect-priority", "999"]
 
 
 def test_wifi_saved_delete_rejects_invalid_uuid(client):
