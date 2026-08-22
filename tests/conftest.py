@@ -64,14 +64,15 @@ def drawbox_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def client(drawbox_dir, monkeypatch):
     """Flask test client paired as a device, with an isolated drawbox dir."""
-    monkeypatch.setenv("OPENAI_API_KEY", "")
-    monkeypatch.setenv("REPLICATE_API_TOKEN", "")
-    monkeypatch.setenv("GEMINI_API_KEY", "")
-    monkeypatch.setenv("ELEVENLABS_API_KEY", "")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "")
-    monkeypatch.setenv("XAI_API_KEY", "")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
     import drawbox_core
     import drawbox_web
+    drawbox_core.apply_api_keys()
     drawbox_web.app.testing = True
     test_client = drawbox_web.app.test_client()
     # Pair through the real flow so every test exercises the token guard.

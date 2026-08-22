@@ -54,11 +54,11 @@ def test_settings_get_returns_defaults(client):
     assert body["record_seconds"] == 10
 
 
-def test_settings_post_clamps_floats(client):
-    client.post("/api/settings", json={"tts_stability": 5.0, "tts_style": -1.0})
-    r = client.get("/api/settings").get_json()
-    assert r["tts_stability"] == 1.0
-    assert r["tts_style"] == 0.0
+def test_settings_post_resolves_tts_voice(client):
+    client.post("/api/settings", json={"tts_voice_id": "NOVA"})
+    assert client.get("/api/settings").get_json()["tts_voice_id"] == "nova"
+    client.post("/api/settings", json={"tts_voice_id": "not-a-voice"})
+    assert client.get("/api/settings").get_json()["tts_voice_id"] == "alloy"
 
 
 def test_settings_post_clamps_record_seconds(client):
@@ -93,7 +93,7 @@ def test_settings_accepts_voice_provider_and_grok_voice(client):
 
 def test_settings_rejects_unknown_voice_provider(client):
     client.post("/api/settings", json={"voice_provider": "alexa"})
-    assert client.get("/api/settings").get_json()["voice_provider"] == "elevenlabs"
+    assert client.get("/api/settings").get_json()["voice_provider"] == "gateway"
 
 
 def test_settings_caps_prompt_length(client):
@@ -176,35 +176,43 @@ def test_poop_mode_toggle(client):
 # ── /api/keys ──────────────────────────────────────
 
 def test_keys_get_returns_masked(client, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdef123456")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-abcdef123456")
     body = client.get("/api/keys").get_json()
-    assert body["openai"].startswith("sk-a")
-    assert body["openai"].endswith("3456")
-    assert "abcdef" not in body["openai"]
+    assert body["ai_gateway"].startswith("vck-")
+    assert body["ai_gateway"].endswith("3456")
+    assert "abcdef" not in body["ai_gateway"]
+    assert "openai" not in body
 
 
 def test_keys_post_writes_file(client):
-    r = client.post("/api/keys", json={"openai": "sk-new", "replicate": "r8-new"})
+    r = client.post("/api/keys", json={"ai_gateway": "vck-new"})
     assert r.status_code == 200
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-new"
-    assert on_disk["replicate"] == "r8-new"
+    assert on_disk == {"ai_gateway": "vck-new"}
 
 
 def test_keys_post_skips_blank_values(client):
-    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"openai": "sk-old"}))
-    client.post("/api/keys", json={"openai": "   ", "replicate": "r8-new"})
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"ai_gateway": "vck-old"}))
+    client.post("/api/keys", json={"ai_gateway": "   "})
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-old"
-    assert on_disk["replicate"] == "r8-new"
+    assert on_disk == {"ai_gateway": "vck-old"}
 
 
 def test_keys_post_ignores_non_string_values(client):
-    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"openai": "sk-old"}))
-    client.post("/api/keys", json={"openai": 42, "replicate": ["r8"]})
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({"ai_gateway": "vck-old"}))
+    client.post("/api/keys", json={"ai_gateway": 42})
     on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
-    assert on_disk["openai"] == "sk-old"
-    assert "replicate" not in on_disk
+    assert on_disk == {"ai_gateway": "vck-old"}
+
+
+def test_keys_post_drops_legacy_provider_keys(client):
+    drawbox_core.API_KEYS_FILE.write_text(json.dumps({
+        "openai": "sk-old",
+        "ai_gateway": "vck-keep",
+    }))
+    client.post("/api/keys", json={"ai_gateway": "vck-new"})
+    on_disk = json.loads(drawbox_core.API_KEYS_FILE.read_text())
+    assert on_disk == {"ai_gateway": "vck-new"}
 
 
 # ── /api/generate input validation (mocked image generator) ──
@@ -642,6 +650,23 @@ def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
     assert not re.search(r"""(?<!ask)confirm\s*\(\s*['"`]""", html)
 
 
+def test_dashboard_keys_match_the_registry(client):
+    """One gateway key for images/STT, plus the two optional voice keys.
+
+    The direct image-provider keys retired by the gateway migration must not
+    resurface.
+    """
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="keyGateway"' in html
+    assert "AI Gateway API Key" in html
+    assert 'id="keyElevenlabs"' in html
+    assert 'id="keyXai"' in html
+    assert 'id="keyOpenai"' not in html
+    assert 'id="keyReplicate"' not in html
+    assert 'id="keyGemini"' not in html
+    assert "TTS_VOICES" in html
+
+
 def test_dashboard_setting_toggles_use_the_whole_row(client):
     html = client.get("/").get_data(as_text=True)
     assert "function toggleFlag(" in html
@@ -657,5 +682,5 @@ def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
     html = client.get("/").get_data(as_text=True)
     assert 'id="cfgVoiceProvider"' in html
     assert 'id="keyXai"' in html
-    assert 'id="keyAiGateway"' in html
+    assert 'id="keyElevenlabs"' in html
     assert 'value="spacexai/grok-imagine-image"' in html

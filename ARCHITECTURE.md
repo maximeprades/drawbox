@@ -54,9 +54,9 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | OS | Raspberry Pi OS Bookworm 64-bit Lite | Headless, no desktop |
 | Language | Python 3 | System Python, no virtualenv |
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
-| AI - Image | OpenAI gpt-image-1 | Generates coloring pages |
-| AI - Speech-to-Text | OpenAI Whisper (whisper-1) | Transcribes kid's voice |
-| AI - Text-to-Speech | ElevenLabs or Grok (xAI Voice API) | Selected by the `voice_provider` setting |
+| AI - Image | Vercel AI Gateway | nano-banana, flux-schnell, or gpt-image |
+| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1`) | Transcribes kid's voice |
+| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1`), ElevenLabs, or Grok (xAI) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |
@@ -85,7 +85,7 @@ main()
             └→ transcribe()            # Whisper API
             └→ is_safe()               # Blocklist check
             └→ voice.play("thinking")  # Random variation (5 options)
-            └→ generate_image()        # gpt-image-1, 1024x1024
+            └→ generate_image()        # AI Gateway image model
             └→ voice.play("printing")
             └→ print_image()           # lp command to CUPS
             └→ voice.play("done")
@@ -172,19 +172,23 @@ requirements.txt        # Python dependencies
 
 DrawBox loads API keys with this precedence (first match wins per key):
 
-1. `~/.drawbox/api_keys.json` (mode 0600, managed from the dashboard)
-2. Environment variables: `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`,
-   `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `AI_GATEWAY_API_KEY`, `XAI_API_KEY`
+1. `~/.drawbox/api_keys.json` fields `ai_gateway`, `elevenlabs`, `xai`
+   (mode 0600, managed from the dashboard)
+2. Environment variables `AI_GATEWAY_API_KEY`, `ELEVENLABS_API_KEY`,
+   `XAI_API_KEY`
 
-The dashboard writes to the JSON file; `deploy-web.sh` migrates existing
-systemd `Environment=` values into it on first run. New deployments don't
-need keys in the service file at all.
+The OpenAI Python client talks to `https://ai-gateway.vercel.sh/v1` for
+images, gateway TTS, and Whisper. The `elevenlabs` and `xai` keys are only
+needed when the matching `voice_provider` is selected. The dashboard writes
+the JSON file; `deploy-web.sh` migrates an existing systemd
+`AI_GATEWAY_API_KEY` into it on first run. New deployments don't need keys
+in the service file at all.
 
 ### Optional Environment Variables
 
 | Variable | Effect |
 |---|---|
-| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, `gpt-image`, or any Vercel AI Gateway image model id (see `GATEWAY_IMAGE_MODELS` in `drawbox_core.py`) |
+| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, `gpt-image`, or any gateway catalog id (see `GATEWAY_IMAGE_CATALOG` in `drawbox_core.py`) |
 | `DRAWBOX_ALLOWED_ORIGINS` | Comma-separated CORS allowlist for the dashboard. Defaults cover `*.drawbox.pages.dev`. Accepts exact hosts or `*.domain.tld` patterns. |
 
 ### ALSA Audio (~/.asoundrc)

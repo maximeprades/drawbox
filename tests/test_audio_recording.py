@@ -1,11 +1,20 @@
 """Audio recording fallback behavior."""
 
 import logging
-from urllib.error import HTTPError
 
+import httpx
 import numpy as np
+from openai import RateLimitError
 
 import drawbox
+
+
+def _rate_limit_error(retry_after="120"):
+    request = httpx.Request("POST", "https://ai-gateway.vercel.sh/v1/audio/speech")
+    response = httpx.Response(
+        429, request=request, headers={"retry-after": retry_after},
+    )
+    return RateLimitError("Too Many Requests", response=response, body=None)
 
 
 def test_candidate_input_devices_prioritizes_usb_then_default(monkeypatch):
@@ -104,15 +113,9 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
 
     def rate_limited(text, _out_path):
         attempts.append(text)
-        raise HTTPError(
-            url="https://api.elevenlabs.io",
-            code=429,
-            msg="Too Many Requests",
-            hdrs={"Retry-After": "120"},
-            fp=None,
-        )
+        raise _rate_limit_error()
 
-    monkeypatch.setattr(feedback, "_elevenlabs_tts", rate_limited)
+    monkeypatch.setattr(feedback, "_gateway_tts", rate_limited)
 
     with caplog.at_level(logging.WARNING, logger="drawbox"):
         assert feedback._generate_one("first line") is None
@@ -130,8 +133,8 @@ def test_live_tts_uses_espeak_during_rate_limit(monkeypatch):
 
     monkeypatch.setattr(
         feedback,
-        "_elevenlabs_tts",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("should not call ElevenLabs")),
+        "_gateway_tts",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("should not call Gateway TTS")),
     )
     monkeypatch.setattr(drawbox.subprocess, "run", lambda args, check=False: spoken.append(args))
 
@@ -161,15 +164,9 @@ def test_warm_up_loads_disk_cache_after_rate_limit(monkeypatch, tmp_path):
 
     def rate_limited(self, text, _out_path):
         attempts.append(text)
-        raise HTTPError(
-            url="https://api.elevenlabs.io",
-            code=429,
-            msg="Too Many Requests",
-            hdrs={"Retry-After": "120"},
-            fp=None,
-        )
+        raise _rate_limit_error()
 
-    monkeypatch.setattr(drawbox.VoiceFeedback, "_elevenlabs_tts", rate_limited)
+    monkeypatch.setattr(drawbox.VoiceFeedback, "_gateway_tts", rate_limited)
 
     feedback.warm_up()
 

@@ -23,9 +23,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
-    SAFETY_MODE_FILE, SUPPORTED_MODELS, VOICE_PROVIDERS,
-    _load_api_keys, _write_secure_json,
-    apply_api_keys, contains_poop, default_scripts, ensure_safety_mode_default,
+    OPENAI_TTS_VOICES, SAFETY_MODE_FILE, SUPPORTED_MODELS, VOICE_PROVIDERS,
+    _load_api_keys,
+    _write_secure_json, apply_api_keys, contains_poop, default_scripts,
+    ensure_safety_mode_default, resolve_tts_voice,
     generate_image, has_please, is_safe, is_valid_device_token,
     list_paired_devices, load_scripts, load_settings, log_print_event,
     mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
@@ -202,8 +203,11 @@ def api_revoke_device(device_id):
 
 @app.route("/")
 def index():
-    return render_template("index.html",
-                           gateway_models=drawbox_core.GATEWAY_IMAGE_MODELS)
+    return render_template(
+        "index.html",
+        tts_voices=sorted(OPENAI_TTS_VOICES),
+        gateway_models=drawbox_core.GATEWAY_IMAGE_CATALOG,
+    )
 
 @app.route("/guide")
 def guide():
@@ -351,9 +355,6 @@ def api_logs_download():
         download_name=f"drawbox-logs-{ts}.txt",
     )
 
-def _clamp_float(v, lo, hi):
-    return max(lo, min(hi, float(v)))
-
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "GET":
@@ -369,14 +370,16 @@ def api_settings():
             settings["image_model"] = data["image_model"]
         if data.get("voice_provider") in VOICE_PROVIDERS:
             settings["voice_provider"] = data["voice_provider"]
+        if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
+            settings["tts_voice_id"] = resolve_tts_voice(data["tts_voice_id"])
+        if isinstance(data.get("elevenlabs_voice_id"), str) and data["elevenlabs_voice_id"].strip():
+            settings["elevenlabs_voice_id"] = data["elevenlabs_voice_id"].strip()[:64]
         if isinstance(data.get("grok_voice_id"), str) and data["grok_voice_id"].strip():
             settings["grok_voice_id"] = data["grok_voice_id"].strip()[:64]
-        if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
-            settings["tts_voice_id"] = data["tts_voice_id"].strip()[:64]
         if "tts_stability" in data:
-            settings["tts_stability"] = _clamp_float(data["tts_stability"], 0.0, 1.0)
+            settings["tts_stability"] = max(0.0, min(1.0, float(data["tts_stability"])))
         if "tts_style" in data:
-            settings["tts_style"] = _clamp_float(data["tts_style"], 0.0, 1.0)
+            settings["tts_style"] = max(0.0, min(1.0, float(data["tts_style"])))
         if "record_seconds" in data:
             settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
     except (TypeError, ValueError) as e:
@@ -457,11 +460,15 @@ def api_keys():
             existing = {}
     except (OSError, ValueError):
         existing = {}
+    clean = {}
     for k in drawbox_core.API_KEY_NAMES:
+        prior = existing.get(k)
+        if isinstance(prior, str) and prior.strip():
+            clean[k] = prior.strip()
         val = data.get(k)
         if isinstance(val, str) and val.strip():
-            existing[k] = val.strip()
-    _write_secure_json(API_KEYS_FILE, existing)
+            clean[k] = val.strip()
+    _write_secure_json(API_KEYS_FILE, clean)
     apply_api_keys()
     return jsonify(ok=True)
 
@@ -1009,8 +1016,8 @@ _restore_missing_template()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    if not drawbox_core.OPENAI_API_KEY:
-        log.warning("OPENAI_API_KEY not set — voice features won't work.")
+    if not drawbox_core.AI_GATEWAY_API_KEY:
+        log.warning("AI_GATEWAY_API_KEY not set — generation will fail until you add it.")
     log.info("image_model=%s safety_filter=%s",
              IMAGE_MODEL, "on" if safety_mode_enabled() else "off")
     log.info("starting on http://0.0.0.0:5000")

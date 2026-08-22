@@ -1,7 +1,7 @@
 """DrawBox core — shared logic for the button script and the web dashboard.
 
 This module owns configuration on disk (API keys, settings, scripts, sentinels),
-the safety blocklist, image generation across three providers, image post-
+the safety blocklist, image generation via Vercel AI Gateway, image post-
 processing, and analytics logging. Both ``drawbox.py`` and ``drawbox_web.py``
 import from here so behavior stays consistent.
 """
@@ -20,9 +20,6 @@ import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from urllib.request import Request, urlopen
-
-import replicate
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 
@@ -44,74 +41,107 @@ PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
 PRINTER_NAME = "drawbox-printer"
 
+# ── API KEYS ──────────────────────────────────────
 AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+AI_GATEWAY_API_KEY = ""
+ELEVENLABS_API_KEY = ""
+XAI_API_KEY = ""
+client = None  # OpenAI-compatible client pointed at AI Gateway
 
-# Snapshot of the image-output models from the AI Gateway catalog
-# (GET https://ai-gateway.vercel.sh/v1/models, the models with image output
-# modality; same set as https://vercel.com/ai-gateway/models?modality=image),
-# snapshotted 2026-08-22. Each id maps to the gateway endpoint that serves it:
-# the Gemini multimodal LLMs speak "chat" (/chat/completions), image-only
-# models speak "image" (/images/generations).
-GATEWAY_IMAGE_MODELS = {
+# ai_gateway covers images, gateway TTS, and STT; elevenlabs and xai are only
+# needed when the matching voice_provider is selected.
+API_KEY_NAMES = ("ai_gateway", "elevenlabs", "xai")
+_API_KEY_ENV_VARS = {
+    "ai_gateway": "AI_GATEWAY_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "xai": "XAI_API_KEY",
+}
+
+# Image-output models from the AI Gateway catalog (GET {base}/v1/models,
+# same set as https://vercel.com/ai-gateway/models?modality=image),
+# snapshotted 2026-08-22. Each id maps to the API that serves it: the Gemini
+# multimodal LLMs speak "chat", image-only models "images".
+GATEWAY_IMAGE_CATALOG = {
     "google/gemini-2.5-flash-image": "chat",
     "google/gemini-3-pro-image": "chat",
     "google/gemini-3.1-flash-image": "chat",
     "google/gemini-3.1-flash-image-preview": "chat",
     "google/gemini-3.1-flash-lite-image": "chat",
-    "bfl/flux-2-flex": "image",
-    "bfl/flux-2-klein-4b": "image",
-    "bfl/flux-2-klein-9b": "image",
-    "bfl/flux-2-max": "image",
-    "bfl/flux-2-pro": "image",
-    "bfl/flux-kontext-max": "image",
-    "bfl/flux-kontext-pro": "image",
-    "bfl/flux-pro-1.0-fill": "image",
-    "bfl/flux-pro-1.1": "image",
-    "bfl/flux-pro-1.1-ultra": "image",
-    "bytedance/seedream-4.0": "image",
-    "bytedance/seedream-4.5": "image",
-    "bytedance/seedream-5.0-lite": "image",
-    "bytedance/seedream-5.0-pro": "image",
-    "openai/gpt-image-1": "image",
-    "openai/gpt-image-1-mini": "image",
-    "openai/gpt-image-1.5": "image",
-    "openai/gpt-image-2": "image",
-    "prodia/flux-fast-schnell": "image",
-    "quiverai/arrow-1.1": "image",
-    "recraft/recraft-v2": "image",
-    "recraft/recraft-v3": "image",
-    "recraft/recraft-v4": "image",
-    "recraft/recraft-v4-pro": "image",
-    "recraft/recraft-v4.1": "image",
-    "recraft/recraft-v4.1-pro": "image",
-    "recraft/recraft-v4.1-utility": "image",
-    "recraft/recraft-v4.1-utility-pro": "image",
-    "spacexai/grok-imagine-image": "image",
-    "spacexai/grok-imagine-image-2.0": "image",
+    "bfl/flux-2-flex": "images",
+    "bfl/flux-2-klein-4b": "images",
+    "bfl/flux-2-klein-9b": "images",
+    "bfl/flux-2-max": "images",
+    "bfl/flux-2-pro": "images",
+    "bfl/flux-kontext-max": "images",
+    "bfl/flux-kontext-pro": "images",
+    "bfl/flux-pro-1.0-fill": "images",
+    "bfl/flux-pro-1.1": "images",
+    "bfl/flux-pro-1.1-ultra": "images",
+    "bytedance/seedream-4.0": "images",
+    "bytedance/seedream-4.5": "images",
+    "bytedance/seedream-5.0-lite": "images",
+    "bytedance/seedream-5.0-pro": "images",
+    "openai/gpt-image-1": "images",
+    "openai/gpt-image-1-mini": "images",
+    "openai/gpt-image-1.5": "images",
+    "openai/gpt-image-2": "images",
+    "prodia/flux-fast-schnell": "images",
+    "quiverai/arrow-1.1": "images",
+    "recraft/recraft-v2": "images",
+    "recraft/recraft-v3": "images",
+    "recraft/recraft-v4": "images",
+    "recraft/recraft-v4-pro": "images",
+    "recraft/recraft-v4.1": "images",
+    "recraft/recraft-v4.1-pro": "images",
+    "recraft/recraft-v4.1-utility": "images",
+    "recraft/recraft-v4.1-utility-pro": "images",
+    "spacexai/grok-imagine-image": "images",
+    "spacexai/grok-imagine-image-2.0": "images",
 }
 
-SUPPORTED_MODELS = ("nano-banana", "flux-schnell", "gpt-image") + tuple(GATEWAY_IMAGE_MODELS)
-VOICE_PROVIDERS = ("elevenlabs", "grok")
+_CHAT_ROUTE_KWARGS = {"extra_body": {"modalities": ["text", "image"]}}
+_IMAGES_ROUTE_KWARGS = {"n": 1, "response_format": "b64_json"}
 
-# ── API KEYS ──────────────────────────────────────
-OPENAI_API_KEY = ""
-REPLICATE_API_TOKEN = ""
-GEMINI_API_KEY = ""
-ELEVENLABS_API_KEY = ""
-AI_GATEWAY_API_KEY = ""
-XAI_API_KEY = ""
-client = None  # OpenAI client, rebuilt on apply_api_keys()
-
-
-API_KEY_NAMES = ("openai", "replicate", "gemini", "elevenlabs", "ai_gateway", "xai")
-_API_KEY_ENV_VARS = {
-    "openai": "OPENAI_API_KEY",
-    "replicate": "REPLICATE_API_TOKEN",
-    "gemini": "GEMINI_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "ai_gateway": "AI_GATEWAY_API_KEY",
-    "xai": "XAI_API_KEY",
+# Dashboard alias → (api, gateway slug, extra SDK kwargs).
+# "chat" is Gemini image-preview; "images" is the OpenAI images API.
+# The curated presets come first and keep their tuned kwargs; every catalog
+# model is also selectable directly by its gateway id.
+IMAGE_ROUTES = {
+    "nano-banana": (
+        "chat",
+        "google/gemini-3.1-flash-image-preview",
+        {"extra_body": {"modalities": ["text", "image"]}},
+    ),
+    "flux-schnell": (
+        "images",
+        "bfl/flux-schnell",
+        {
+            "n": 1,
+            "response_format": "b64_json",
+            "extra_body": {
+                "providerOptions": {"blackForestLabs": {"outputFormat": "png"}},
+            },
+        },
+    ),
+    "gpt-image": (
+        "images",
+        "openai/gpt-image-2",
+        {"n": 1, "size": "1024x1536", "response_format": "b64_json"},
+    ),
 }
+IMAGE_ROUTES.update(
+    (slug, (api, slug,
+            _CHAT_ROUTE_KWARGS if api == "chat" else _IMAGES_ROUTE_KWARGS))
+    for slug, api in GATEWAY_IMAGE_CATALOG.items()
+)
+SUPPORTED_MODELS = tuple(IMAGE_ROUTES)
+GATEWAY_TTS_MODEL = "openai/tts-1"
+GATEWAY_STT_MODEL = "openai/whisper-1"
+OPENAI_TTS_VOICES = frozenset({
+    "alloy", "ash", "ballad", "coral", "echo",
+    "fable", "nova", "onyx", "sage", "shimmer",
+})
+VOICE_PROVIDERS = ("gateway", "elevenlabs", "grok")
 
 
 def _load_api_keys():
@@ -129,22 +159,25 @@ def _load_api_keys():
 
 
 def apply_api_keys():
-    """Refresh module-level keys from disk/env and rebuild the OpenAI client."""
-    global OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, ELEVENLABS_API_KEY, \
-        AI_GATEWAY_API_KEY, XAI_API_KEY, client
+    """Refresh keys from disk/env and rebuild the Gateway client."""
+    global AI_GATEWAY_API_KEY, ELEVENLABS_API_KEY, XAI_API_KEY, client
     keys = _load_api_keys()
-    OPENAI_API_KEY = keys["openai"]
-    REPLICATE_API_TOKEN = keys["replicate"]
-    GEMINI_API_KEY = keys["gemini"]
-    ELEVENLABS_API_KEY = keys["elevenlabs"]
     AI_GATEWAY_API_KEY = keys["ai_gateway"]
+    ELEVENLABS_API_KEY = keys["elevenlabs"]
     XAI_API_KEY = keys["xai"]
-    if REPLICATE_API_TOKEN:
-        os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_TOKEN
-    client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+    client = OpenAI(
+        api_key=AI_GATEWAY_API_KEY,
+        base_url=AI_GATEWAY_BASE_URL,
+    ) if AI_GATEWAY_API_KEY else None
 
 
 apply_api_keys()
+
+
+def resolve_tts_voice(voice_id):
+    """Map a stored voice id to an OpenAI TTS voice. Unknown ids become alloy."""
+    voice = (voice_id or "").strip().lower()
+    return voice if voice in OPENAI_TTS_VOICES else "alloy"
 
 
 def mask_key(key, head=4, tail=0):
@@ -477,11 +510,12 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
-    "voice_provider": "elevenlabs",
-    "grok_voice_id": "eve",
-    "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc",
+    "voice_provider": "gateway",
+    "tts_voice_id": "alloy",
+    "elevenlabs_voice_id": "xNtG3W2oqJs0cJZuTyBc",
     "tts_stability": 0.5,
     "tts_style": 0.0,
+    "grok_voice_id": "eve",
     "record_seconds": 10,
     "poop_mode_enabled": True,
 }
@@ -499,9 +533,13 @@ def load_settings():
         return out
     if not isinstance(saved, dict):
         return out
-    for k, v in saved.items():
+    for k in DEFAULT_SETTINGS:
+        v = saved.get(k)
         if v or v == 0:
             out[k] = v
+    out["tts_voice_id"] = resolve_tts_voice(out.get("tts_voice_id"))
+    if out.get("voice_provider") not in VOICE_PROVIDERS:
+        out["voice_provider"] = "gateway"
     return out
 
 
@@ -519,7 +557,8 @@ def _write_secure_json(path, data):
 
 
 def save_settings(data):
-    _write_secure_json(SETTINGS_FILE, data)
+    clean = {k: data[k] for k in DEFAULT_SETTINGS if k in data}
+    _write_secure_json(SETTINGS_FILE, clean)
 
 
 def poop_mode_enabled():
@@ -550,178 +589,76 @@ def generate_image(desc, model=None):
 
     if model is None:
         model = IMAGE_MODEL
-    if model not in SUPPORTED_MODELS:
+    route = IMAGE_ROUTES.get(model)
+    if route is None:
         raise ValueError(f"unsupported model: {model}")
+    if not client:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
 
+    via, slug, kwargs = route
     prompt = f"{load_coloring_prompt()}\n\nChild requested: {desc}"
-    log.info("generating with %s: %s", model, desc)
-
-    if model == "nano-banana":
-        if not GEMINI_API_KEY:
-            raise RuntimeError(
-                "GEMINI_API_KEY not set (needed for nano-banana). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_nano_banana(prompt)
-    elif model == "gpt-image":
-        if not client:
-            raise RuntimeError(
-                "OPENAI_API_KEY not set (needed for gpt-image). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_gpt_image(prompt)
-    elif model in GATEWAY_IMAGE_MODELS:
-        if not AI_GATEWAY_API_KEY:
-            raise RuntimeError(
-                "AI_GATEWAY_API_KEY not set (needed for AI Gateway models). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_ai_gateway(prompt, model)
-    else:  # flux-schnell
-        if not REPLICATE_API_TOKEN:
-            raise RuntimeError(
-                "REPLICATE_API_TOKEN not set (needed for flux-schnell). "
-                "Set it via the web dashboard or service file.")
-        img_bytes = _generate_flux_schnell(prompt)
-
+    log.info("generating with %s (%s): %s", model, slug, desc)
+    if via == "chat":
+        img_bytes = _generate_chat_image(prompt, slug, kwargs)
+    else:
+        img_bytes = _generate_images_api(prompt, slug, kwargs)
     return _postprocess(img_bytes)
 
 
-def _read_replicate_output(output):
-    """Replicate's flux-schnell has returned both file objects and URL strings
-    over time; accept either shape."""
-    if isinstance(output, list):
-        if not output:
-            raise RuntimeError("Replicate returned an empty list")
-        output = output[0]
-    if hasattr(output, "read"):
-        return output.read()
-    if isinstance(output, (bytes, bytearray)):
-        return bytes(output)
-    if isinstance(output, str):
-        with urlopen(output, timeout=60) as r:
-            return r.read()
-    raise RuntimeError(f"Unexpected Replicate output type: {type(output).__name__}")
+def _b64_to_bytes(value):
+    if not value or not isinstance(value, str):
+        return None
+    if value.startswith("data:"):
+        value = value.split(",", 1)[-1]
+    try:
+        return base64.b64decode(value)
+    except (ValueError, TypeError):
+        return None
 
 
-def _generate_flux_schnell(prompt):
+def _image_bytes_from_chat(completion):
+    """Gateway chat image-preview: message.images[0].image_url.url."""
+    try:
+        url = completion.choices[0].message.images[0].image_url.url
+    except (AttributeError, IndexError, TypeError):
+        raise RuntimeError("No image in gateway chat response") from None
+    data = _b64_to_bytes(url)
+    if not data:
+        raise RuntimeError("No image in gateway chat response")
+    return data
+
+
+def _image_bytes_from_images_response(result):
+    try:
+        raw = result.data[0].b64_json
+    except (AttributeError, IndexError, TypeError):
+        raise RuntimeError("No image in gateway images response") from None
+    data = _b64_to_bytes(raw)
+    if not data:
+        raise RuntimeError("No image payload in gateway images response")
+    return data
+
+
+def _generate_chat_image(prompt, slug, kwargs):
     t0 = time.time()
-    output = replicate.run(
-        "black-forest-labs/flux-schnell",
-        input={
-            "prompt": prompt,
-            "num_outputs": 1,
-            "aspect_ratio": "3:4",
-            "output_format": "png",
-            "num_inference_steps": 4,
-            "go_fast": True,
-        },
+    completion = client.chat.completions.create(
+        model=slug,
+        messages=[{"role": "user", "content": prompt}],
+        **kwargs,
     )
-    img_bytes = _read_replicate_output(output)
-    log.info("replicate responded in %.1fs (%dKB)",
+    img_bytes = _image_bytes_from_chat(completion)
+    log.info("gateway chat responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 
 
-def _generate_nano_banana(prompt):
-    """Generate via Google Gemini API (Nano Banana 2)."""
+def _generate_images_api(prompt, slug, kwargs):
     t0 = time.time()
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash-image:generateContent"
-        f"?key={GEMINI_API_KEY}"
-    )
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["IMAGE"],
-            "imageConfig": {"aspectRatio": "3:4"},
-        },
-    }).encode()
-    req = Request(url, data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-    except Exception:
-        log.exception("gemini request failed")
-        raise
-
-    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
-        if "inlineData" in part:
-            img_bytes = base64.b64decode(part["inlineData"]["data"])
-            log.info("gemini responded in %.1fs (%dKB)",
-                     time.time() - t0, len(img_bytes) // 1024)
-            return img_bytes
-
-    # No image — surface diagnostic info via exception, not stdout side effects.
-    finish_reasons = [c.get("finishReason") for c in data.get("candidates", [])]
-    err = data.get("error", {}).get("message", "")
-    raise RuntimeError(
-        f"No image in Gemini response (finishReason={finish_reasons}, error={err!r})")
-
-
-def _generate_gpt_image(prompt):
-    t0 = time.time()
-    r = client.images.generate(
-        model="gpt-image-1", prompt=prompt,
-        size="1024x1536", quality="low",
-    )
-    img_bytes = base64.b64decode(r.data[0].b64_json)
-    log.info("openai responded in %.1fs (%dKB)",
-             time.time() - t0, len(img_bytes) // 1024)
-    return img_bytes
-
-
-def _gateway_post(path, payload):
-    req = Request(f"{AI_GATEWAY_BASE_URL}{path}", data=json.dumps(payload).encode(),
-                  headers={
-                      "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
-                      "Content-Type": "application/json",
-                  })
-    try:
-        with urlopen(req, timeout=120) as resp:  # big image models are slow
-            return json.loads(resp.read())
-    except Exception:
-        log.exception("ai gateway request failed")
-        raise
-
-
-def _gateway_chat_image(prompt, model):
-    data = _gateway_post("/chat/completions", {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    })
-    choice = data.get("choices", [{}])[0]
-    images = choice.get("message", {}).get("images") or []
-    if not images:
-        err = data.get("error", {}).get("message", "")
-        raise RuntimeError(
-            f"No image in AI Gateway response "
-            f"(finish_reason={choice.get('finish_reason')!r}, error={err!r})")
-    data_url = images[0]["image_url"]["url"]
-    return base64.b64decode(data_url.split("base64,", 1)[1])
-
-
-def _gateway_generated_image(prompt, model):
-    data = _gateway_post("/images/generations", {
-        "model": model,
-        "prompt": prompt,
-        "n": 1,
-        "response_format": "b64_json",
-    })
-    items = data.get("data") or []
-    if not items or not items[0].get("b64_json"):
-        err = data.get("error", {}).get("message", "")
-        raise RuntimeError(
-            f"No image in AI Gateway response (data={items!r}, error={err!r})")
-    return base64.b64decode(items[0]["b64_json"])
-
-
-def _generate_ai_gateway(prompt, model):
-    """Generate via the Vercel AI Gateway, on the endpoint the model needs."""
-    t0 = time.time()
-    if GATEWAY_IMAGE_MODELS[model] == "chat":
-        img_bytes = _gateway_chat_image(prompt, model)
-    else:
-        img_bytes = _gateway_generated_image(prompt, model)
-    log.info("ai gateway responded in %.1fs (%dKB)",
+    result = client.images.generate(model=slug, prompt=prompt, **kwargs)
+    img_bytes = _image_bytes_from_images_response(result)
+    log.info("gateway image responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
     return img_bytes
 

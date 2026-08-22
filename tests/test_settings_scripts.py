@@ -9,16 +9,37 @@ def test_load_settings_returns_defaults_when_missing(drawbox_dir):
     s = drawbox_core.load_settings()
     assert s["coloring_prompt"] == drawbox_core.DEFAULT_COLORING_PROMPT
     assert s["record_seconds"] == 10
+    assert s["tts_voice_id"] == "alloy"
+    assert s["voice_provider"] == "gateway"
     assert s["tts_stability"] == 0.5
 
 
 def test_save_then_load_round_trips(drawbox_dir):
-    drawbox_core.save_settings({"record_seconds": 7, "tts_voice_id": "abc"})
+    drawbox_core.save_settings({"record_seconds": 7, "tts_voice_id": "nova"})
     s = drawbox_core.load_settings()
     assert s["record_seconds"] == 7
-    assert s["tts_voice_id"] == "abc"
+    assert s["tts_voice_id"] == "nova"
     # Other defaults remain
     assert s["coloring_prompt"] == drawbox_core.DEFAULT_COLORING_PROMPT
+
+
+def test_load_settings_resolves_unknown_voice_and_drops_dead_keys(drawbox_dir):
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({
+        "tts_voice_id": "xNtG3W2oqJs0cJZuTyBc",
+        "record_seconds": 12,
+        "whisper_language": "en",
+    }))
+    s = drawbox_core.load_settings()
+    # Gateway voice ids are clamped to a known OpenAI voice; the historical
+    # ElevenLabs id lives in elevenlabs_voice_id now.
+    assert s["tts_voice_id"] == "alloy"
+    assert s["record_seconds"] == 12
+    assert "whisper_language" not in s
+
+
+def test_load_settings_clamps_unknown_voice_provider(drawbox_dir):
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"voice_provider": "alexa"}))
+    assert drawbox_core.load_settings()["voice_provider"] == "gateway"
 
 
 def test_corrupted_settings_falls_back_to_defaults(drawbox_dir):
