@@ -4,6 +4,7 @@ binaries. We don't exercise /api/status, /api/logs, /api/diagnostics,
 journalctl, nmcli, aplay, etc. that don't exist on macOS."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -574,3 +575,16 @@ def test_simulator_defines_poop_mode_dependencies():
         "poop_mode_disabled:",
     ):
         assert snippet in html
+
+
+def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
+    """The Mac app's WKWebView treats window.confirm() as a silent no-op.
+
+    Every destructive dashboard action has to go through askConfirm(), or
+    the button click returns immediately and looks like it did nothing.
+    """
+    html = client.get("/").get_data(as_text=True)
+    assert "function askConfirm(" in html
+    assert 'id="confirmOverlay"' in html
+    assert "await askConfirm(" in html
+    assert not re.search(r"""(?<!ask)confirm\s*\(\s*['"`]""", html)
