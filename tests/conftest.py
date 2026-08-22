@@ -7,6 +7,7 @@ them — this is simpler and faster than reloading the modules.
 """
 
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,17 @@ import pytest
 # Make the project root importable as `drawbox_core`, `drawbox_web`.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# The cloud test image does not have the native PortAudio library, which makes
+# `import sounddevice` (and so `import drawbox`) fail. Register the tiny stub
+# surface the tests patch before any test module imports the Pi runtime.
+fake_sounddevice = types.SimpleNamespace(
+    default=types.SimpleNamespace(device=[-1, None]),
+    PortAudioError=RuntimeError,
+    query_devices=lambda device=None: [],
+    InputStream=None,
+)
+sys.modules.setdefault("sounddevice", fake_sounddevice)
 
 
 @pytest.fixture
@@ -57,6 +69,7 @@ def client(drawbox_dir, monkeypatch):
     monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
     import drawbox_core
     import drawbox_web
     drawbox_core.apply_api_keys()

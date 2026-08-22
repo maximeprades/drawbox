@@ -46,15 +46,68 @@ PRINTER_NAME = "drawbox-printer"
 # ── API KEYS ──────────────────────────────────────
 AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
 AI_GATEWAY_API_KEY = ""
+ELEVENLABS_API_KEY = ""
+XAI_API_KEY = ""
 client = None  # OpenAI-compatible client pointed at AI Gateway
 
-API_KEY_NAMES = ("ai_gateway",)
+# ai_gateway covers images, gateway TTS, and STT; elevenlabs and xai are only
+# needed when the matching voice_provider is selected.
+API_KEY_NAMES = ("ai_gateway", "elevenlabs", "xai")
 _API_KEY_ENV_VARS = {
     "ai_gateway": "AI_GATEWAY_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "xai": "XAI_API_KEY",
 }
+
+# Image-output models from the AI Gateway catalog (GET {base}/v1/models,
+# same set as https://vercel.com/ai-gateway/models?modality=image),
+# snapshotted 2026-08-22. Each id maps to the API that serves it: the Gemini
+# multimodal LLMs speak "chat", image-only models "images".
+GATEWAY_IMAGE_CATALOG = {
+    "google/gemini-2.5-flash-image": "chat",
+    "google/gemini-3-pro-image": "chat",
+    "google/gemini-3.1-flash-image": "chat",
+    "google/gemini-3.1-flash-image-preview": "chat",
+    "google/gemini-3.1-flash-lite-image": "chat",
+    "bfl/flux-2-flex": "images",
+    "bfl/flux-2-klein-4b": "images",
+    "bfl/flux-2-klein-9b": "images",
+    "bfl/flux-2-max": "images",
+    "bfl/flux-2-pro": "images",
+    "bfl/flux-kontext-max": "images",
+    "bfl/flux-kontext-pro": "images",
+    "bfl/flux-pro-1.0-fill": "images",
+    "bfl/flux-pro-1.1": "images",
+    "bfl/flux-pro-1.1-ultra": "images",
+    "bytedance/seedream-4.0": "images",
+    "bytedance/seedream-4.5": "images",
+    "bytedance/seedream-5.0-lite": "images",
+    "bytedance/seedream-5.0-pro": "images",
+    "openai/gpt-image-1": "images",
+    "openai/gpt-image-1-mini": "images",
+    "openai/gpt-image-1.5": "images",
+    "openai/gpt-image-2": "images",
+    "prodia/flux-fast-schnell": "images",
+    "quiverai/arrow-1.1": "images",
+    "recraft/recraft-v2": "images",
+    "recraft/recraft-v3": "images",
+    "recraft/recraft-v4": "images",
+    "recraft/recraft-v4-pro": "images",
+    "recraft/recraft-v4.1": "images",
+    "recraft/recraft-v4.1-pro": "images",
+    "recraft/recraft-v4.1-utility": "images",
+    "recraft/recraft-v4.1-utility-pro": "images",
+    "spacexai/grok-imagine-image": "images",
+    "spacexai/grok-imagine-image-2.0": "images",
+}
+
+_CHAT_ROUTE_KWARGS = {"extra_body": {"modalities": ["text", "image"]}}
+_IMAGES_ROUTE_KWARGS = {"n": 1, "response_format": "b64_json"}
 
 # Dashboard alias → (api, gateway slug, extra SDK kwargs).
 # "chat" is Gemini image-preview; "images" is the OpenAI images API.
+# The curated presets come first and keep their tuned kwargs; every catalog
+# model is also selectable directly by its gateway id.
 IMAGE_ROUTES = {
     "nano-banana": (
         "chat",
@@ -78,6 +131,11 @@ IMAGE_ROUTES = {
         {"n": 1, "size": "1024x1536", "response_format": "b64_json"},
     ),
 }
+IMAGE_ROUTES.update(
+    (slug, (api, slug,
+            _CHAT_ROUTE_KWARGS if api == "chat" else _IMAGES_ROUTE_KWARGS))
+    for slug, api in GATEWAY_IMAGE_CATALOG.items()
+)
 SUPPORTED_MODELS = tuple(IMAGE_ROUTES)
 GATEWAY_TTS_MODEL = "openai/tts-1"
 GATEWAY_STT_MODEL = "openai/whisper-1"
@@ -85,6 +143,7 @@ OPENAI_TTS_VOICES = frozenset({
     "alloy", "ash", "ballad", "coral", "echo",
     "fable", "nova", "onyx", "sage", "shimmer",
 })
+VOICE_PROVIDERS = ("gateway", "elevenlabs", "grok")
 
 
 def _load_api_keys():
@@ -102,10 +161,12 @@ def _load_api_keys():
 
 
 def apply_api_keys():
-    """Refresh the Gateway key from disk/env and rebuild the client."""
-    global AI_GATEWAY_API_KEY, client
+    """Refresh keys from disk/env and rebuild the Gateway client."""
+    global AI_GATEWAY_API_KEY, ELEVENLABS_API_KEY, XAI_API_KEY, client
     keys = _load_api_keys()
     AI_GATEWAY_API_KEY = keys["ai_gateway"]
+    ELEVENLABS_API_KEY = keys["elevenlabs"]
+    XAI_API_KEY = keys["xai"]
     client = OpenAI(
         api_key=AI_GATEWAY_API_KEY,
         base_url=AI_GATEWAY_BASE_URL,
@@ -454,7 +515,12 @@ SERIAL_BAUDS = (9600, 19200, 38400, 57600, 115200)
 DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
+    "voice_provider": "gateway",
     "tts_voice_id": "alloy",
+    "elevenlabs_voice_id": "xNtG3W2oqJs0cJZuTyBc",
+    "tts_stability": 0.5,
+    "tts_style": 0.0,
+    "grok_voice_id": "eve",
     "record_seconds": 10,
     "poop_mode_enabled": True,
     "printer_type": "cups",
@@ -482,6 +548,8 @@ def load_settings():
     out["tts_voice_id"] = resolve_tts_voice(out.get("tts_voice_id"))
     if out["printer_type"] not in PRINTER_TYPES:
         out["printer_type"] = "cups"
+    if out.get("voice_provider") not in VOICE_PROVIDERS:
+        out["voice_provider"] = "gateway"
     return out
 
 

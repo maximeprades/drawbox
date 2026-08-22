@@ -78,6 +78,24 @@ def test_settings_accepts_valid_model(client):
     assert client.get("/api/settings").get_json()["image_model"] == "flux-schnell"
 
 
+def test_settings_accepts_gateway_model(client):
+    client.post("/api/settings", json={"image_model": "bfl/flux-pro-1.1"})
+    assert client.get("/api/settings").get_json()["image_model"] == "bfl/flux-pro-1.1"
+
+
+def test_settings_accepts_voice_provider_and_grok_voice(client):
+    client.post("/api/settings",
+                json={"voice_provider": "grok", "grok_voice_id": "ara"})
+    body = client.get("/api/settings").get_json()
+    assert body["voice_provider"] == "grok"
+    assert body["grok_voice_id"] == "ara"
+
+
+def test_settings_rejects_unknown_voice_provider(client):
+    client.post("/api/settings", json={"voice_provider": "alexa"})
+    assert client.get("/api/settings").get_json()["voice_provider"] == "gateway"
+
+
 def test_settings_caps_prompt_length(client):
     huge = "x" * 10000
     client.post("/api/settings", json={"coloring_prompt": huge})
@@ -669,17 +687,20 @@ def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
     assert not re.search(r"""(?<!ask)confirm\s*\(\s*['"`]""", html)
 
 
-def test_dashboard_uses_single_gateway_key(client):
+def test_dashboard_keys_match_the_registry(client):
+    """One gateway key for images/STT, plus the two optional voice keys.
+
+    The direct image-provider keys retired by the gateway migration must not
+    resurface.
+    """
     html = client.get("/").get_data(as_text=True)
     assert 'id="keyGateway"' in html
     assert "AI Gateway API Key" in html
+    assert 'id="keyElevenlabs"' in html
+    assert 'id="keyXai"' in html
     assert 'id="keyOpenai"' not in html
     assert 'id="keyReplicate"' not in html
     assert 'id="keyGemini"' not in html
-    assert 'id="keyElevenlabs"' not in html
-    assert "elevenlabs.io" not in html
-    assert 'id="cfgStability"' not in html
-    assert 'id="cfgStyle"' not in html
     assert "TTS_VOICES" in html
 
 
@@ -692,3 +713,11 @@ def test_dashboard_setting_toggles_use_the_whole_row(client):
             html,
         )
     assert 'id="pleaseToggle" onclick=' not in html
+
+
+def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="cfgVoiceProvider"' in html
+    assert 'id="keyXai"' in html
+    assert 'id="keyElevenlabs"' in html
+    assert 'value="spacexai/grok-imagine-image"' in html

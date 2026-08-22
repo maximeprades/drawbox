@@ -585,9 +585,14 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Image Model</label>
           <select class="select" id="cfgModel">
-            <option value="flux-schnell">FLUX Schnell — fastest</option>
-            <option value="nano-banana">Nano Banana 2</option>
-            <option value="gpt-image">GPT Image — slowest</option>
+            <optgroup label="Presets">
+              <option value="flux-schnell">FLUX Schnell — fastest</option>
+              <option value="nano-banana">Nano Banana 2</option>
+              <option value="gpt-image">GPT Image — slowest</option>
+            </optgroup>
+            <optgroup label="Vercel AI Gateway catalog">
+              {% for m in gateway_models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+            </optgroup>
           </select>
         </div>
       </div>
@@ -625,13 +630,48 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
       <div class="card-header"><div class="card-title">Voice & Audio</div></div>
       <div class="card-content">
         <div class="form-group">
-          <label class="form-label">TTS Voice</label>
-          <select class="select" id="cfgVoiceId" style="max-width:300px">
-            {% for voice in tts_voices %}
-            <option value="{{ voice }}">{{ voice }}</option>
-            {% endfor %}
+          <label class="form-label">Voice Provider</label>
+          <select class="select" id="cfgVoiceProvider" style="max-width:300px" onchange="updateVoiceProviderFields()">
+            <option value="gateway">AI Gateway (OpenAI voices)</option>
+            <option value="elevenlabs">ElevenLabs</option>
+            <option value="grok">Grok (xAI)</option>
           </select>
-          <div class="form-hint">OpenAI TTS voices via Vercel AI Gateway</div>
+          <div class="form-hint">ElevenLabs and Grok need their own API keys below.</div>
+        </div>
+        <div class="form-group" id="gatewayFields">
+          <div class="form-group">
+            <label class="form-label">TTS Voice</label>
+            <select class="select" id="cfgVoiceId" style="max-width:300px">
+              {% for voice in tts_voices %}
+              <option value="{{ voice }}">{{ voice }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-hint">OpenAI TTS voices via Vercel AI Gateway</div>
+          </div>
+        </div>
+        <div class="form-group" id="elevenlabsFields" style="display:none">
+          <div class="form-group">
+            <label class="form-label">ElevenLabs Voice ID</label>
+            <input class="input" type="text" id="cfgElevenVoice" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
+            <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
+            <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
+            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
+            <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
+            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
+          </div>
+        </div>
+        <div class="form-group" id="grokFields" style="display:none">
+          <div class="form-group">
+            <label class="form-label">Grok Voice</label>
+            <input class="input" type="text" id="cfgGrokVoice" placeholder="eve" style="max-width:300px;font-family:monospace" />
+            <div class="form-hint">Built-in voice name like eve, or a custom voice_id from the xAI console</div>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
@@ -678,13 +718,23 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
     <div class="card">
       <div class="card-header"><div class="card-title">API Keys</div></div>
       <div class="card-content">
-        <div class="form-hint" style="margin-bottom:12px">One Vercel AI Gateway key covers images, speech, and transcription. Stored on the Pi in ~/.drawbox/api_keys.json. Leave the field empty to keep the current key.</div>
+        <div class="form-hint" style="margin-bottom:12px">One Vercel AI Gateway key covers images, gateway speech, and transcription. ElevenLabs and xAI keys are only needed for those voice providers. Stored on the Pi in ~/.drawbox/api_keys.json. Leave a field empty to keep the current key.</div>
         <div class="form-group">
           <label class="form-label">AI Gateway API Key</label>
           <input class="input" type="password" id="keyGateway" placeholder="vck_..." autocomplete="off" />
           <div class="form-hint" id="keyGatewayHint"></div>
         </div>
-        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Key</button>
+        <div class="form-group">
+          <label class="form-label">ElevenLabs API Key</label>
+          <input class="input" type="password" id="keyElevenlabs" placeholder="sk_..." autocomplete="off" />
+          <div class="form-hint" id="keyElevenlabsHint"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">xAI API Key</label>
+          <input class="input" type="password" id="keyXai" placeholder="xai-..." autocomplete="off" />
+          <div class="form-hint" id="keyXaiHint"></div>
+        </div>
+        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
       </div>
     </div>
 
@@ -1158,14 +1208,29 @@ connectLogs();
 function clearLog() { $('logArea').textContent = ''; }
 
 // ── SETTINGS ──────────────────────────────────
+function updateVoiceProviderFields() {
+  const provider = $('cfgVoiceProvider').value;
+  $('gatewayFields').style.display = provider === 'gateway' ? 'block' : 'none';
+  $('elevenlabsFields').style.display = provider === 'elevenlabs' ? 'block' : 'none';
+  $('grokFields').style.display = provider === 'grok' ? 'block' : 'none';
+}
+
 async function loadSettings() {
   try {
     const r = await fetch('/api/settings');
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
     $('cfgModel').value = d.image_model || 'nano-banana';
+    $('cfgVoiceProvider').value = d.voice_provider || 'gateway';
     const voice = d.tts_voice_id || 'alloy';
     $('cfgVoiceId').value = TTS_VOICES.indexOf(voice) >= 0 ? voice : 'alloy';
+    $('cfgElevenVoice').value = d.elevenlabs_voice_id || 'xNtG3W2oqJs0cJZuTyBc';
+    $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
+    $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
+    $('cfgStyle').value = d.tts_style != null ? d.tts_style : 0.0;
+    $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
+    $('cfgGrokVoice').value = d.grok_voice_id || 'eve';
+    updateVoiceProviderFields();
     $('cfgRecSec').value = d.record_seconds || 10;
     $('cfgPrinterType').value = d.printer_type;
     $('cfgSerialPort').value = d.serial_port;
@@ -1184,7 +1249,12 @@ async function saveSettings() {
   const data = {
     coloring_prompt: $('cfgPrompt').value,
     image_model: $('cfgModel').value,
+    voice_provider: $('cfgVoiceProvider').value,
     tts_voice_id: $('cfgVoiceId').value.trim(),
+    elevenlabs_voice_id: $('cfgElevenVoice').value.trim(),
+    tts_stability: parseFloat($('cfgStability').value),
+    tts_style: parseFloat($('cfgStyle').value),
+    grok_voice_id: $('cfgGrokVoice').value.trim(),
     record_seconds: parseInt($('cfgRecSec').value) || 10,
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
@@ -1208,14 +1278,20 @@ async function loadApiKeys() {
     const r = await fetch('/api/keys');
     const d = await r.json();
     $('keyGatewayHint').textContent = d.ai_gateway ? 'Current: ' + d.ai_gateway : 'Not set';
+    $('keyElevenlabsHint').textContent = d.elevenlabs ? 'Current: ' + d.elevenlabs : 'Not set';
+    $('keyXaiHint').textContent = d.xai ? 'Current: ' + d.xai : 'Not set';
     $('keyGateway').value = '';
+    $('keyElevenlabs').value = '';
+    $('keyXai').value = '';
   } catch(e) {}
 }
 
 async function saveApiKeys() {
   const data = {};
   if ($('keyGateway').value.trim()) data.ai_gateway = $('keyGateway').value.trim();
-  if (!Object.keys(data).length) { toast('No key entered', false); return; }
+  if ($('keyElevenlabs').value.trim()) data.elevenlabs = $('keyElevenlabs').value.trim();
+  if ($('keyXai').value.trim()) data.xai = $('keyXai').value.trim();
+  if (!Object.keys(data).length) { toast('No keys entered', false); return; }
   try {
     const r = await fetch('/api/keys', {
       method: 'POST',
@@ -1223,7 +1299,7 @@ async function saveApiKeys() {
       body: JSON.stringify(data)
     });
     const d = await r.json();
-    if (d.ok) { toast('API key saved!'); loadApiKeys(); }
+    if (d.ok) { toast('API keys saved!'); loadApiKeys(); }
     else toast('Save failed', false);
   } catch(e) { toast('Error: ' + e.message, false); }
 }

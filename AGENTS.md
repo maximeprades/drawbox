@@ -24,7 +24,11 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
   Set `AI_GATEWAY_API_KEY` to test end-to-end generation. Without a key,
   `/api/generate` returns a graceful "Generation failed" for safe prompts.
   Blocked prompts return the safety message before any API call.
-- The active image model is set in the dashboard Settings page (`image_model`).
+- The active image model is set in the dashboard Settings page (`image_model`):
+  three presets plus the full gateway image catalog by id.
+- Voice is a three-way setting (`voice_provider`): `gateway` (default, OpenAI
+  voices through the AI Gateway key), `elevenlabs` (`ELEVENLABS_API_KEY`), or
+  `grok` (`XAI_API_KEY` via the xAI Voice API).
 
 ### Notes
 - This project uses the system Python on purpose. There is no virtualenv (see

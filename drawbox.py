@@ -12,14 +12,18 @@ Hold for 5 seconds to reboot.
 """
 
 import hashlib
+import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import traceback
+from urllib.error import HTTPError
+
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -48,7 +52,23 @@ REBOOT_HOLD_SEC = 5              # hold button this long to trigger reboot
 MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
 
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
+VOICE_PROVIDER = "gateway"
 TTS_VOICE_ID = "alloy"
+ELEVENLABS_VOICE_ID = "xNtG3W2oqJs0cJZuTyBc"
+TTS_STABILITY = 0.5
+TTS_STYLE = 0.0
+TTS_SIMILARITY_BOOST = 0.75
+GROK_VOICE_ID = "eve"
+
+# The drawbox_core key attribute each voice provider needs; keeps the startup
+# key gate in lockstep with the providers _synthesize can dispatch to.
+TTS_PROVIDER_KEYS = {
+    "gateway": "AI_GATEWAY_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "grok": "XAI_API_KEY",
+}
+
+_TTS_WAKE_PREFIX = "... "   # leading pause helps the USB speaker wake
 
 # ── VOICE LINES ─────────────────────────────────
 # Built from the shared defaults; the dashboard's Scripts page can override
@@ -76,23 +96,34 @@ KIDS_JOKES = _load_jokes()
 
 
 def _apply_tts_settings():
-    """Pull the TTS voice from settings.json on disk."""
-    global TTS_VOICE_ID
-    s = load_settings()
+    """Pull the voice provider + per-provider tuning from settings.json."""
+    global VOICE_PROVIDER, TTS_VOICE_ID, ELEVENLABS_VOICE_ID, GROK_VOICE_ID, \
+        TTS_STABILITY, TTS_STYLE
+    s = load_settings()  # load_settings already clamps voice_provider
+    VOICE_PROVIDER = s["voice_provider"]
     TTS_VOICE_ID = drawbox_core.resolve_tts_voice(s.get("tts_voice_id"))
+    if isinstance(s.get("elevenlabs_voice_id"), str) and s["elevenlabs_voice_id"].strip():
+        ELEVENLABS_VOICE_ID = s["elevenlabs_voice_id"].strip()
+    if isinstance(s.get("grok_voice_id"), str) and s["grok_voice_id"].strip():
+        GROK_VOICE_ID = s["grok_voice_id"].strip()
+    TTS_STABILITY = max(0.0, min(1.0, float(s.get("tts_stability", TTS_STABILITY))))
+    TTS_STYLE = max(0.0, min(1.0, float(s.get("tts_style", TTS_STYLE))))
 
 
 _apply_tts_settings()
 
 
 class VoiceFeedback:
-    """Caches Gateway TTS lines as .mp3 keyed by content hash.
+    """Caches TTS lines as .mp3 keyed by content hash.
 
     Construction is cheap and offline; call :meth:`warm_up` once at startup
     to generate the audio cache (network).
     """
 
-    def __init__(self):
+    def __init__(self, provider="gateway"):
+        # Explicit so dispatch never depends on whatever the host's
+        # ~/.drawbox/web_settings.json happens to say (tests included).
+        self.provider = provider
         self._cache = {}            # key → Path or non-empty [Path, ...]
         self._joke_paths = []
         self._silence_path = None
@@ -100,8 +131,16 @@ class VoiceFeedback:
         self._tts_rate_limit_logged = False
 
     def _tts_path(self, text):
-        """Cache filename keyed on voice + tuning + text."""
-        h = hashlib.md5(f"{TTS_VOICE_ID}:{text}".encode()).hexdigest()[:12]
+        """Cache filename keyed on provider + voice + tuning + text."""
+        if self.provider == "elevenlabs":
+            # Byte-identical to the historical ElevenLabs format so existing
+            # on-disk caches stay valid.
+            key = f"{ELEVENLABS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}"
+        elif self.provider == "grok":
+            key = f"grok:{GROK_VOICE_ID}:{text}"
+        else:
+            key = f"{TTS_VOICE_ID}:{text}"
+        h = hashlib.md5(key.encode()).hexdigest()[:12]
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
@@ -113,22 +152,34 @@ class VoiceFeedback:
     def _synthesize(self, text, out_path):
         """Fetch TTS audio for ``text`` into ``out_path``.
 
-        The single place that talks to AI Gateway TTS: owns the rate-limit
+        The single place that talks to the TTS provider: owns the rate-limit
         gate and all error handling. Returns True iff audio was written.
         """
         if self._tts_rate_limit_remaining() > 0:
             return False
         log.info("generating TTS: %s…", text[:50])
         try:
-            self._gateway_tts(text, out_path)
+            if self.provider == "elevenlabs":
+                self._elevenlabs_tts(text, out_path)
+            elif self.provider == "grok":
+                self._grok_tts(text, out_path)
+            else:
+                self._gateway_tts(text, out_path)
             return True
         except RateLimitError as e:
             self._handle_tts_rate_limit(e)
+        except HTTPError as e:
+            # urllib providers (elevenlabs, grok) surface HTTP errors here.
+            if e.code == 429:
+                self._handle_tts_rate_limit(e)
+            else:
+                log.warning("%s TTS HTTP %s failed for %r",
+                            self.provider, e.code, text[:80])
         except APIStatusError as e:
-            log.warning("Gateway TTS HTTP %s failed for %r",
-                        e.status_code, text[:80])
+            log.warning("%s TTS HTTP %s failed for %r",
+                        self.provider, e.status_code, text[:80])
         except Exception as e:
-            log.warning("Gateway TTS failed for %r: %s", text[:80], e)
+            log.warning("%s TTS failed for %r: %s", self.provider, text[:80], e)
             # A mid-download failure can leave a partial file; don't let it
             # poison the cache.
             try:
@@ -142,7 +193,10 @@ class VoiceFeedback:
 
     def _handle_tts_rate_limit(self, error):
         retry_after = 60.0
+        # SDK errors carry headers on .response; urllib's HTTPError on .headers.
         headers = getattr(getattr(error, "response", None), "headers", None)
+        if headers is None:
+            headers = getattr(error, "headers", None)
         raw = None
         if headers is not None:
             raw = headers.get("retry-after") or headers.get("Retry-After")
@@ -156,8 +210,9 @@ class VoiceFeedback:
         )
         if not self._tts_rate_limit_logged:
             log.warning(
-                "Gateway TTS rate-limited (HTTP 429); using cached audio "
+                "%s TTS rate-limited (HTTP 429); using cached audio "
                 "and espeak fallback for %.0fs",
+                self.provider,
                 self._tts_rate_limit_remaining(),
             )
             self._tts_rate_limit_logged = True
@@ -165,14 +220,52 @@ class VoiceFeedback:
     def _gateway_tts(self, text, out_path):
         if not drawbox_core.client:
             raise RuntimeError("AI_GATEWAY_API_KEY not set")
-        # Leading pause helps the USB speaker wake.
         response = drawbox_core.client.audio.speech.create(
             model=drawbox_core.GATEWAY_TTS_MODEL,
             voice=TTS_VOICE_ID,
-            input="... " + text,
+            input=_TTS_WAKE_PREFIX + text,
             response_format="mp3",
         )
         response.write_to_file(out_path)
+
+    def _elevenlabs_tts(self, text, out_path):
+        self._fetch_audio(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+            {
+                "text": _TTS_WAKE_PREFIX + text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": TTS_STABILITY,
+                    "similarity_boost": TTS_SIMILARITY_BOOST,
+                    "style": TTS_STYLE,
+                    "use_speaker_boost": True,
+                },
+            },
+            {"xi-api-key": drawbox_core.ELEVENLABS_API_KEY},
+            out_path,
+        )
+
+    def _grok_tts(self, text, out_path):
+        self._fetch_audio(
+            "https://api.x.ai/v1/tts",
+            {
+                "text": _TTS_WAKE_PREFIX + text,
+                "voice_id": GROK_VOICE_ID,
+                "language": "en",
+            },
+            {"Authorization": f"Bearer {drawbox_core.XAI_API_KEY}"},
+            out_path,
+        )
+
+    def _fetch_audio(self, url, payload, auth_headers, out_path):
+        import urllib.request
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+            **auth_headers,
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
+            shutil.copyfileobj(resp, f, length=8192)
 
     def warm_up(self):
         """Generate and cache every voice line and joke. Needs the network;
@@ -427,7 +520,10 @@ def _is_busy():
 def _print_config():
     log.info("DrawBox configuration:")
     log.info("  image_model = %s", IMAGE_MODEL)
+    log.info("  voice       = %s", VOICE_PROVIDER)
     log.info("  ai_gateway  = %s", mask_key(drawbox_core.AI_GATEWAY_API_KEY) or "missing")
+    log.info("  elevenlabs  = %s", mask_key(drawbox_core.ELEVENLABS_API_KEY) or "missing")
+    log.info("  xai         = %s", mask_key(drawbox_core.XAI_API_KEY) or "missing")
     log.info("  keys file   = %s (%s)",
              API_KEYS_FILE,
              "present" if API_KEYS_FILE.exists() else "missing, using env")
@@ -445,12 +541,17 @@ def main():
     if not drawbox_core.AI_GATEWAY_API_KEY:
         log.error("AI_GATEWAY_API_KEY not set; aborting.")
         return
+    voice_key_name = TTS_PROVIDER_KEYS[VOICE_PROVIDER]
+    if not getattr(drawbox_core, voice_key_name):
+        log.error("%s not set (needed for %s voice); aborting.",
+                  voice_key_name, VOICE_PROVIDER)
+        return
 
     drawbox_core.ensure_safety_mode_default()
     log.info("safety filter: %s", "on" if safety_mode_enabled() else "off")
 
     btn = GpioButton(BUTTON_PIN, pull_up=True, bounce_time=0.1)
-    voice = VoiceFeedback()
+    voice = VoiceFeedback(provider=VOICE_PROVIDER)
     voice.warm_up()
 
     log.info("ready — press the red button")

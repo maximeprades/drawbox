@@ -24,7 +24,7 @@ import drawbox_core
 from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
     OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
-    SUPPORTED_MODELS, _load_api_keys,
+    SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
     _write_secure_json, apply_api_keys, contains_poop, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
     generate_image, has_please, is_safe, is_valid_device_token,
@@ -206,6 +206,7 @@ def index():
     return render_template(
         "index.html",
         tts_voices=sorted(OPENAI_TTS_VOICES),
+        gateway_models=drawbox_core.GATEWAY_IMAGE_CATALOG,
     )
 
 @app.route("/guide")
@@ -367,8 +368,18 @@ def api_settings():
             settings["coloring_prompt"] = data["coloring_prompt"][:5000]
         if data.get("image_model") in SUPPORTED_MODELS:
             settings["image_model"] = data["image_model"]
+        if data.get("voice_provider") in VOICE_PROVIDERS:
+            settings["voice_provider"] = data["voice_provider"]
         if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
             settings["tts_voice_id"] = resolve_tts_voice(data["tts_voice_id"])
+        if isinstance(data.get("elevenlabs_voice_id"), str) and data["elevenlabs_voice_id"].strip():
+            settings["elevenlabs_voice_id"] = data["elevenlabs_voice_id"].strip()[:64]
+        if isinstance(data.get("grok_voice_id"), str) and data["grok_voice_id"].strip():
+            settings["grok_voice_id"] = data["grok_voice_id"].strip()[:64]
+        if "tts_stability" in data:
+            settings["tts_stability"] = max(0.0, min(1.0, float(data["tts_stability"])))
+        if "tts_style" in data:
+            settings["tts_style"] = max(0.0, min(1.0, float(data["tts_style"])))
         if "record_seconds" in data:
             settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
         if "printer_type" in data:
