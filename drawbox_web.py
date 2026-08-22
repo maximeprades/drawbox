@@ -463,6 +463,16 @@ def api_keys():
 _WIFI_UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+# NetworkManager rejects connection.autoconnect-priority outside this range.
+_WIFI_PRIORITY_MIN = -999
+_WIFI_PRIORITY_MAX = 999
+_WIFI_PRIORITY_STEP = 10
+# Leave headroom under 999 so a newly saved network can sit above the list.
+_WIFI_PRIORITY_TOP = 990
+
+
+def _clamp_wifi_priority(priority):
+    return max(_WIFI_PRIORITY_MIN, min(_WIFI_PRIORITY_MAX, int(priority)))
 
 
 def _validate_wifi_text(value, field, max_len, allow_empty=False):
@@ -569,7 +579,9 @@ def _saved_wifi_profiles():
 
 def _next_wifi_priority(profiles=None):
     profiles = profiles if profiles is not None else _saved_wifi_profiles()
-    return (max((p["priority"] for p in profiles), default=0) + 10)
+    return _clamp_wifi_priority(
+        max((p["priority"] for p in profiles), default=0) + _WIFI_PRIORITY_STEP
+    )
 
 
 def _run_sudo_nmcli(args, timeout=30):
@@ -583,7 +595,8 @@ def _set_wifi_priority(uuid, priority):
     if not _WIFI_UUID_RE.match(uuid or ""):
         raise ValueError("Invalid network id")
     _run_sudo_nmcli(["con", "modify", uuid, "connection.autoconnect", "yes",
-                     "connection.autoconnect-priority", str(int(priority))])
+                     "connection.autoconnect-priority",
+                     str(_clamp_wifi_priority(priority))])
 
 
 def _promote_wifi_profile_for_ssid(ssid):
@@ -700,9 +713,9 @@ def api_wifi_saved_reorder():
     if any(not isinstance(u, str) or not _WIFI_UUID_RE.match(u) for u in uuids):
         return jsonify(ok=False, error="Invalid network id"), 400
     try:
-        start = 1000
+        start = _WIFI_PRIORITY_TOP
         for idx, uuid in enumerate(uuids):
-            _set_wifi_priority(uuid, start - (idx * 10))
+            _set_wifi_priority(uuid, start - (idx * _WIFI_PRIORITY_STEP))
         return jsonify(ok=True)
     except subprocess.TimeoutExpired:
         return jsonify(ok=False, error="nmcli timed out")
