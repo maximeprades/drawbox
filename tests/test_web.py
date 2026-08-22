@@ -94,6 +94,31 @@ def test_settings_ignores_non_dict_body(client):
     assert r.status_code == 400
 
 
+def test_settings_get_includes_printer_defaults(client):
+    body = client.get("/api/settings").get_json()
+    assert body["printer_type"] == "cups"
+    assert body["serial_port"] == "/dev/ttyUSB0"
+    assert body["serial_baud"] == 9600
+
+
+def test_settings_printer_fields_round_trip(client):
+    client.post("/api/settings", json={
+        "printer_type": "escpos_serial",
+        "serial_port": "/dev/ttyACM7",
+        "serial_baud": 115200,
+    })
+    body = client.get("/api/settings").get_json()
+    assert body["printer_type"] == "escpos_serial"
+    assert body["serial_port"] == "/dev/ttyACM7"
+    assert body["serial_baud"] == 115200
+
+
+def test_settings_rejects_bogus_printer_type(client):
+    r = client.post("/api/settings", json={"printer_type": "bogus"})
+    assert r.status_code == 400
+    assert client.get("/api/settings").get_json()["printer_type"] == "cups"
+
+
 # ── /api/scripts ───────────────────────────────────
 
 def test_scripts_get_includes_defaults(client):

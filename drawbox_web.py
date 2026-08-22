@@ -373,6 +373,17 @@ def api_settings():
             settings["tts_style"] = _clamp_float(data["tts_style"], 0.0, 1.0)
         if "record_seconds" in data:
             settings["record_seconds"] = max(3, min(30, int(data["record_seconds"])))
+        if "printer_type" in data:
+            if data["printer_type"] not in ("cups", "escpos_serial"):
+                raise ValueError(f"unknown printer_type: {data['printer_type']!r}")
+            settings["printer_type"] = data["printer_type"]
+        if isinstance(data.get("serial_port"), str) and data["serial_port"].strip():
+            settings["serial_port"] = data["serial_port"].strip()
+        if "serial_baud" in data:
+            baud = int(data["serial_baud"])
+            if baud <= 0:
+                raise ValueError(f"serial_baud must be positive: {baud}")
+            settings["serial_baud"] = baud
     except (TypeError, ValueError) as e:
         return jsonify(ok=False, error=f"Invalid value: {e}"), 400
     save_settings(settings)
