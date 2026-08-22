@@ -444,6 +444,29 @@ def test_wifi_saved_get_falls_back_to_names_when_ssid_lookup_fails(client, monke
     assert body["saved"][0]["ssid"] == "Home"
 
 
+def test_update_deploy_ships_every_runtime_module(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("drawbox.py", "drawbox_core.py", "drawbox_escpos.py",
+                 "drawbox_web.py", "drawbox_future_module.py"):
+        (repo / name).write_text("# module")
+
+    files = drawbox_web._files_to_deploy(repo)
+
+    for name in ("drawbox.py", "drawbox_core.py", "drawbox_escpos.py",
+                 "drawbox_web.py", "drawbox_future_module.py",
+                 "templates/index.html", "check.sh"):
+        assert name in files
+
+
+def test_files_to_deploy_covers_the_actual_repo():
+    from pathlib import Path
+    repo_root = Path(drawbox_web.__file__).resolve().parent
+    files = drawbox_web._files_to_deploy(repo_root)
+    for module in repo_root.glob("drawbox*.py"):
+        assert module.name in files
+
+
 def test_restore_missing_template_copies_from_repo(tmp_path, monkeypatch):
     app_template = tmp_path / "app" / "templates" / "index.html"
     repo = tmp_path / "repo"

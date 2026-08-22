@@ -16,9 +16,9 @@ echo ""
 # drawbox.py ships together with the web files: pairing (button + spoken
 # code) spans both services, so partial deploys could lock you out.
 echo "📦 Copying files to Pi..."
-scp "$DIR/drawbox_core.py" \
-    "$DIR/drawbox.py" \
-    "$DIR/drawbox_web.py" \
+# Glob the python modules so a new drawbox_*.py can never be left behind
+# (a stale copy list bricked deployed boxes when drawbox_escpos.py landed).
+scp "$DIR"/drawbox*.py \
     "$DIR/drawbox-guide.html" \
     "$DIR/drawbox-simulator.html" \
     "$DIR/check.sh" \
