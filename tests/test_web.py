@@ -791,3 +791,4 @@ def test_dashboard_generate_page_has_printer_dropdown(client):
         html,
     )
     assert "printer_type: $('genPrinterType').value" in html
+    assert "JSON.stringify({printer_type: src.value})" in html
