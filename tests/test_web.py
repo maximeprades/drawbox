@@ -805,4 +805,3 @@ def test_dashboard_logs_page_has_copy_next_to_clear(client):
         r'<button class="btn btn-ghost btn-sm" onclick="clearLog\(\)">Clear</button>',
         html,
     )
->>>>>>> origin/cursor-copy-logs-button-e6c0
