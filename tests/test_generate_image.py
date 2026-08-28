@@ -1,6 +1,7 @@
 """Image generation routes every model through AI Gateway."""
 
 import base64
+import logging
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -145,3 +146,19 @@ def test_image_routes_cover_presets_and_catalog():
         assert route_api == api
         assert route_slug == slug
     assert drawbox_core.SUPPORTED_MODELS == tuple(drawbox_core.IMAGE_ROUTES)
+
+
+def test_chat_no_image_error_surfaces_model_answer(caplog):
+    completion = SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content="I cannot draw that"),
+        finish_reason="content_filter",
+    )])
+
+    with caplog.at_level(logging.ERROR, logger="drawbox"), \
+            pytest.raises(RuntimeError) as excinfo:
+        drawbox_core._image_bytes_from_chat(completion)
+
+    assert str(excinfo.value).startswith("No image in gateway chat response")
+    assert "I cannot draw that" in str(excinfo.value)
+    assert "content_filter" in str(excinfo.value)
+    assert "I cannot draw that" in caplog.text

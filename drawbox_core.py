@@ -636,11 +636,28 @@ def _image_bytes_from_chat(completion):
     try:
         url = completion.choices[0].message.images[0].image_url.url
     except (AttributeError, IndexError, TypeError):
-        raise RuntimeError("No image in gateway chat response") from None
+        raise _chat_no_image_error(completion) from None
     data = _b64_to_bytes(url)
     if not data:
-        raise RuntimeError("No image in gateway chat response")
+        raise _chat_no_image_error(completion)
     return data
+
+
+def _chat_no_image_error(completion):
+    """The model's text answer usually says why there is no image (refusal,
+    content filter); surface it instead of discarding it."""
+    content = finish_reason = None
+    choices = getattr(completion, "choices", None)
+    if isinstance(choices, (list, tuple)) and choices:
+        content = getattr(getattr(choices[0], "message", None), "content", None)
+        finish_reason = getattr(choices[0], "finish_reason", None)
+    if content is not None and not isinstance(content, str):
+        content = str(content)
+    detail = f"finish_reason={finish_reason!r}"
+    if content:
+        detail += f", content={content[:300]!r}"
+    log.error("gateway chat returned no image (%s)", detail)
+    return RuntimeError(f"No image in gateway chat response ({detail})")
 
 
 def _image_bytes_from_images_response(result):
