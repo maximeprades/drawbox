@@ -146,6 +146,18 @@ if [ -n "$SPEAKER_CARD" ]; then
         fail "Speaker playback test FAILED on card $SPEAKER_CARD. Manual test: speaker-test -D plughw:${SPEAKER_CARD},0 -c 1 -t sine"
     fi
 fi
+
+if command -v espeak > /dev/null; then
+    ok "espeak (fallback voice when TTS fails)"
+else
+    warn "espeak not installed — no fallback voice when TTS is down or rate-limited. Run: sudo apt install espeak"
+fi
+
+if command -v ffmpeg > /dev/null; then
+    ok "ffmpeg (speaker wake-up file)"
+else
+    warn "ffmpeg not installed — no speaker wake-up file, first syllables may get cut. Run: sudo apt install ffmpeg"
+fi
 echo ""
 
 # ── 5. PRINTER ───────────────────────────────────
