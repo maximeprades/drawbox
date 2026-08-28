@@ -973,7 +973,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
 // ── GLOBALS ───────────────────────────────────
 const $ = id => document.getElementById(id);
 const TTS_VOICES = {{ tts_voices | tojson }};
-let evtSrc = null, wifiTarget = '';
+let evtSrc = null, wifiTarget = '', _printerSave = Promise.resolve();
 
 // ── DEVICE PAIRING AUTH ───────────────────────
 // Every /api call carries the paired-device token; a 401 anywhere pops
@@ -1224,6 +1224,7 @@ function updateVoiceProviderFields() {
 
 async function loadSettings() {
   try {
+    await _printerSave;
     const r = await fetch('/api/settings');
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
@@ -1252,7 +1253,7 @@ function syncPrinterType(from) {
   const dst = from === 'gen' ? $('cfgPrinterType') : $('genPrinterType');
   dst.value = src.value;
   updateSerialFields();
-  fetch('/api/settings', {
+  _printerSave = fetch('/api/settings', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({printer_type: src.value}),
