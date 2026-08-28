@@ -567,6 +567,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div style="display:flex;gap:8px">
           <a class="btn btn-outline btn-sm" href="/api/logs/download" download
              onclick="this.href='/api/logs/download?token='+encodeURIComponent(deviceToken())">Download last 24h</a>
+          <button class="btn btn-ghost btn-sm" id="copyLogBtn" type="button" onclick="copyLog()">Copy logs</button>
           <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
         </div>
       </div>
@@ -1212,6 +1213,32 @@ function connectLogs() {
   };
 }
 connectLogs();
+function copyLog() {
+  const text = ($('logArea').textContent || '').trimEnd();
+  if (!text.trim()) { toast('No logs to copy', false); return; }
+  const done = () => toast('Logs copied');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      if (_copyLogFallback(text)) done();
+      else toast('Could not copy logs', false);
+    });
+    return;
+  }
+  if (_copyLogFallback(text)) done();
+  else toast('Could not copy logs', false);
+}
+function _copyLogFallback(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  return ok;
+}
 function clearLog() { $('logArea').textContent = ''; }
 
 // ── SETTINGS ──────────────────────────────────

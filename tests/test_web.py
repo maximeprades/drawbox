@@ -793,3 +793,16 @@ def test_dashboard_generate_page_has_printer_dropdown(client):
     assert "printer_type: $('genPrinterType').value" in html
     assert "JSON.stringify({printer_type: src.value})" in html
     assert "await _printerSave" in html
+
+
+def test_dashboard_logs_page_has_copy_next_to_clear(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="copyLogBtn"' in html
+    assert "function copyLog(" in html
+    assert "function _copyLogFallback(" in html
+    assert re.search(
+        r'onclick="copyLog\(\)">Copy logs</button>\s*'
+        r'<button class="btn btn-ghost btn-sm" onclick="clearLog\(\)">Clear</button>',
+        html,
+    )
+>>>>>>> origin/cursor-copy-logs-button-e6c0
