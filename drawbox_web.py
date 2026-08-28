@@ -974,6 +974,33 @@ def api_update_check():
     except Exception as e:
         return jsonify(error=str(e), has_update=False)
 
+# Seconds to wait after /api/update/deploy returns before systemd restarts
+# gunicorn. A 1s in-process thread used to kill the worker before the
+# browser read the JSON, so the Update page sat on "Starting deployment...".
+_SERVICE_RESTART_DELAY_S = 8
+
+
+def _schedule_service_restart(delay_s=_SERVICE_RESTART_DELAY_S):
+    """Restart both services after the HTTP response can leave the box.
+
+    A daemon thread dies with gunicorn. A new session does not.
+    """
+    delay_s = max(1, int(delay_s))
+    script = (
+        f"sleep {delay_s}; "
+        "sudo /usr/bin/systemctl restart drawbox-web; "
+        "sudo /usr/bin/systemctl restart drawbox"
+    )
+    subprocess.Popen(
+        ["/bin/bash", "-c", script],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
 def _files_to_deploy(repo_dir):
     """Every file the running Pi needs copied out of the repo clone.
 
@@ -1014,17 +1041,13 @@ def api_update_deploy():
             shutil.rmtree(str(cache_dir))
             output += "\nCleared voice cache (will regenerate on restart)"
 
-        # Schedule service restart (runs after response is sent)
-        def restart_later():
-            _time.sleep(1)
-            subprocess.run(["sudo", "systemctl", "restart", "drawbox-web"],
-                           capture_output=True)
-            subprocess.run(["sudo", "systemctl", "restart", "drawbox"],
-                           capture_output=True)
-
-        threading.Thread(target=restart_later, daemon=True).start()
-
-        return jsonify(ok=True, output=output.strip())
+        _schedule_service_restart()
+        output += (
+            f"\nRestart scheduled in {_SERVICE_RESTART_DELAY_S}s "
+            "(after this reply leaves the box)"
+        )
+        return jsonify(ok=True, output=output.strip(),
+                       restart_in_s=_SERVICE_RESTART_DELAY_S)
     except Exception as e:
         return jsonify(ok=False, error=str(e))
 
