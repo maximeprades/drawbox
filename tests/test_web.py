@@ -744,3 +744,15 @@ def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
     assert 'id="keyXai"' in html
     assert 'id="keyElevenlabs"' in html
     assert 'value="spacexai/grok-imagine-image"' in html
+
+
+def test_dashboard_logs_page_has_copy_next_to_clear(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="copyLogBtn"' in html
+    assert "function copyLog(" in html
+    assert "function _copyLogFallback(" in html
+    assert re.search(
+        r'onclick="copyLog\(\)">Copy logs</button>\s*'
+        r'<button class="btn btn-ghost btn-sm" onclick="clearLog\(\)">Clear</button>',
+        html,
+    )
