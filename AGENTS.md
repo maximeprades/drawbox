@@ -40,3 +40,7 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
 - The dashboard shows generate results as short-lived toast messages at the bottom
   of the page. They fade quickly, so screenshots can miss them. Use the JSON
   responses from `/api/generate` for reliable proof.
+
+### Walkthrough videos
+Do not record a demo video unless the user explicitly asks for one.
+Screenshots, pytest, and `/api` JSON are enough.
