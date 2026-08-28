@@ -137,6 +137,21 @@ def test_print_image_escpos_failure_raises_and_unlinks(drawbox_dir, tmp_path):
     assert not img_path.exists()
 
 
+def test_print_image_override_beats_saved_type(drawbox_dir, monkeypatch, tmp_path):
+    drawbox_core.save_settings({"printer_type": "cups"})
+    calls = []
+    monkeypatch.setattr(drawbox_escpos, "start_print",
+                        lambda path, port, baud: calls.append((path, port, baud)))
+    img_path = tmp_path / "page.png"
+    Image.new("L", (10, 10), 0).save(img_path)
+
+    drawbox_core.print_image(str(img_path), printer_type="escpos_serial")
+
+    assert len(calls) == 1
+    assert calls[0][1] == "/dev/ttyUSB0"
+    assert not img_path.exists()
+
+
 def test_print_image_defaults_to_lp(drawbox_dir, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(drawbox_core.subprocess, "run",

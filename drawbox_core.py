@@ -741,11 +741,16 @@ def _unlink_quietly(path):
         pass
 
 
-def print_image(path):
-    """Send ``path`` to the configured printer and remove the temp file."""
+def print_image(path, printer_type=None):
+    """Send ``path`` to the chosen printer and remove the temp file.
+
+    ``printer_type`` overrides the saved setting for this call only. Unknown
+    values fall back to the saved type so a bad override cannot skip printing.
+    """
     log.info("printing %s", path)
     settings = load_settings()
-    if settings["printer_type"] == "escpos_serial":
+    kind = printer_type if printer_type in PRINTER_TYPES else settings["printer_type"]
+    if kind == "escpos_serial":
         # Imported here, not at module top: the serial backend is optional,
         # and a partial deploy that misses the module must degrade to a
         # print-time error instead of killing both services at import
