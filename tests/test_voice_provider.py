@@ -1,5 +1,6 @@
 """Voice provider dispatch: Gateway TTS default, ElevenLabs and Grok optional."""
 
+import base64
 import hashlib
 import json
 import urllib.request
@@ -10,8 +11,8 @@ import drawbox_core
 
 
 class FakeAudioResponse:
-    def __init__(self):
-        self._data = BytesIO(b"fake-mp3-bytes")
+    def __init__(self, data=b"fake-mp3-bytes"):
+        self._data = BytesIO(data)
 
     def read(self, n=-1):
         return self._data.read(n)
@@ -31,6 +32,39 @@ def test_synthesize_routes_to_gateway_by_default(monkeypatch, tmp_path):
 
     assert feedback._synthesize("hello", str(tmp_path / "out.mp3")) is True
     assert calls == ["hello"]
+
+
+def test_gateway_tts_request_shape(monkeypatch, tmp_path):
+    monkeypatch.setattr(drawbox, "TTS_VOICE_ID", "alloy")
+    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeAudioResponse(json.dumps({
+            "audio": base64.b64encode(b"MP3BYTES").decode(),
+            "warnings": [],
+        }).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    out_path = tmp_path / "gw.mp3"
+    feedback = drawbox.VoiceFeedback()
+    assert feedback._synthesize("hello kids", str(out_path)) is True
+
+    assert out_path.read_bytes() == b"MP3BYTES"
+    req = captured["req"]
+    assert req.full_url == drawbox_core.AI_GATEWAY_SPEECH_URL
+    assert req.get_header("Authorization") == "Bearer vck-test"
+    assert req.get_header("Ai-gateway-protocol-version") == "0.0.1"
+    assert req.get_header("Ai-speech-model-specification-version") == "4"
+    assert req.get_header("Ai-model-id") == "openai/tts-1"
+    body = json.loads(req.data)
+    assert body["text"].startswith(drawbox._TTS_WAKE_PREFIX)
+    assert body["text"].endswith("hello kids")
+    assert body["voice"] == "alloy"
+    assert body["outputFormat"] == "mp3"
 
 
 def test_elevenlabs_tts_request_shape(monkeypatch, tmp_path):

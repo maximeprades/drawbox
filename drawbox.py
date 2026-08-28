@@ -11,6 +11,7 @@ Press → listen → transcribe → safety-check → generate → print → done
 Hold for 5 seconds to reboot.
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -113,6 +114,23 @@ def _apply_tts_settings():
 _apply_tts_settings()
 
 
+# ── GATEWAY v4 AUDIO ────────────────────────────
+# The gateway's OpenAI-compatible /v1 surface has no audio routes; speech and
+# transcription speak the AI SDK's v4 protocol (bespoke headers, base64 JSON).
+
+def _gateway_v4_post(url, payload, model_headers):
+    """POST JSON to an AI Gateway v4 endpoint and return the parsed reply."""
+    import urllib.request
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {drawbox_core.AI_GATEWAY_API_KEY}",
+        "ai-gateway-protocol-version": drawbox_core.AI_GATEWAY_PROTOCOL_VERSION,
+        **model_headers,
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
 class VoiceFeedback:
     """Caches TTS lines as .mp3 keyed by content hash.
 
@@ -169,7 +187,7 @@ class VoiceFeedback:
         except RateLimitError as e:
             self._handle_tts_rate_limit(e)
         except HTTPError as e:
-            # urllib providers (elevenlabs, grok) surface HTTP errors here.
+            # All providers fetch over urllib and surface HTTP errors here.
             if e.code == 429:
                 self._handle_tts_rate_limit(e)
             else:
@@ -218,15 +236,22 @@ class VoiceFeedback:
             self._tts_rate_limit_logged = True
 
     def _gateway_tts(self, text, out_path):
-        if not drawbox_core.client:
+        if not drawbox_core.AI_GATEWAY_API_KEY:
             raise RuntimeError("AI_GATEWAY_API_KEY not set")
-        response = drawbox_core.client.audio.speech.create(
-            model=drawbox_core.GATEWAY_TTS_MODEL,
-            voice=TTS_VOICE_ID,
-            input=_TTS_WAKE_PREFIX + text,
-            response_format="mp3",
+        reply = _gateway_v4_post(
+            drawbox_core.AI_GATEWAY_SPEECH_URL,
+            {
+                "text": _TTS_WAKE_PREFIX + text,
+                "voice": TTS_VOICE_ID,
+                "outputFormat": "mp3",
+            },
+            {
+                "ai-speech-model-specification-version": "4",
+                "ai-model-id": drawbox_core.GATEWAY_TTS_MODEL,
+            },
         )
-        response.write_to_file(out_path)
+        with open(out_path, "wb") as f:
+            f.write(base64.b64decode(reply["audio"]))
 
     def _elevenlabs_tts(self, text, out_path):
         self._fetch_audio(
@@ -489,16 +514,26 @@ def transcribe(path):
     log.info("transcribing with whisper-1")
     t0 = time.time()
     try:
+        if not drawbox_core.AI_GATEWAY_API_KEY:
+            raise RuntimeError("AI_GATEWAY_API_KEY not set")
         with open(path, "rb") as f:
-            r = drawbox_core.client.audio.transcriptions.create(
-                model=drawbox_core.GATEWAY_STT_MODEL, file=f)
+            audio_b64 = base64.b64encode(f.read()).decode()
+        reply = _gateway_v4_post(
+            drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL,
+            # mediaType must match the bytes; record_audio writes WAV.
+            {"audio": audio_b64, "mediaType": "audio/wav"},
+            {
+                "ai-transcription-model-specification-version": "4",
+                "ai-model-id": drawbox_core.GATEWAY_STT_MODEL,
+            },
+        )
     finally:
         try:
             os.unlink(path)
         except OSError:
             pass
-    log.info("transcribed in %.1fs: %r", time.time() - t0, r.text)
-    return r.text
+    log.info("transcribed in %.1fs: %r", time.time() - t0, reply["text"])
+    return reply["text"]
 
 
 # ── MAIN ────────────────────────────────────────

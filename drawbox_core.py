@@ -43,6 +43,11 @@ PRINTER_NAME = "drawbox-printer"
 
 # ── API KEYS ──────────────────────────────────────
 AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+# The OpenAI-compatible /v1 surface has no audio routes; speech and
+# transcription go through the AI SDK's v4 protocol endpoints instead.
+AI_GATEWAY_SPEECH_URL = "https://ai-gateway.vercel.sh/v4/ai/speech-model"
+AI_GATEWAY_TRANSCRIPTION_URL = "https://ai-gateway.vercel.sh/v4/ai/transcription-model"
+AI_GATEWAY_PROTOCOL_VERSION = "0.0.1"
 AI_GATEWAY_API_KEY = ""
 ELEVENLABS_API_KEY = ""
 XAI_API_KEY = ""

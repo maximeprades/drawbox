@@ -1,12 +1,18 @@
 """Audio recording fallback behavior."""
 
+import base64
+import json
 import logging
+import urllib.error
+import urllib.request
 
 import httpx
 import numpy as np
+import pytest
 from openai import RateLimitError
 
 import drawbox
+import drawbox_core
 
 
 def _rate_limit_error(retry_after="120"):
@@ -126,6 +132,45 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
     assert "rate-limited (HTTP 429)" in caplog.text
 
 
+def test_gateway_tts_http_429_triggers_rate_limit(monkeypatch, tmp_path, caplog):
+    feedback = drawbox.VoiceFeedback()
+    monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    attempts = []
+
+    def rate_limited_urlopen(req, timeout=None):
+        attempts.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests",
+                                     {"Retry-After": "120"}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", rate_limited_urlopen)
+
+    with caplog.at_level(logging.WARNING, logger="drawbox"):
+        assert feedback._generate_one("first line") is None
+        assert feedback._generate_one("second line") is None
+
+    assert attempts == [drawbox_core.AI_GATEWAY_SPEECH_URL]
+    assert feedback._tts_rate_limit_remaining() > 0
+    assert "rate-limited (HTTP 429)" in caplog.text
+
+
+def test_gateway_tts_http_error_warns_without_rate_limit(monkeypatch, tmp_path, caplog):
+    feedback = drawbox.VoiceFeedback()
+    monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+
+    def not_found_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", not_found_urlopen)
+
+    with caplog.at_level(logging.WARNING, logger="drawbox"):
+        assert feedback._generate_one("a line") is None
+
+    assert feedback._tts_rate_limit_remaining() == 0
+    assert "gateway TTS HTTP 404 failed" in caplog.text
+
+
 def test_live_tts_uses_espeak_during_rate_limit(monkeypatch):
     feedback = drawbox.VoiceFeedback()
     feedback._tts_rate_limited_until = drawbox.time.time() + 30
@@ -187,3 +232,56 @@ def test_play_falls_back_to_live_tts_for_uncached_key(monkeypatch):
     feedback.play("missing")
 
     assert played_live == ["fallback line"]
+
+
+def test_transcribe_posts_wav_and_unlinks_recording(monkeypatch, tmp_path):
+    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF-fake-wav")
+
+    captured = {}
+
+    class FakeJsonResponse:
+        def read(self, n=-1):
+            return json.dumps({"text": "draw a cat"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeJsonResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    assert drawbox.transcribe(str(clip)) == "draw a cat"
+
+    req = captured["req"]
+    assert req.full_url == drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL
+    assert req.get_header("Authorization") == "Bearer vck-test"
+    assert req.get_header("Ai-gateway-protocol-version") == "0.0.1"
+    assert req.get_header("Ai-transcription-model-specification-version") == "4"
+    assert req.get_header("Ai-model-id") == "openai/whisper-1"
+    body = json.loads(req.data)
+    assert body["audio"] == base64.b64encode(b"RIFF-fake-wav").decode()
+    assert body["mediaType"] == "audio/wav"
+    assert not clip.exists()
+
+
+def test_transcribe_unlinks_recording_when_gateway_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF-fake-wav")
+
+    def failing_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", failing_urlopen)
+
+    with pytest.raises(urllib.error.HTTPError):
+        drawbox.transcribe(str(clip))
+
+    assert not clip.exists()
