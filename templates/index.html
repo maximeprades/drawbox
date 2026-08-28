@@ -1252,6 +1252,11 @@ function syncPrinterType(from) {
   const dst = from === 'gen' ? $('cfgPrinterType') : $('genPrinterType');
   dst.value = src.value;
   updateSerialFields();
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({printer_type: src.value}),
+  }).catch(() => {});
 }
 
 function updateSerialFields() {
