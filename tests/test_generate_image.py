@@ -6,6 +6,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from openai.types.chat.chat_completion import ChatCompletion
 from PIL import Image
 
 import drawbox_core
@@ -178,3 +179,48 @@ def test_chat_no_image_error_surfaces_model_answer(caplog):
     assert "I cannot draw that" in str(excinfo.value)
     assert "content_filter" in str(excinfo.value)
     assert "I cannot draw that" in caplog.text
+
+
+def _gateway_chat_completion(png, finish_reason="stop", content=None):
+    """Build the real OpenAI SDK object the gateway client returns."""
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+    return ChatCompletion.model_validate({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "google/gemini-3.1-flash-image-preview",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "images": [{
+                    "type": "image_url",
+                    "image_url": {"url": data_url},
+                }],
+            },
+            "finish_reason": finish_reason,
+        }],
+    })
+
+
+def test_image_bytes_from_chat_reads_sdk_dict_images():
+    png = _png_bytes()
+    completion = _gateway_chat_completion(png)
+    # This is the Pi failure: finish_reason=stop, content empty, images as
+    # dicts. Attribute-style access raises and used to look like "no image".
+    assert isinstance(completion.choices[0].message.images[0], dict)
+    with pytest.raises(AttributeError):
+        completion.choices[0].message.images[0].image_url
+    assert drawbox_core._image_bytes_from_chat(completion) == png
+
+
+def test_generate_nano_banana_reads_sdk_dict_images(drawbox_dir, monkeypatch):
+    png = _png_bytes()
+
+    def fake_create(**_kwargs):
+        return _gateway_chat_completion(png)
+
+    _gateway_client(monkeypatch, chat_create=fake_create)
+    path = drawbox_core.generate_image("a kitty", model="nano-banana")
+    assert path.endswith(".png")

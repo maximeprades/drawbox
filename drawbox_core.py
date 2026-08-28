@@ -650,10 +650,31 @@ def _b64_to_bytes(value):
         return None
 
 
-def _image_bytes_from_chat(completion):
-    """Gateway chat image-preview: message.images[0].image_url.url."""
+def _image_url_from_part(part):
+    """Pull a data URL from a gateway image part (dict or object).
+
+    The OpenAI Python SDK does not type ``message.images``, so extra fields
+    stay as raw dicts. ``part.image_url.url`` then raises AttributeError
+    and we used to report "no image" even when the bytes were right there.
+    """
+    if isinstance(part, dict):
+        image_url = part.get("image_url")
+        if isinstance(image_url, dict):
+            url = image_url.get("url")
+        else:
+            url = image_url
+        return url if isinstance(url, str) else None
     try:
-        url = completion.choices[0].message.images[0].image_url.url
+        url = part.image_url.url
+    except (AttributeError, TypeError):
+        return None
+    return url if isinstance(url, str) else None
+
+
+def _image_bytes_from_chat(completion):
+    """Gateway chat image-preview: first entry in message.images."""
+    try:
+        url = _image_url_from_part(completion.choices[0].message.images[0])
     except (AttributeError, IndexError, TypeError):
         raise _chat_no_image_error(completion) from None
     data = _b64_to_bytes(url)
