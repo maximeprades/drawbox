@@ -293,6 +293,10 @@ def api_generate():
                   drawbox_core.DEFAULT_VOICE_LINES["say_please"]["text"],
         )
 
+    printer_type = data.get("printer_type")
+    if printer_type is not None and printer_type not in PRINTER_TYPES:
+        return jsonify(ok=False, error="Unknown printer.")
+
     if not _gen_lock.acquire(blocking=False):
         return jsonify(ok=False, error="Already generating — please wait.")
     try:
@@ -303,7 +307,10 @@ def api_generate():
         duration = _time.time() - t0
         with open(path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode()
-        print_image(path)
+        print_image(path, printer_type=printer_type)
+        if printer_type in PRINTER_TYPES and printer_type != settings["printer_type"]:
+            settings["printer_type"] = printer_type
+            save_settings(settings)
         log_print_event(desc, model, duration, source="web")
         return jsonify(ok=True, image=image_b64)
     except Exception:

@@ -358,6 +358,40 @@ def test_generate_returns_generic_error_on_failure(client, monkeypatch):
     assert "/home/secret" not in r["error"]
 
 
+def test_generate_uses_requested_printer_and_persists_it(client, monkeypatch, tmp_path):
+    img = tmp_path / "out.png"
+    img.write_bytes(b"fake-png")
+    monkeypatch.setattr(drawbox_web, "generate_image", lambda *a, **k: str(img))
+    calls = []
+    monkeypatch.setattr(
+        drawbox_web, "print_image",
+        lambda path, printer_type=None: calls.append(printer_type),
+    )
+
+    r = client.post("/api/generate", json={
+        "description": "a happy puppy",
+        "printer_type": "escpos_serial",
+    }).get_json()
+
+    assert r["ok"] is True
+    assert calls == ["escpos_serial"]
+    assert client.get("/api/settings").get_json()["printer_type"] == "escpos_serial"
+
+
+def test_generate_rejects_unknown_printer_before_drawing(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(drawbox_web, "generate_image",
+                        lambda *a, **k: called.append(True))
+    r = client.post("/api/generate", json={
+        "description": "a happy puppy",
+        "printer_type": "fax",
+    }).get_json()
+    assert r["ok"] is False
+    assert "printer" in r["error"].lower()
+    assert called == []
+    assert client.get("/api/settings").get_json()["printer_type"] == "cups"
+
+
 # ── /api/wifi/connect input validation ─────────────
 
 @pytest.mark.parametrize("payload, error_substr", [
@@ -744,3 +778,16 @@ def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
     assert 'id="keyXai"' in html
     assert 'id="keyElevenlabs"' in html
     assert 'value="spacexai/grok-imagine-image"' in html
+
+
+def test_dashboard_generate_page_has_printer_dropdown(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="genPrinterType"' in html
+    assert "function syncPrinterType(" in html
+    assert re.search(
+        r'<select class="select" id="genPrinterType"[^>]*>\s*'
+        r'<option value="cups">Laser / inkjet \(CUPS\)</option>\s*'
+        r'<option value="escpos_serial">Thermal receipt',
+        html,
+    )
+    assert "printer_type: $('genPrinterType').value" in html
