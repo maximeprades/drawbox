@@ -62,6 +62,22 @@ def test_generate_gpt_image_uses_gateway_slug(drawbox_dir, monkeypatch):
     assert path.endswith(".png")
 
 
+def test_generate_image_remembers_the_last_page(drawbox_dir, monkeypatch):
+    png = _png_bytes()
+
+    def fake_generate(**kwargs):
+        return SimpleNamespace(data=[SimpleNamespace(
+            b64_json=base64.b64encode(png).decode(), url=None,
+        )])
+
+    _gateway_client(monkeypatch, images_generate=fake_generate)
+    path = drawbox_core.generate_image("a rocket", model="gpt-image")
+
+    assert drawbox_core.LAST_IMAGE_FILE.exists()
+    with open(path, "rb") as f:
+        assert drawbox_core.LAST_IMAGE_FILE.read_bytes() == f.read()
+
+
 def test_generate_flux_uses_gateway_slug(drawbox_dir, monkeypatch):
     png = _png_bytes()
     seen = {}

@@ -358,6 +358,19 @@ def test_generate_returns_generic_error_on_failure(client, monkeypatch):
     assert "/home/secret" not in r["error"]
 
 
+def test_last_image_404_before_any_generation(client):
+    r = client.get("/api/last-image")
+    assert r.status_code == 404
+
+
+def test_last_image_serves_the_saved_png(client):
+    drawbox_core.LAST_IMAGE_FILE.write_bytes(b"\x89PNG-ish bytes")
+    r = client.get("/api/last-image")
+    assert r.status_code == 200
+    assert r.mimetype == "image/png"
+    assert r.data == b"\x89PNG-ish bytes"
+
+
 def test_generate_uses_requested_printer_and_persists_it(client, monkeypatch, tmp_path):
     img = tmp_path / "out.png"
     img.write_bytes(b"fake-png")
@@ -805,3 +818,12 @@ def test_dashboard_logs_page_has_copy_next_to_clear(client):
         r'<button class="btn btn-ghost btn-sm" onclick="clearLog\(\)">Clear</button>',
         html,
     )
+
+
+def test_dashboard_generate_page_reloads_the_last_image(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="previewImg"' in html
+    assert 'id="previewHint"' in html
+    assert "function loadLastImage(" in html
+    assert "'/api/last-image'" in html
+    assert "if (page === 'generate') loadLastImage();" in html

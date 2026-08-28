@@ -551,6 +551,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           </select>
         </div>
         <img class="preview-img" id="previewImg" alt="Generated coloring page" />
+        <div class="form-hint" id="previewHint" style="display:none;margin-top:6px"></div>
       </div>
     </div>
   </div>
@@ -1066,6 +1067,7 @@ function showPage(page) {
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('show');
   if (page === 'overview') loadAnalytics();
+  if (page === 'generate') loadLastImage();
   if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadPoopMode(); loadApiKeys(); loadPairedDevices(); }
   if (page === 'scripts') loadScripts();
   if (page === 'wifi') { loadSavedWifi(); loadWifi(); }
@@ -1188,8 +1190,7 @@ async function doGenerate() {
     if (d.ok) {
       toast('Coloring page sent to printer!');
       if (d.image) {
-        $('previewImg').src = 'data:image/png;base64,' + d.image;
-        $('previewImg').style.display = 'block';
+        showPreview('data:image/png;base64,' + d.image, 'Just generated');
       }
       $('genInput').value = '';
     } else { toast(d.error || 'Generation failed', false); }
@@ -1198,6 +1199,24 @@ async function doGenerate() {
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6-6 6 6"/><path d="M12 3v14"/><path d="M5 21h14"/></svg> Generate & Print';
 }
 $('genInput').addEventListener('keydown', e => { if (e.key === 'Enter') doGenerate(); });
+
+function showPreview(src, hint) {
+  $('previewImg').src = src;
+  $('previewImg').style.display = 'block';
+  $('previewHint').textContent = hint;
+  $('previewHint').style.display = 'block';
+}
+
+// The generate response can get lost (page switch, tunnel hiccup), so the
+// box keeps the newest page on disk and the dashboard re-fetches it here.
+async function loadLastImage() {
+  try {
+    const r = await fetch('/api/last-image');
+    if (!r.ok) return;
+    const blob = await r.blob();
+    showPreview(URL.createObjectURL(blob), 'Last generated page');
+  } catch (e) {}
+}
 
 // ── LOGS (SSE) ────────────────────────────────
 function connectLogs() {

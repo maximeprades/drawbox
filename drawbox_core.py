@@ -36,6 +36,7 @@ SCRIPTS_FILE = DRAWBOX_DIR / "voice_scripts.json"
 CACHE_DIR = DRAWBOX_DIR / "voice_cache"
 PAIRING_FILE = DRAWBOX_DIR / "pairing.json"
 PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
+LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
@@ -617,7 +618,25 @@ def generate_image(desc, model=None):
         img_bytes = _generate_chat_image(prompt, slug, kwargs)
     else:
         img_bytes = _generate_images_api(prompt, slug, kwargs)
-    return _postprocess(img_bytes)
+    path = _postprocess(img_bytes)
+    _remember_last_image(path)
+    return path
+
+
+def _remember_last_image(path):
+    """Keep a copy of the newest page for the dashboard preview.
+
+    print_image deletes the temp file right after printing, so this copy is
+    the only place the dashboard can re-fetch the result from. Best-effort:
+    a failed copy must never break the print itself.
+    """
+    try:
+        LAST_IMAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LAST_IMAGE_FILE.with_name(LAST_IMAGE_FILE.name + ".tmp")
+        tmp.write_bytes(Path(path).read_bytes())
+        os.replace(tmp, LAST_IMAGE_FILE)
+    except OSError as e:
+        log.warning("could not save last image: %s", e)
 
 
 def _b64_to_bytes(value):

@@ -22,7 +22,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import drawbox_core
 from drawbox_core import (
-    API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, PLEASE_MODE_FILE, PRINT_LOG_FILE,
+    API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, LAST_IMAGE_FILE,
+    PLEASE_MODE_FILE, PRINT_LOG_FILE,
     OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
     SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
     _write_secure_json, apply_api_keys, contains_poop, default_scripts,
@@ -318,6 +319,13 @@ def api_generate():
         return jsonify(ok=False, error="Generation failed; check logs.")
     finally:
         _gen_lock.release()
+
+@app.route("/api/last-image")
+def api_last_image():
+    """The most recent generated page (button or web), for the dashboard."""
+    if not LAST_IMAGE_FILE.exists():
+        return jsonify(ok=False, error="Nothing generated yet"), 404
+    return send_file(LAST_IMAGE_FILE, mimetype="image/png", max_age=0)
 
 @app.route("/api/logs")
 def api_logs():

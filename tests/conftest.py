@@ -46,6 +46,7 @@ def drawbox_dir(tmp_path, monkeypatch):
         "CACHE_DIR": dx / "voice_cache",
         "PAIRING_FILE": dx / "pairing.json",
         "PAIRED_DEVICES_FILE": dx / "paired_devices.json",
+        "LAST_IMAGE_FILE": dx / "last_generated.png",
     }
     for name, value in overrides.items():
         monkeypatch.setattr(drawbox_core, name, value)
