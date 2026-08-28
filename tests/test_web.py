@@ -491,6 +491,55 @@ def test_wifi_saved_get_falls_back_to_names_when_ssid_lookup_fails(client, monke
     assert body["saved"][0]["ssid"] == "Home"
 
 
+def test_schedule_service_restart_detaches_from_gunicorn(monkeypatch):
+    seen = {}
+
+    def fake_popen(args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return type("Proc", (), {"pid": 1})()
+
+    monkeypatch.setattr(drawbox_web.subprocess, "Popen", fake_popen)
+    drawbox_web._schedule_service_restart(5)
+
+    assert seen["args"][:2] == ["/bin/bash", "-c"]
+    assert "sleep 5" in seen["args"][2]
+    assert "systemctl restart drawbox-web" in seen["args"][2]
+    assert "systemctl restart drawbox" in seen["args"][2]
+    assert seen["kwargs"]["start_new_session"] is True
+
+
+def test_update_deploy_returns_before_restart(client, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "drawbox_web.py").write_text("# web")
+    (repo / "templates").mkdir()
+    (repo / "templates" / "index.html").write_text("<html>new</html>")
+    home = tmp_path / "home"
+    home.mkdir()
+    scheduled = []
+
+    class Result:
+        stdout = "Updating e9e5851..abc1234\n"
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr(drawbox_web, "REPO_DIR", repo)
+    monkeypatch.setattr(drawbox_web.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(drawbox_web.subprocess, "run", lambda *a, **k: Result())
+    monkeypatch.setattr(drawbox_web, "_schedule_service_restart",
+                        lambda *a, **k: scheduled.append(True))
+
+    body = client.post("/api/update/deploy").get_json()
+
+    assert body["ok"] is True
+    assert body["restart_in_s"] == drawbox_web._SERVICE_RESTART_DELAY_S
+    assert "Restart scheduled" in body["output"]
+    assert (home / "drawbox_web.py").read_text() == "# web"
+    assert (home / "templates" / "index.html").read_text() == "<html>new</html>"
+    assert scheduled == [True]
+
+
 def test_update_deploy_ships_every_runtime_module(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

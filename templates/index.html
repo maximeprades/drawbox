@@ -893,7 +893,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
             Install Update &amp; Restart
           </button>
-          <div class="form-hint" style="margin-top:8px">Downloads the latest code, copies files, and restarts both services. The dashboard will reload automatically.</div>
+          <div class="form-hint" style="margin-top:8px">Downloads the latest code, copies files, then restarts both services. The page waits for the reply, then for the restart. Refresh if it sits more than two minutes.</div>
         </div>
         <div class="diag-out" id="updateLog" style="display:none;margin-top:12px;height:200px"></div>
       </div>
@@ -1749,37 +1749,59 @@ async function deployUpdate() {
   const log = $('updateLog');
   btn.disabled = true; btn.textContent = 'Installing...';
   log.style.display = 'block';
-  log.textContent = 'Starting deployment...\n';
+  log.textContent = 'Starting deployment...\nThis can take up to a minute.\n';
+  const started = Date.now();
   try {
-    const r = await fetch('/api/update/deploy', {method: 'POST'});
+    const r = await fetch('/api/update/deploy', {
+      method: 'POST',
+      signal: AbortSignal.timeout(90000),
+    });
     const d = await r.json();
     if (d.ok) {
-      log.textContent += d.output + '\n\nService restarting... waiting for it to come back.\n';
-      pollUntilAlive();
+      log.textContent += (d.output || '') + '\n\nServices will restart shortly...\n';
+      pollUntilAlive({waitMs: (d.restart_in_s || 8) * 1000});
     } else {
       log.textContent += 'ERROR: ' + (d.error || 'Unknown error') + '\n';
       btn.disabled = false; btn.textContent = 'Install Update & Restart';
     }
   } catch(e) {
-    log.textContent += 'Connection lost (expected during restart).\nWaiting for service to come back...\n';
-    pollUntilAlive();
+    const waited = Math.round((Date.now() - started) / 1000);
+    log.textContent += 'Connection lost after ' + waited +
+      's (expected if the web service already restarted).\n' +
+      'Waiting for the dashboard to come back...\n';
+    pollUntilAlive({waitMs: 8000});
   }
 }
 
-function pollUntilAlive(attempts = 0) {
-  if (attempts > 30) {
-    $('updateLog').textContent += 'Service did not come back after 60s. Check manually.\n';
+function pollUntilAlive({waitMs = 8000, attempts = 0} = {}) {
+  const log = $('updateLog');
+  const btn = $('deployBtn');
+  if (attempts > 45) {
+    log.textContent += 'Service did not come back after 90s. Refresh the page, or SSH and run:\n' +
+      '  sudo systemctl restart drawbox-web\n';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Install Update & Restart';
+    }
     return;
   }
+  const delay = attempts === 0 ? waitMs : 2000;
   setTimeout(async () => {
     try {
       const r = await fetch('/api/status', {signal: AbortSignal.timeout(3000)});
       if (r.ok) {
-        $('updateLog').textContent += 'Service is back online! Reloading...\n';
+        log.textContent += 'Service is back online! Reloading...\n';
         setTimeout(() => window.location.reload(), 1000);
-      } else { pollUntilAlive(attempts + 1); }
-    } catch(e) { pollUntilAlive(attempts + 1); }
-  }, 2000);
+      } else {
+        pollUntilAlive({waitMs: 2000, attempts: attempts + 1});
+      }
+    } catch(e) {
+      if (attempts === 0 || attempts % 5 === 0) {
+        log.textContent += 'Still waiting...\n';
+      }
+      pollUntilAlive({waitMs: 2000, attempts: attempts + 1});
+    }
+  }, delay);
 }
 
 // ── SERVICE CONTROL ───────────────────────────
