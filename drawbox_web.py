@@ -983,13 +983,16 @@ _SERVICE_RESTART_DELAY_S = 8
 def _schedule_service_restart(delay_s=_SERVICE_RESTART_DELAY_S):
     """Restart both services after the HTTP response can leave the box.
 
-    A daemon thread dies with gunicorn. A new session does not.
+    A daemon thread dies with gunicorn. A new session survives SIGHUP, but
+    the bash child stays in the drawbox-web cgroup. Restart drawbox first
+    so that unit is queued before systemctl restart drawbox-web SIGTERMs
+    every process in this cgroup (KillMode=control-group).
     """
     delay_s = max(1, int(delay_s))
     script = (
         f"sleep {delay_s}; "
-        "sudo /usr/bin/systemctl restart drawbox-web; "
-        "sudo /usr/bin/systemctl restart drawbox"
+        "sudo /usr/bin/systemctl restart drawbox; "
+        "sudo /usr/bin/systemctl restart drawbox-web"
     )
     subprocess.Popen(
         ["/bin/bash", "-c", script],

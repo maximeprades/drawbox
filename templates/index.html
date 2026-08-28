@@ -1769,11 +1769,12 @@ async function deployUpdate() {
     log.textContent += 'Connection lost after ' + waited +
       's (expected if the web service already restarted).\n' +
       'Waiting for the dashboard to come back...\n';
-    pollUntilAlive({waitMs: 8000});
+    // Connection already dropped — do not treat the next 200 as "still old".
+    pollUntilAlive({waitMs: 0, sawDown: true});
   }
 }
 
-function pollUntilAlive({waitMs = 8000, attempts = 0} = {}) {
+function pollUntilAlive({waitMs = 8000, attempts = 0, sawDown = false} = {}) {
   const log = $('updateLog');
   const btn = $('deployBtn');
   if (attempts > 45) {
@@ -1790,16 +1791,22 @@ function pollUntilAlive({waitMs = 8000, attempts = 0} = {}) {
     try {
       const r = await fetch('/api/status', {signal: AbortSignal.timeout(3000)});
       if (r.ok) {
+        // Old gunicorn workers still answer until the scheduled restart
+        // finishes. Only reload after we have seen the service go down.
+        if (!sawDown) {
+          pollUntilAlive({waitMs: 2000, attempts: attempts + 1, sawDown: false});
+          return;
+        }
         log.textContent += 'Service is back online! Reloading...\n';
         setTimeout(() => window.location.reload(), 1000);
       } else {
-        pollUntilAlive({waitMs: 2000, attempts: attempts + 1});
+        pollUntilAlive({waitMs: 2000, attempts: attempts + 1, sawDown: true});
       }
     } catch(e) {
       if (attempts === 0 || attempts % 5 === 0) {
         log.textContent += 'Still waiting...\n';
       }
-      pollUntilAlive({waitMs: 2000, attempts: attempts + 1});
+      pollUntilAlive({waitMs: 2000, attempts: attempts + 1, sawDown: true});
     }
   }, delay);
 }

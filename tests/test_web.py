@@ -504,8 +504,11 @@ def test_schedule_service_restart_detaches_from_gunicorn(monkeypatch):
 
     assert seen["args"][:2] == ["/bin/bash", "-c"]
     assert "sleep 5" in seen["args"][2]
-    assert "systemctl restart drawbox-web" in seen["args"][2]
-    assert "systemctl restart drawbox" in seen["args"][2]
+    # drawbox before drawbox-web: the bash child lives in the web cgroup and
+    # dies when that unit restarts (KillMode=control-group).
+    script = seen["args"][2]
+    assert script.index("systemctl restart drawbox;") < script.index(
+        "systemctl restart drawbox-web")
     assert seen["kwargs"]["start_new_session"] is True
 
 
