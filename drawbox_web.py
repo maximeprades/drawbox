@@ -34,6 +34,7 @@ from drawbox_core import (
     mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
     print_image, redeem_pairing_code, revoke_paired_device,
     safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
+    transcribe_audio,
 )
 
 log = logging.getLogger("drawbox.web")
@@ -46,6 +47,12 @@ LOG_STREAM_KEEPALIVE_S = 15
 
 # ── IMAGE GENERATION STATE ────────────────────────
 _gen_lock = threading.Lock()
+
+# Raw-audio uploads from the ESP32 voice box. 30 s of 16 kHz 16-bit mono is
+# under 1 MB; the cap only exists to bounce runaway or hostile bodies.
+VOICE_AUDIO_MAX_BYTES = 8 * 1024 * 1024
+# A WAV header alone is 44 bytes; anything this small can't hold speech.
+VOICE_AUDIO_MIN_BYTES = 1024
 
 # ── DIAGNOSTICS ALLOWLIST ────────────────────────
 DIAGNOSTIC_COMMANDS = {
@@ -68,6 +75,15 @@ DIAGNOSTIC_COMMANDS = {
 # ── FLASK APP ────────────────────────────────────
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# Backstop for bodies without a Content-Length (e.g. chunked uploads),
+# which the per-route content_length check can't see. Nothing legitimate
+# sends more than a voice WAV.
+app.config["MAX_CONTENT_LENGTH"] = VOICE_AUDIO_MAX_BYTES
+
+
+@app.errorhandler(413)
+def request_too_large(_e):
+    return jsonify(ok=False, error="Request too large.", code="too_large"), 413
 
 # Origins that may call this dashboard from another host (the multi-Pi
 # "hub" page). Anchored regex on the *host* portion of the Origin header —
@@ -269,47 +285,49 @@ def api_status():
     return jsonify(service_running=running, temperature=temp,
                    uptime=up, rpi_connect=rpi)
 
-@app.route("/api/generate", methods=["POST"])
-def api_generate():
-    data = request.get_json(silent=True) or {}
-    desc = data.get("description")
-    if not isinstance(desc, str):
-        return jsonify(ok=False, error="Please describe what to draw.")
-    desc = desc.strip()
-    if not desc:
-        return jsonify(ok=False, error="Please describe what to draw.")
-    if len(desc) > 500:
-        return jsonify(ok=False, error="Description too long (max 500 chars).")
+def _voice_line(key):
+    """The kid-facing script line for ``key`` (dashboard overrides honored)."""
+    return load_scripts()["voice_lines"].get(key) or \
+        drawbox_core.DEFAULT_VOICE_LINES[key]["text"]
+
+
+def _rejection_error(desc, blocked_message):
+    """Run the poop → safety → please gates; return an error string or None.
+
+    The check order matches the button daemon's flow. ``blocked_message``
+    differs per caller: the dashboard explains, the voice box uses the
+    spoken script line.
+    """
     if not poop_mode_enabled() and contains_poop(desc):
-        return jsonify(ok=False, error=poop_blocked_message())
+        return poop_blocked_message()
     if safety_mode_enabled() and not is_safe(desc):
-        return jsonify(
-            ok=False,
-            error="That description contains blocked words. "
-                  "Try something fun like an animal or a rainbow!",
-        )
+        return blocked_message
     if please_mode_enabled() and not has_please(desc):
-        scripts = load_scripts()
-        return jsonify(
-            ok=False,
-            error=scripts["voice_lines"].get("say_please") or
-                  drawbox_core.DEFAULT_VOICE_LINES["say_please"]["text"],
-        )
+        return _voice_line("say_please")
+    return None
 
-    printer_type = data.get("printer_type")
-    if printer_type is not None and printer_type not in PRINTER_TYPES:
-        return jsonify(ok=False, error="Unknown printer.")
 
+def _generate_and_print(desc, printer_type=None, source="web",
+                        include_image=True):
+    """Generate, print, and log one validated request; returns the response
+    dict. The single pipeline behind both the dashboard and the voice box.
+
+    Failures carry a machine-readable ``code`` so the ESP32 can pick its
+    display message without parsing English.
+    """
     if not _gen_lock.acquire(blocking=False):
-        return jsonify(ok=False, error="Already generating — please wait.")
+        return {"ok": False, "error": "Already generating — please wait.",
+                "code": "busy"}
     try:
         settings = load_settings()
         model = settings.get("image_model", IMAGE_MODEL)
         t0 = _time.time()
         path = generate_image(desc, model=model)
         duration = _time.time() - t0
-        with open(path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode()
+        out = {"ok": True}
+        if include_image:
+            with open(path, "rb") as f:
+                out["image"] = base64.b64encode(f.read()).decode()
         # A print failure after a successful (and paid-for) generation gets
         # its own message — "Generation failed" sent people hunting the
         # wrong bug, e.g. a missing serial port read as a model problem.
@@ -321,18 +339,88 @@ def api_generate():
             # printer host down) — useful verbatim. Anything else (lp
             # command lines, PIL internals) stays in the journal.
             reason = str(e) if isinstance(e, OSError) else type(e).__name__
-            return jsonify(ok=False, image=image_b64,
-                           error=f"Generated, but printing failed: {reason}")
+            out["ok"] = False
+            out["error"] = f"Generated, but printing failed: {reason}"
+            out["code"] = "print_failed"
+            return out
         if printer_type in PRINTER_TYPES and printer_type != settings["printer_type"]:
             settings["printer_type"] = printer_type
             save_settings(settings)
-        log_print_event(desc, model, duration, source="web")
-        return jsonify(ok=True, image=image_b64)
+        log_print_event(desc, model, duration, source=source)
+        return out
     except Exception:
         log.exception("generate failed")
-        return jsonify(ok=False, error="Generation failed; check logs.")
+        return {"ok": False, "error": "Generation failed; check logs.",
+                "code": "generate_failed"}
     finally:
         _gen_lock.release()
+
+
+@app.route("/api/generate", methods=["POST"])
+def api_generate():
+    data = request.get_json(silent=True) or {}
+    desc = data.get("description")
+    if not isinstance(desc, str):
+        return jsonify(ok=False, error="Please describe what to draw.")
+    desc = desc.strip()
+    if not desc:
+        return jsonify(ok=False, error="Please describe what to draw.")
+    if len(desc) > 500:
+        return jsonify(ok=False, error="Description too long (max 500 chars).")
+    error = _rejection_error(
+        desc,
+        "That description contains blocked words. "
+        "Try something fun like an animal or a rainbow!",
+    )
+    if error:
+        return jsonify(ok=False, error=error)
+
+    printer_type = data.get("printer_type")
+    if printer_type is not None and printer_type not in PRINTER_TYPES:
+        return jsonify(ok=False, error="Unknown printer.")
+
+    return jsonify(**_generate_and_print(desc, printer_type=printer_type))
+
+
+@app.route("/api/voice/generate", methods=["POST"])
+def api_voice_generate():
+    """One-shot request from the ESP32 voice box: raw audio in, print out.
+
+    Body is the recorded audio itself (Content-Type: audio/wav), not JSON.
+    Mirrors the button daemon's listen → transcribe → gate → generate →
+    print flow, with the same spoken script lines as display messages.
+    """
+    if (request.content_length or 0) > VOICE_AUDIO_MAX_BYTES:
+        return jsonify(ok=False, error="Audio too large.",
+                       code="too_large"), 413
+    audio = request.get_data(cache=False)
+    if len(audio) < VOICE_AUDIO_MIN_BYTES:
+        return jsonify(ok=False, error=_voice_line("too_short"),
+                       code="too_short"), 400
+    mime = request.mimetype or ""
+    media_type = mime if mime.startswith("audio/") else "audio/wav"
+    try:
+        transcript = transcribe_audio(audio, media_type=media_type)
+    except Exception:
+        log.exception("voice transcription failed")
+        return jsonify(ok=False, error=_voice_line("error"),
+                       code="transcribe_failed"), 502
+    transcript = (transcript or "").strip()
+    if len(transcript) < 2:
+        return jsonify(ok=False, transcript=transcript,
+                       error=_voice_line("too_short"), code="too_short")
+    error = _rejection_error(transcript, _voice_line("blocked"))
+    if error:
+        return jsonify(ok=False, transcript=transcript, error=error,
+                       code="rejected")
+    out = _generate_and_print(transcript[:500], source="esp32",
+                              include_image=False)
+    if not out.get("ok"):
+        code = out.get("code", "generate_failed")
+        line = _voice_line("busy") if code == "busy" else _voice_line("error")
+        return jsonify(ok=False, transcript=transcript, error=line, code=code)
+    return jsonify(ok=True, transcript=transcript,
+                   message=_voice_line("printing"))
 
 @app.route("/api/last-image")
 def api_last_image():
