@@ -19,6 +19,7 @@ static const char *MDNS_NAME = "drawbox-atom";  // resolves as drawbox-atom.loca
 
 WiFiServer server(TCP_PORT);
 WiFiClient client;
+bool clientActive = false;  // operator bool() == connected(); track accept separately
 bool wifiWasUp = false;
 bool scannedOnFailure = false;
 
@@ -86,14 +87,17 @@ void loop() {
     // until this one closes, which serializes jobs at the printer.
     // connected() stays true until the peer closed AND the buffer is drained,
     // so a finished job is never cut short.
-    if (client && !client.connected()) {
+    // Do not use `if (client)` here: on ESP32 Arduino 3.x that is connected().
+    if (clientActive && !client.connected()) {
         client.stop();
+        clientActive = false;
         rgbLedWrite(LED_PIN, 0, 24, 0);
         Serial.println("tcp: client closed");
     }
-    if (!client) {
+    if (!clientActive) {
         client = server.accept();
         if (client) {
+            clientActive = true;
             rgbLedWrite(LED_PIN, 0, 0, 24);
             Serial.printf("tcp: client %s\r\n",
                           client.remoteIP().toString().c_str());
