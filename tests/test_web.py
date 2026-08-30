@@ -407,6 +407,25 @@ def test_generate_returns_generic_error_on_failure(client, monkeypatch):
     assert "/home/secret" not in r["error"]
 
 
+def test_generate_reports_print_failure_specifically(client, monkeypatch, tmp_path):
+    """A failed print after a successful generation must say so (with the
+    underlying reason) instead of the generic generation error, and still
+    return the image."""
+    img = tmp_path / "out.png"
+    img.write_bytes(b"fake-png")
+    monkeypatch.setattr(drawbox_web, "generate_image", lambda *a, **k: str(img))
+
+    def boom(path, printer_type=None):
+        raise FileNotFoundError("[Errno 2] No such file or directory: '/dev/ttyUSB0'")
+
+    monkeypatch.setattr(drawbox_web, "print_image", boom)
+    r = client.post("/api/generate", json={"description": "a happy puppy"}).get_json()
+    assert r["ok"] is False
+    assert "printing failed" in r["error"]
+    assert "/dev/ttyUSB0" in r["error"]
+    assert r["image"]
+
+
 def test_last_image_404_before_any_generation(client):
     r = client.get("/api/last-image")
     assert r.status_code == 404
@@ -846,12 +865,16 @@ def test_dashboard_generate_page_has_printer_dropdown(client):
     html = client.get("/").get_data(as_text=True)
     assert 'id="genPrinterType"' in html
     assert "function syncPrinterType(" in html
+    # The WiFi option comes first among the thermal choices: on a box
+    # without the USB cable, the serial option is a dead end that also
+    # persists itself as the default when picked.
     assert re.search(
         r'<select class="select" id="genPrinterType"[^>]*>\s*'
         r'<option value="cups">Laser / inkjet \(CUPS\)</option>\s*'
-        r'<option value="escpos_serial">Thermal receipt',
+        r'<option value="escpos_tcp">M5Stack ATOM thermal',
         html,
     )
+    assert '<option value="escpos_serial">' in html
     assert "printer_type: $('genPrinterType').value" in html
     assert "JSON.stringify({printer_type: src.value})" in html
     assert "await _printerSave" in html
