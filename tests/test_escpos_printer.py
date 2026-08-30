@@ -20,40 +20,54 @@ FEED = drawbox_escpos.FEED_BYTES
 
 # ── render_raster ──────────────────────────────────
 
+GAP_ROWS = drawbox_escpos.TRAILING_GAP_DOTS
+GAP_BYTES = b"\x00" * (48 * GAP_ROWS)
+
+
+def _band_payloads(job):
+    """Return (band heights, concatenated payload bytes, trailing bytes)."""
+    pos = len(INIT)
+    heights = []
+    payload = b""
+    while job[pos:pos + 3] == GS_V0:
+        assert job[pos + 3:pos + 6] == b"\x00\x30\x00"
+        rows = job[pos + 6] + 256 * job[pos + 7]
+        payload += job[pos + 8:pos + 8 + 48 * rows]
+        heights.append(rows)
+        pos += 8 + 48 * rows
+    return heights, payload, job[pos:]
+
+
 def test_render_raster_golden():
     img = Image.new("L", (384, 16), 255)
     img.paste(0, (0, 0, 384, 8))
     job = drawbox_escpos.render_raster(img)
-    # White rows 8-15 are trimmed by the bbox crop, so the block is 8 tall.
+    # White rows 8-15 are trimmed by the bbox crop; the 8 content rows
+    # plus the 160-row tear-off gap print as one 168-row band.
     assert job == (INIT
-                   + b"\x1d\x76\x30\x00\x30\x00\x08\x00"
+                   + b"\x1d\x76\x30\x00\x30\x00\xa8\x00"
                    + b"\xff" * (48 * 8)
+                   + GAP_BYTES
                    + FEED)
 
 
 def test_render_raster_bands_tall_images():
     job = drawbox_escpos.render_raster(Image.new("L", (384, 600), 0))
-    pos = len(INIT)
-    heights = []
-    while job[pos:pos + 3] == GS_V0:
-        assert job[pos + 3:pos + 6] == b"\x00\x30\x00"
-        rows = job[pos + 6] + 256 * job[pos + 7]
-        assert job[pos + 8:pos + 8 + 48 * rows] == b"\xff" * (48 * rows)
-        heights.append(rows)
-        pos += 8 + 48 * rows
-    assert heights == [255, 255, 90]
-    assert sum(heights) * 48 == 48 * 600
-    assert job[pos:] == FEED
+    heights, payload, trailing = _band_payloads(job)
+    assert heights == [255, 255, 250]
+    assert payload == b"\xff" * (48 * 600) + GAP_BYTES
+    assert trailing == FEED
 
 
 def test_render_raster_trims_margins_and_resizes():
     img = Image.new("L", (800, 400), 255)
     img.paste(0, (200, 100, 600, 300))
     job = drawbox_escpos.render_raster(img)
-    # 400x200 crop scaled to width 384 -> height 192 (0xC0), one block.
-    assert job.count(GS_V0) == 1
-    assert job.startswith(INIT + b"\x1d\x76\x30\x00\x30\x00\xc0\x00")
-    assert job[10:-len(FEED)] == b"\xff" * (48 * 192)
+    # 400x200 crop scaled to width 384 -> height 192, plus the gap rows.
+    heights, payload, trailing = _band_payloads(job)
+    assert heights == [255, 97]
+    assert payload == b"\xff" * (48 * 192) + GAP_BYTES
+    assert trailing == FEED
 
 
 def test_render_raster_blank_image_feeds_only():
@@ -63,10 +77,14 @@ def test_render_raster_blank_image_feeds_only():
 
 
 def test_render_raster_ends_with_tear_off_gap():
-    """Every job ends with line feeds plus an explicit ~2 cm paper feed
-    (ESC J 160 dots) so pages tear off without smudging together."""
+    """Every job ends with ~2 cm of blank raster rows before the line
+    feeds. The gap must ride in raster (which the head provably executes)
+    rather than ESC J, which the ATOM's clone head silently ignores —
+    that no-op left drawing bottoms inside the printer, where tearing
+    cut them off (photos, 2026-08-30)."""
     job = drawbox_escpos.render_raster(Image.new("L", (384, 16), 0))
-    assert job.endswith(b"\x0a\x0a\x0a\x0a\x1b\x4a\xa0")
+    assert job.endswith(GAP_BYTES + FEED)
+    assert b"\x1b\x4a" not in job
 
 
 # ── serial output ──────────────────────────────────

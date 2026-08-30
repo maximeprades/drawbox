@@ -30,15 +30,13 @@ log = logging.getLogger("drawbox.escpos")
 PRINTER_WIDTH_DOTS = 384
 BAND_ROWS = 255  # max rows per GS v 0 block
 FEED_LINES = 4
-# Extra ~2 cm of blank paper after each page (160 dots at 203 dpi) so
-# drawings tear off cleanly instead of smudging into each other.
+# ~2 cm of blank paper after each page (160 dots at 203 dpi): enough for
+# the last printed line to clear the head-to-tear-bar distance, so
+# tearing can't cut the drawing and pages don't smudge together.
 TRAILING_GAP_DOTS = 160
 
 INIT = b"\x1b\x40"
-# ESC J n: feed n dots. More deterministic than stacking line feeds,
-# whose height depends on the head's line-spacing default.
-TEAR_OFF_GAP = b"\x1b\x4a" + bytes([TRAILING_GAP_DOTS])
-FEED_BYTES = b"\x0a" * FEED_LINES + TEAR_OFF_GAP
+FEED_BYTES = b"\x0a" * FEED_LINES
 
 
 def render_raster(img):
@@ -57,6 +55,11 @@ def render_raster(img):
     # PIL packs mode "1" with white=1; ESC/POS raster wants black=1.
     data = bytes(b ^ 0xFF for b in gray.convert("1").tobytes())
     row_bytes = PRINTER_WIDTH_DOTS // 8
+    # The tear-off gap rides in blank raster rows because the ATOM's
+    # clone head silently ignores ESC J: prints made with an ESC J gap
+    # kept their bottoms inside the printer, and tearing cut them off.
+    # Raster rows it must execute, or images wouldn't print at all.
+    data += b"\x00" * (row_bytes * TRAILING_GAP_DOTS)
     job = [INIT]
     for start in range(0, len(data), row_bytes * BAND_ROWS):
         band = data[start:start + row_bytes * BAND_ROWS]
