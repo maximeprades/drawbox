@@ -37,20 +37,30 @@
 #define HTTP_CONNECT_TIMEOUT_MS 10000UL
 
 // ── UI ───────────────────────────────────────────
+// The face IS the button: a big smiley the kid presses. It blinks and
+// looks around while idle, opens its mouth with the kid's voice while
+// listening, and naps while the Pi draws.
 #define BUTTON_CX 240
-#define BUTTON_CY 245
-#define BUTTON_R 150
+#define BUTTON_CY 230
+#define BUTTON_R 130
+#define RESULT_CY 160
+#define RESULT_R 100
 #define RESULT_OK_SHOW_MS 6000UL
 #define RESULT_ERR_SHOW_MS 8000UL
 
-#define C_BG RGB565_BLACK
+#define C_BG RGB565(10, 12, 24)
 #define C_TITLE RGB565(255, 214, 90)
-#define C_BUTTON RGB565(235, 110, 35)
-#define C_BUTTON_RIM RGB565(255, 170, 80)
-#define C_LISTEN RGB565(220, 40, 40)
-#define C_OK RGB565(60, 200, 90)
-#define C_ERR RGB565(240, 150, 40)
-#define C_DIM RGB565(140, 140, 140)
+#define C_FACE RGB565(255, 205, 66)
+#define C_FACE_RIM RGB565(214, 158, 24)
+#define C_FEATURE RGB565(60, 38, 16)
+#define C_CHEEK RGB565(255, 140, 120)
+#define C_WAVE RGB565(90, 200, 255)
+#define C_WAVE_DIM RGB565(36, 84, 128)
+#define C_OK RGB565(80, 210, 110)
+#define C_ERR RGB565(250, 160, 60)
+#define C_DIM RGB565(150, 150, 160)
+
+enum class Face { HAPPY, LISTEN, THINK, JOY, ERR };
 
 enum class AppState { WIFI_CONNECTING, IDLE, LISTENING, THINKING, RESULT };
 
@@ -123,59 +133,124 @@ static void drawWrapped(const String &text, int y, uint8_t size,
   }
 }
 
+// ── THE FACE ─────────────────────────────────────
+// Angles are Arduino_GFX/PIL convention: 0 at 3 o'clock, clockwise on
+// screen. A smile is the 35..145 arc (through the bottom).
+
+static void drawEyes(int cx, int cy, int r, Face f, bool closed,
+                     int pupilDX) {
+  int ex = r * 35 / 100, ey = r * 22 / 100, er = r * 20 / 100;
+  if (f == Face::LISTEN) er = r * 25 / 100;
+  // Erase the eye band (stays well inside the face disc).
+  gfx->fillRect(cx - ex - er - 4, cy - ey - er - 4,
+                2 * (ex + er + 4), 2 * (er + 4), C_FACE);
+  for (int s = -1; s <= 1; s += 2) {
+    int x = cx + s * ex, y = cy - ey;
+    if (f == Face::JOY) {
+      gfx->fillArc(x, y + er / 2, er, er - 7, 160, 380, C_FEATURE);
+    } else if (closed || f == Face::THINK) {
+      gfx->fillRect(x - er, y - 3, 2 * er, 7, C_FEATURE);
+    } else {
+      gfx->fillCircle(x, y, er, RGB565_WHITE);
+      gfx->fillCircle(x + pupilDX, y, er * 45 / 100, C_FEATURE);
+    }
+  }
+}
+
+static void drawMouth(int cx, int cy, int r, Face f, float open) {
+  int my = cy + r * 38 / 100;
+  int maxRy = r * 30 / 100;
+  gfx->fillRect(cx - r * 24 / 100 - 3, my - maxRy - 3,
+                2 * (r * 24 / 100 + 3), 2 * (maxRy + 3), C_FACE);
+  if (f == Face::ERR) {
+    gfx->fillRect(cx - r * 30 / 100, my - 4, 2 * (r * 30 / 100), 9,
+                  C_FEATURE);
+  } else if (open > 0.05f) {
+    gfx->fillEllipse(cx, my, r * 22 / 100,
+                     r * 6 / 100 + (int)(open * r * 24 / 100), C_FEATURE);
+  } else {
+    int rr = (f == Face::JOY) ? r * 50 / 100 : r * 46 / 100;
+    gfx->fillArc(cx, cy + r / 10, rr, rr - r * 8 / 100,
+                 (f == Face::JOY) ? 25 : 35,
+                 (f == Face::JOY) ? 155 : 145, C_FEATURE);
+  }
+}
+
+static void drawFace(int cx, int cy, int r, Face f, float open = 0.0f,
+                     bool closed = false, int pupilDX = 0) {
+  gfx->fillCircle(cx, cy, r, C_FACE);
+  gfx->fillArc(cx, cy, r, r - 7, 0, 360, C_FACE_RIM);
+  for (int s = -1; s <= 1; s += 2)
+    gfx->fillEllipse(cx + s * r * 62 / 100, cy + r * 18 / 100,
+                     r * 11 / 100, r * 8 / 100, C_CHEEK);
+  drawEyes(cx, cy, r, f, closed, pupilDX);
+  drawMouth(cx, cy, r, f, open);
+}
+
 static void drawConnecting() {
   gfx->fillScreen(C_BG);
-  drawCentered("DrawBox", 60, 4, C_TITLE);
-  drawCentered("Connecting to WiFi", 220, 2, RGB565_WHITE);
-  drawCentered(WIFI_SSID, 260, 2, C_DIM);
+  drawCentered("DrawBox", 14, 4, C_TITLE);
+  drawFace(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::THINK);
+  drawCentered("waking up...", 388, 3, RGB565_WHITE);
+  drawCentered(WIFI_SSID, 442, 2, C_DIM);
 }
 
 static void drawIdle() {
   gfx->fillScreen(C_BG);
-  drawCentered("DrawBox", 30, 3, C_TITLE);
-  gfx->fillCircle(BUTTON_CX, BUTTON_CY, BUTTON_R, C_BUTTON);
-  for (int i = 0; i < 6; i++)
-    gfx->drawCircle(BUTTON_CX, BUTTON_CY, BUTTON_R - i, C_BUTTON_RIM);
-  drawCentered("PRESS", BUTTON_CY - 30, 5, RGB565_WHITE);
-  drawCentered("& tell me!", BUTTON_CY + 25, 2, RGB565_WHITE);
-  drawCentered("I draw what you say", 445, 2, C_DIM);
+  drawCentered("DrawBox", 14, 4, C_TITLE);
+  drawFace(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::HAPPY);
+  drawCentered("Press me!", 388, 5, RGB565_WHITE);
+  drawCentered("then tell me what to draw", 448, 2, C_DIM);
 }
 
 static void drawListening() {
   gfx->fillScreen(C_BG);
-  drawCentered("I'm listening!", 60, 3, RGB565_WHITE);
-  gfx->fillCircle(BUTTON_CX, BUTTON_CY, BUTTON_R - 40, C_LISTEN);
-  drawCentered("SPEAK", BUTTON_CY - 15, 4, RGB565_WHITE);
+  drawCentered("I'm listening!", 14, 4, RGB565_WHITE);
+  drawFace(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::LISTEN, 0.3f);
+  drawCentered("speak now", 448, 2, C_DIM);
 }
 
-// Sweeps a ring around the mic circle as the window elapses.
-static void drawListenProgress(float fraction) {
+// One listening animation frame: progress ring sweep, mouth following
+// the mic level, and sound-wave arcs rippling on both sides.
+static void drawListenFrame(float fraction, float level, uint32_t frame) {
   float deg = fraction * 360.0f;
   if (deg > 1.0f)
-    gfx->fillArc(BUTTON_CX, BUTTON_CY, BUTTON_R - 16, BUTTON_R - 28,
-                 -90, -90 + deg, RGB565_WHITE);
+    gfx->fillArc(BUTTON_CX, BUTTON_CY, BUTTON_R + 22, BUTTON_R + 11,
+                 270, 270 + deg, RGB565_WHITE);
+  drawMouth(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::LISTEN, level);
+  for (int i = 0; i < 3; i++) {
+    uint16_t c = ((frame % 3) == (uint32_t)i) ? C_WAVE : C_WAVE_DIM;
+    int rr = BUTTON_R + 35 + i * 15;
+    gfx->fillArc(BUTTON_CX, BUTTON_CY, rr + 5, rr, -24 + i * 3, 24 - i * 3, c);
+    gfx->fillArc(BUTTON_CX, BUTTON_CY, rr + 5, rr, 156 + i * 3, 204 - i * 3, c);
+  }
 }
 
 static void drawThinking() {
   gfx->fillScreen(C_BG);
-  drawCentered("Drawing...", 150, 4, C_TITLE);
-  drawCentered("this takes a minute", 210, 2, C_DIM);
+  drawFace(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::THINK);
+  drawCentered("Drawing...", 388, 5, C_TITLE);
+  drawCentered("this takes a minute", 448, 2, C_DIM);
 }
 
+// Orbiting spinner segment around the napping face.
 static void drawThinkingTick(uint32_t tick) {
+  int prev = ((tick + 11) * 30) % 360;  // where the segment was last frame
+  gfx->fillArc(BUTTON_CX, BUTTON_CY, BUTTON_R + 22, BUTTON_R + 11,
+               prev, prev + 30, C_BG);
   int start = (tick * 30) % 360;
-  gfx->fillArc(BUTTON_CX, 320, 46, 34, 0, 360, C_BG);
-  gfx->fillArc(BUTTON_CX, 320, 46, 34, start, start + 90, C_TITLE);
+  gfx->fillArc(BUTTON_CX, BUTTON_CY, BUTTON_R + 22, BUTTON_R + 11,
+               start, start + 90, C_TITLE);
 }
 
 static void drawResult() {
   gfx->fillScreen(C_BG);
-  uint16_t c = resultOk ? C_OK : C_ERR;
-  gfx->fillCircle(BUTTON_CX, 110, 60, c);
-  drawCentered(resultOk ? "OK!" : "oops", 95, 3, RGB565_BLACK);
-  drawWrapped(resultTitle, 210, 3, RGB565_WHITE, 2);
+  drawFace(BUTTON_CX, RESULT_CY, RESULT_R, resultOk ? Face::JOY : Face::ERR);
+  gfx->fillArc(BUTTON_CX, RESULT_CY, RESULT_R + 24, RESULT_R + 15, 0, 360,
+               resultOk ? C_OK : C_ERR);
+  drawWrapped(resultTitle, 300, 3, RGB565_WHITE, 3);
   if (resultDetail.length())
-    drawWrapped(String("\"") + resultDetail + "\"", 320, 2, C_DIM, 3);
+    drawWrapped(String("\"") + resultDetail + "\"", 396, 2, C_DIM, 2);
 }
 
 static void setState(AppState next) {
@@ -287,7 +362,9 @@ static size_t recordAudio(int seconds) {
   size_t got = 0;
   uint64_t energy[2] = {0, 0};
   int16_t peak[2] = {0, 0};
-  uint32_t lastArc = 0;
+  int16_t framePeak = 0;
+  float level = 0.0f;
+  uint32_t lastFrame = 0, frame = 0;
 
   Serial.printf("[rec] start seconds=%d\n", seconds);
   i2s_zero_dma_buffer(I2S_CH);
@@ -303,11 +380,18 @@ static size_t recordAudio(int seconds) {
       energy[slot] += (int32_t)v * v;
       if (v > peak[slot]) peak[slot] = v;
       if (-v > peak[slot]) peak[slot] = (int16_t)-v;
+      if (v > framePeak) framePeak = v;
+      if (-v > framePeak) framePeak = (int16_t)-v;
     }
     got += n;
-    if (millis() - lastArc > 120) {
-      drawListenProgress((float)got / (float)stereoSamples);
-      lastArc = millis();
+    if (millis() - lastFrame > 90) {
+      // Fast attack, slow decay: the mouth pops open with the voice and
+      // eases shut in pauses.
+      float chunkLevel = min(1.0f, (float)framePeak / 9000.0f);
+      level = max(chunkLevel, level * 0.75f);
+      drawListenFrame((float)got / (float)stereoSamples, level, frame++);
+      framePeak = 0;
+      lastFrame = millis();
     }
   }
   int hot = energy[1] > energy[0] ? 1 : 0;
@@ -648,11 +732,37 @@ void loop() {
         lastWifiAttempt = millis();
         break;
       }
+      // Keep the face alive: blink now and then, glance around.
+      static uint32_t nextBlink = 0, blinkUntil = 0, nextGlance = 0;
+      static int pupilDX = 0;
+      uint32_t now = millis();
+      bool redrawEyes = false;
+      if (now > nextBlink) {
+        blinkUntil = now + 140;
+        nextBlink = now + 2300 + (esp_random() % 2200);
+        redrawEyes = true;
+      }
+      if (blinkUntil && now > blinkUntil) {
+        blinkUntil = 0;
+        redrawEyes = true;
+      }
+      if (now > nextGlance) {
+        static const int looks[] = {-9, 0, 9, 0};
+        pupilDX = looks[esp_random() % 4];
+        nextGlance = now + 1800 + (esp_random() % 2600);
+        redrawEyes = true;
+      }
+      if (redrawEyes)
+        drawEyes(BUTTON_CX, BUTTON_CY, BUTTON_R, Face::HAPPY,
+                 blinkUntil != 0, pupilDX);
+
       int16_t x[2], y[2];
       uint8_t n = touch.getPoint(x, y, 1);
       if (n) {
         long dx = x[0] - BUTTON_CX, dy = y[0] - BUTTON_CY;
-        if (dx * dx + dy * dy <= (long)BUTTON_R * BUTTON_R) {
+        // Generous hit zone: the face plus its surrounding ring.
+        long hitR = BUTTON_R + 30;
+        if (dx * dx + dy * dy <= hitR * hitR) {
           Serial.printf("[touch] press at %d,%d\n", x[0], y[0]);
           handlePress();
         }
