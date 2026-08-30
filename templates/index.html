@@ -547,8 +547,8 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <label class="form-label" for="genPrinterType">Printer</label>
           <select class="select" id="genPrinterType" style="max-width:420px" onchange="syncPrinterType('gen')">
             <option value="cups">Laser / inkjet (CUPS)</option>
-            <option value="escpos_serial">Thermal receipt (M5Stack ATOM / ESC-POS serial)</option>
-            <option value="escpos_tcp">Thermal receipt over WiFi (ATOM bridge, TCP)</option>
+            <option value="escpos_tcp">M5Stack ATOM thermal — WiFi (recommended)</option>
+            <option value="escpos_serial">Thermal via USB serial cable (ESC/POS)</option>
           </select>
         </div>
         <img class="preview-img" id="previewImg" alt="Generated coloring page" />
@@ -615,8 +615,8 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <label class="form-label">Printer Type</label>
           <select class="select" id="cfgPrinterType" onchange="syncPrinterType('settings')">
             <option value="cups">Laser / inkjet (CUPS)</option>
-            <option value="escpos_serial">Thermal receipt (M5Stack ATOM / ESC-POS serial)</option>
-            <option value="escpos_tcp">Thermal receipt over WiFi (ATOM bridge, TCP)</option>
+            <option value="escpos_tcp">M5Stack ATOM thermal — WiFi (recommended)</option>
+            <option value="escpos_serial">Thermal via USB serial cable (ESC/POS)</option>
           </select>
         </div>
         <div class="form-group" id="serialPortGroup" style="display:none">

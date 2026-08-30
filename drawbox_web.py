@@ -309,7 +309,15 @@ def api_generate():
         duration = _time.time() - t0
         with open(path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode()
-        print_image(path, printer_type=printer_type)
+        # A print failure after a successful (and paid-for) generation gets
+        # its own message — "Generation failed" sent people hunting the
+        # wrong bug, e.g. a missing serial port read as a model problem.
+        try:
+            print_image(path, printer_type=printer_type)
+        except Exception as e:
+            log.exception("print failed")
+            return jsonify(ok=False, image=image_b64,
+                           error=f"Generated, but printing failed: {e}")
         if printer_type in PRINTER_TYPES and printer_type != settings["printer_type"]:
             settings["printer_type"] = printer_type
             save_settings(settings)
