@@ -1,7 +1,9 @@
-"""ESC/POS raster rendering, serial output, and the print_image dispatch."""
+"""ESC/POS raster rendering, serial/TCP output, and print_image dispatch."""
 
 import os
 import pty
+import socket
+import threading
 import time
 
 import pytest
@@ -102,6 +104,69 @@ def test_start_print_pumps_job_in_background(tmp_path):
     assert len(received) == sent
 
 
+# ── TCP output ─────────────────────────────────────
+
+def _tcp_sink():
+    """Listening socket that collects everything one client sends."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    received = bytearray()
+
+    def run():
+        conn, _ = srv.accept()
+        with conn:
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                received.extend(chunk)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return srv, thread, received
+
+
+def test_print_file_tcp_writes_job(tmp_path):
+    img_path = tmp_path / "job.png"
+    Image.new("L", (384, 8), 0).save(img_path)
+    srv, thread, received = _tcp_sink()
+    try:
+        sent = drawbox_escpos.print_file_tcp(
+            str(img_path), "127.0.0.1", srv.getsockname()[1])
+        thread.join(timeout=5)
+    finally:
+        srv.close()
+    assert bytes(received).startswith(INIT)
+    assert len(received) == sent
+
+
+def test_start_print_tcp_pumps_job_in_background(tmp_path):
+    img_path = tmp_path / "job.png"
+    Image.new("L", (384, 8), 0).save(img_path)
+    srv, thread, received = _tcp_sink()
+    try:
+        sent = drawbox_escpos.start_print_tcp(
+            str(img_path), "127.0.0.1", srv.getsockname()[1])
+        assert sent > 0
+        thread.join(timeout=5)
+    finally:
+        srv.close()
+    assert bytes(received).startswith(INIT)
+    assert len(received) == sent
+
+
+def test_start_print_tcp_refused_connection_raises(tmp_path):
+    img_path = tmp_path / "job.png"
+    Image.new("L", (384, 8), 0).save(img_path)
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()  # nothing listens here now
+    with pytest.raises(OSError):
+        drawbox_escpos.start_print_tcp(str(img_path), "127.0.0.1", port)
+
+
 # ── print_image dispatch ───────────────────────────
 
 def test_print_image_dispatches_to_escpos(drawbox_dir, monkeypatch, tmp_path):
@@ -127,6 +192,43 @@ def test_print_image_escpos_failure_raises_and_unlinks(drawbox_dir, tmp_path):
         "printer_type": "escpos_serial",
         "serial_port": "/dev/nonexistent-drawbox-test",
         "serial_baud": 9600,
+    })
+    img_path = tmp_path / "page.png"
+    Image.new("L", (10, 10), 0).save(img_path)
+
+    with pytest.raises(OSError):
+        drawbox_core.print_image(str(img_path))
+
+    assert not img_path.exists()
+
+
+def test_print_image_dispatches_to_escpos_tcp(drawbox_dir, monkeypatch, tmp_path):
+    drawbox_core.save_settings({
+        "printer_type": "escpos_tcp",
+        "tcp_host": "printer.lan",
+        "tcp_port": 9101,
+    })
+    calls = []
+    monkeypatch.setattr(drawbox_escpos, "start_print_tcp",
+                        lambda path, host, port: calls.append((path, host, port)))
+    img_path = tmp_path / "page.png"
+    Image.new("L", (10, 10), 0).save(img_path)
+
+    drawbox_core.print_image(str(img_path))
+
+    assert calls == [(str(img_path), "printer.lan", 9101)]
+    assert not img_path.exists()
+
+
+def test_print_image_tcp_failure_raises_and_unlinks(drawbox_dir, tmp_path):
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()  # guaranteed-dead port
+    drawbox_core.save_settings({
+        "printer_type": "escpos_tcp",
+        "tcp_host": "127.0.0.1",
+        "tcp_port": port,
     })
     img_path = tmp_path / "page.png"
     Image.new("L", (10, 10), 0).save(img_path)

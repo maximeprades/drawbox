@@ -548,6 +548,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <select class="select" id="genPrinterType" style="max-width:420px" onchange="syncPrinterType('gen')">
             <option value="cups">Laser / inkjet (CUPS)</option>
             <option value="escpos_serial">Thermal receipt (M5Stack ATOM / ESC-POS serial)</option>
+            <option value="escpos_tcp">Thermal receipt over WiFi (ATOM bridge, TCP)</option>
           </select>
         </div>
         <img class="preview-img" id="previewImg" alt="Generated coloring page" />
@@ -615,6 +616,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <select class="select" id="cfgPrinterType" onchange="syncPrinterType('settings')">
             <option value="cups">Laser / inkjet (CUPS)</option>
             <option value="escpos_serial">Thermal receipt (M5Stack ATOM / ESC-POS serial)</option>
+            <option value="escpos_tcp">Thermal receipt over WiFi (ATOM bridge, TCP)</option>
           </select>
         </div>
         <div class="form-group" id="serialPortGroup" style="display:none">
@@ -631,6 +633,15 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
             <option value="57600">57600</option>
             <option value="115200">115200</option>
           </select>
+        </div>
+        <div class="form-group" id="tcpHostGroup" style="display:none">
+          <label class="form-label">Printer Host</label>
+          <input class="input" type="text" id="cfgTcpHost" placeholder="drawbox-atom.local" style="max-width:420px;font-family:monospace" />
+          <div class="form-hint">Hostname or IP of the WiFi ATOM bridge on your network</div>
+        </div>
+        <div class="form-group" id="tcpPortGroup" style="display:none">
+          <label class="form-label">TCP Port</label>
+          <input class="input" type="number" id="cfgTcpPort" min="1" max="65535" style="max-width:160px" />
         </div>
       </div>
     </div>
@@ -1290,6 +1301,8 @@ async function loadSettings() {
     $('genPrinterType').value = d.printer_type;
     $('cfgSerialPort').value = d.serial_port;
     $('cfgSerialBaud').value = d.serial_baud;
+    $('cfgTcpHost').value = d.tcp_host;
+    $('cfgTcpPort').value = d.tcp_port;
     updateSerialFields();
   } catch(e) {}
 }
@@ -1307,9 +1320,13 @@ function syncPrinterType(from) {
 }
 
 function updateSerialFields() {
-  const serial = $('cfgPrinterType').value === 'escpos_serial';
+  const type = $('cfgPrinterType').value;
+  const serial = type === 'escpos_serial';
+  const tcp = type === 'escpos_tcp';
   $('serialPortGroup').style.display = serial ? '' : 'none';
   $('serialBaudGroup').style.display = serial ? '' : 'none';
+  $('tcpHostGroup').style.display = tcp ? '' : 'none';
+  $('tcpPortGroup').style.display = tcp ? '' : 'none';
 }
 
 async function saveSettings() {
@@ -1325,7 +1342,9 @@ async function saveSettings() {
     record_seconds: parseInt($('cfgRecSec').value) || 10,
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
-    serial_baud: parseInt($('cfgSerialBaud').value)
+    serial_baud: parseInt($('cfgSerialBaud').value),
+    tcp_host: $('cfgTcpHost').value.trim() || 'drawbox-atom.local',
+    tcp_port: parseInt($('cfgTcpPort').value) || 9100
   };
   try {
     const r = await fetch('/api/settings', {

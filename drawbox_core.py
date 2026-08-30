@@ -513,7 +513,7 @@ This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
 - If the transcription is garbled but sounds like it could be a vehicle (car, truck, SUV), default to drawing a cool Range Rover or sports car
 - If it sounds like it could be an animal, default to a cute kitty or puppy"""
 
-PRINTER_TYPES = ("cups", "escpos_serial")
+PRINTER_TYPES = ("cups", "escpos_serial", "escpos_tcp")
 SERIAL_BAUDS = (9600, 19200, 38400, 57600, 115200)
 
 DEFAULT_SETTINGS = {
@@ -530,6 +530,8 @@ DEFAULT_SETTINGS = {
     "printer_type": "cups",
     "serial_port": "/dev/ttyUSB0",
     "serial_baud": 9600,
+    "tcp_host": "drawbox-atom.local",
+    "tcp_port": 9100,
 }
 
 
@@ -791,18 +793,22 @@ def print_image(path, printer_type=None):
     log.info("printing %s", path)
     settings = load_settings()
     kind = printer_type if printer_type in PRINTER_TYPES else settings["printer_type"]
-    if kind == "escpos_serial":
+    if kind in ("escpos_serial", "escpos_tcp"):
         # Imported here, not at module top: the serial backend is optional,
         # and a partial deploy that misses the module must degrade to a
         # print-time error instead of killing both services at import
         # (this bricked boxes on 2026-08-22).
         import drawbox_escpos
 
-        # Rendering and opening the port are fast and fail synchronously;
-        # only the ~25 s byte pump runs in the background.
+        # Rendering and opening the port/connection are fast and fail
+        # synchronously; only the ~25 s byte pump runs in the background.
         try:
-            drawbox_escpos.start_print(path, settings["serial_port"],
-                                       settings["serial_baud"])
+            if kind == "escpos_tcp":
+                drawbox_escpos.start_print_tcp(path, settings["tcp_host"],
+                                               settings["tcp_port"])
+            else:
+                drawbox_escpos.start_print(path, settings["serial_port"],
+                                           settings["serial_baud"])
         finally:
             _unlink_quietly(path)
         return

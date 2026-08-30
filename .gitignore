@@ -12,6 +12,7 @@ __pycache__/
 # Environment
 .env
 .env.local
+firmware/atom_printer_bridge_wifi/wifi_credentials.h
 node_modules/
 
 # macOS
