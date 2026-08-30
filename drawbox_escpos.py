@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""ESC/POS raster rendering + serial output for thermal receipt printers.
+"""ESC/POS raster rendering + serial/TCP output for thermal receipt printers.
 
 Drives the M5Stack ATOM Printer (SKU K118) — an ESP32-driven 58mm ESC/POS
 serial thermal printer — and any compatible ESC/POS serial printer. The ATOM
 ships with an AP/MQTT firmware that never exposes the print head over USB, so
 it must be flashed once with the bridge sketch in
-``firmware/atom_printer_bridge/`` (one command, see its README). After that it
-behaves like a dumb USB serial printer.
+``firmware/atom_printer_bridge_wifi/`` (one command, see its README). After
+that it is a dumb printer on WiFi (raw TCP, port 9100) and USB serial.
 
 Only the Python stdlib and Pillow are needed — no pyserial, no python-escpos.
 
@@ -97,17 +97,21 @@ def _pump(fd, job):
         os.close(fd)  # also releases the flock
 
 
-def _pump_logged(fd, job):
-    """Thread body — no caller left to catch, so log."""
-    try:
-        _pump(fd, job)
-    except Exception:
-        log.error("serial print failed mid-write", exc_info=True)
-
-
 def _open_tcp(host, port):
     """Connect to a raw ESC/POS TCP bridge (the WiFi ATOM sketch)."""
     return socket.create_connection((host, int(port)), timeout=10)
+
+
+def _write_timeout(job_len):
+    """Deadline for writing a whole job to the bridge.
+
+    sendall gets one deadline for the entire call, and the bridge drains
+    at 9600 baud (~960 B/s), so reusing the 10 s connect timeout would
+    truncate any page bigger than the socket buffers (~25 KB per Letter
+    page). Half the drain rate for margin, plus headroom for a job ahead
+    of us in the bridge's accept backlog.
+    """
+    return 60 + job_len / 400
 
 
 def _pump_tcp(sock, job):
@@ -117,24 +121,29 @@ def _pump_tcp(sock, job):
     next connection in its backlog, so jobs serialize at the printer.
     """
     try:
+        sock.settimeout(_write_timeout(len(job)))
         sock.sendall(job)
     finally:
         sock.close()
 
 
-def _pump_tcp_logged(sock, job):
+def _pump_logged(pump, handle, job):
     """Thread body — no caller left to catch, so log."""
     try:
-        _pump_tcp(sock, job)
+        pump(handle, job)
     except Exception:
-        log.error("tcp print failed mid-write", exc_info=True)
+        log.error("print failed mid-write", exc_info=True)
+
+
+def _render_job(path):
+    with Image.open(path) as img:
+        return render_raster(img)
 
 
 def print_file(path, port, baud=9600):
     """Print the image at ``path`` over ``port``, blocking until the whole
     job is written. Returns the job byte count."""
-    with Image.open(path) as img:
-        job = render_raster(img)
+    job = _render_job(path)
     _pump(_open_serial(port, baud), job)
     return len(job)
 
@@ -142,8 +151,7 @@ def print_file(path, port, baud=9600):
 def print_file_tcp(path, host, port=9100):
     """Print the image at ``path`` to a TCP bridge, blocking until the whole
     job is written. Returns the job byte count."""
-    with Image.open(path) as img:
-        job = render_raster(img)
+    job = _render_job(path)
     _pump_tcp(_open_tcp(host, port), job)
     return len(job)
 
@@ -155,20 +163,19 @@ def start_print(path, port, baud=9600):
     unsupported baud — raises here, before the thread starts; only
     mid-write I/O errors are log-only. Returns the job byte count.
     """
-    with Image.open(path) as img:
-        job = render_raster(img)
+    job = _render_job(path)
     fd = _open_serial(port, baud)
-    threading.Thread(target=_pump_logged, args=(fd, job), daemon=True).start()
+    threading.Thread(target=_pump_logged, args=(_pump, fd, job),
+                     daemon=True).start()
     return len(job)
 
 
 def start_print_tcp(path, host, port=9100):
     """Like ``start_print``, but to a TCP bridge. Bad images and connection
     failures raise here, before the thread starts."""
-    with Image.open(path) as img:
-        job = render_raster(img)
+    job = _render_job(path)
     sock = _open_tcp(host, port)
-    threading.Thread(target=_pump_tcp_logged, args=(sock, job),
+    threading.Thread(target=_pump_logged, args=(_pump_tcp, sock, job),
                      daemon=True).start()
     return len(job)
 

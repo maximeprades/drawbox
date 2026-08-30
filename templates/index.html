@@ -1208,7 +1208,13 @@ async function doGenerate() {
         showPreview('data:image/png;base64,' + d.image, 'Just generated');
       }
       $('genInput').value = '';
-    } else { toast(d.error || 'Generation failed', false); }
+    } else {
+      toast(d.error || 'Generation failed', false);
+      // A print failure still returns the (paid-for) image — show it.
+      if (d.image) {
+        showPreview('data:image/png;base64,' + d.image, 'Generated — printing failed');
+      }
+    }
   } catch(e) { toast('Network error: ' + e.message, false); }
   btn.disabled = false;
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6-6 6 6"/><path d="M12 3v14"/><path d="M5 21h14"/></svg> Generate & Print';
@@ -1236,6 +1242,8 @@ async function loadLastImage() {
 // ── LOGS (SSE) ────────────────────────────────
 function connectLogs() {
   if (evtSrc) evtSrc.close();
+  // Fresh stream replays the backfill, so start from a clean slate.
+  $('logArea').textContent = '';
   // EventSource can't send headers, so the token rides the query string.
   evtSrc = new EventSource('/api/logs?token=' + encodeURIComponent(deviceToken()));
   evtSrc.onmessage = e => {
@@ -1346,8 +1354,8 @@ async function saveSettings() {
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
     serial_baud: parseInt($('cfgSerialBaud').value),
-    tcp_host: $('cfgTcpHost').value.trim() || 'drawbox-atom.local',
-    tcp_port: parseInt($('cfgTcpPort').value) || 9100
+    tcp_host: $('cfgTcpHost').value.trim(),
+    tcp_port: parseInt($('cfgTcpPort').value)
   };
   try {
     const r = await fetch('/api/settings', {

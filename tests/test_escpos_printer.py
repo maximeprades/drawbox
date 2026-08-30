@@ -5,6 +5,7 @@ import pty
 import socket
 import threading
 import time
+import types
 
 import pytest
 from PIL import Image
@@ -154,6 +155,25 @@ def test_start_print_tcp_pumps_job_in_background(tmp_path):
         srv.close()
     assert bytes(received).startswith(INIT)
     assert len(received) == sent
+
+
+def test_pump_tcp_sizes_write_timeout_to_job():
+    """Regression: sendall gets one deadline for the whole job and the
+    bridge drains at ~960 B/s, so the 10 s connect timeout would truncate
+    any page larger than the socket buffers. The write deadline must scale
+    with job size."""
+    calls = []
+    sock = types.SimpleNamespace(
+        settimeout=lambda t: calls.append(("timeout", t)),
+        sendall=lambda job: calls.append(("sendall", len(job))),
+        close=lambda: calls.append(("close", None)),
+    )
+    job = b"\x00" * 96_000  # a tall page: ~100 s of drain at 9600 baud
+    drawbox_escpos._pump_tcp(sock, job)
+    assert calls[0] == ("timeout", drawbox_escpos._write_timeout(len(job)))
+    assert calls[0][1] >= 240
+    assert calls[1] == ("sendall", len(job))
+    assert calls[-1] == ("close", None)
 
 
 def test_start_print_tcp_refused_connection_raises(tmp_path):
