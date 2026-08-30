@@ -160,8 +160,11 @@ static void drawEyes(int cx, int cy, int r, Face f, bool closed,
 static void drawMouth(int cx, int cy, int r, Face f, float open) {
   int my = cy + r * 38 / 100;
   int maxRy = r * 30 / 100;
-  gfx->fillRect(cx - r * 24 / 100 - 3, my - maxRy - 3,
-                2 * (r * 24 / 100 + 3), 2 * (maxRy + 3), C_FACE);
+  // The wipe must cover every mouth shape: the joy smile is the widest
+  // (0.50r arc at 25 degrees reaches ~0.45r), not the open ellipse.
+  int wipeRx = r * 47 / 100 + 3;
+  gfx->fillRect(cx - wipeRx, my - maxRy - 3,
+                2 * wipeRx, 2 * (maxRy + 3), C_FACE);
   if (f == Face::ERR) {
     gfx->fillRect(cx - r * 30 / 100, my - 4, 2 * (r * 30 / 100), 9,
                   C_FEATURE);
