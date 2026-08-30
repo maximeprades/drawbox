@@ -175,27 +175,19 @@ def test_settings_rejects_bad_tcp_values(client):
 
 # ── /api/logs stream ───────────────────────────────
 
-def test_logs_stream_emits_keepalives_on_quiet_journal(drawbox_dir, monkeypatch):
+def test_logs_stream_emits_keepalives_on_quiet_journal(drawbox_dir, fake_journal, monkeypatch):
     """Regression for the 2026-08-30 outage: with a quiet journal the SSE
     stream must still write periodically, so a vanished client raises on
     the next write and frees its gunicorn thread instead of pinning it."""
-    r_fd, w_fd = os.pipe()
-    proc = types.SimpleNamespace(
-        stdout=os.fdopen(r_fd, "rb"),
-        kill=lambda: None,
-        wait=lambda timeout=None: 0,
-    )
-    monkeypatch.setattr(drawbox_web.subprocess, "Popen", lambda *a, **kw: proc)
     monkeypatch.setattr(drawbox_web, "LOG_STREAM_KEEPALIVE_S", 0.05)
-    os.write(w_fd, b"hello journal\n")
-    try:
-        with drawbox_web.app.test_request_context("/api/logs"):
-            gen = drawbox_web.api_logs().response
-            assert next(gen) == "data: hello journal\n\n"
-            assert next(gen).startswith(": keepalive")
-            gen.close()
-    finally:
-        os.close(w_fd)
+    os.write(fake_journal, b"hello journal\n")
+    # Calls the route directly: the werkzeug test client would buffer this
+    # endless SSE stream and never return.
+    with drawbox_web.app.test_request_context("/api/logs"):
+        gen = drawbox_web.api_logs().response
+        assert next(gen) == "data: hello journal\n\n"
+        assert next(gen).startswith(": keepalive")
+        gen.close()
 
 
 # ── /api/scripts ───────────────────────────────────

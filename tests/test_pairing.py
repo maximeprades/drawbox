@@ -151,24 +151,16 @@ def test_paired_devices_list_and_revoke_via_api(client):
     assert client.get("/api/pair/devices").status_code == 401
 
 
-def test_query_token_works_only_for_the_log_endpoints(client, drawbox_dir, monkeypatch):
+def test_query_token_works_only_for_the_log_endpoints(client, drawbox_dir, monkeypatch, fake_journal):
     import drawbox_web
     anon = drawbox_web.app.test_client()
     code = drawbox_core.open_pairing_window()
     token = drawbox_core.redeem_pairing_code(code, "log viewer")
 
-    # A real pipe, closed after one line so the SSE stream terminates and
-    # the test client can consume the whole response.
-    r_fd, w_fd = os.pipe()
-    os.write(w_fd, b"hello from journalctl\n")
-    os.close(w_fd)
-    fake_journal = types.SimpleNamespace(
-        stdout=os.fdopen(r_fd, "rb"),
-        kill=lambda: None,
-        wait=lambda timeout=None: 0,
-    )
-    monkeypatch.setattr(drawbox_web.subprocess, "Popen",
-                        lambda *a, **k: fake_journal)
+    # One line, then EOF, so the SSE stream terminates and the test client
+    # can consume the whole response.
+    os.write(fake_journal, b"hello from journalctl\n")
+    os.close(fake_journal)
     monkeypatch.setattr(
         drawbox_web.subprocess, "run",
         lambda *a, **k: types.SimpleNamespace(stdout="log text", stderr="", returncode=0))

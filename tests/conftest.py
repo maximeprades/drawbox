@@ -6,6 +6,7 @@ We patch the module-level path constants on each of the modules that hold
 them — this is simpler and faster than reloading the modules.
 """
 
+import os
 import sys
 import types
 from pathlib import Path
@@ -26,6 +27,30 @@ fake_sounddevice = types.SimpleNamespace(
     InputStream=None,
 )
 sys.modules.setdefault("sounddevice", fake_sounddevice)
+
+
+@pytest.fixture
+def fake_journal(monkeypatch):
+    """Replace journalctl's Popen with a real pipe; yields the write fd.
+
+    The /api/logs route selects and os.reads the raw fd, so the fake must
+    be a real pipe, not an iterator. Close the fd to make "journalctl"
+    exit, which ends the stream.
+    """
+    import drawbox_web
+
+    r_fd, w_fd = os.pipe()
+    proc = types.SimpleNamespace(
+        stdout=os.fdopen(r_fd, "rb"),
+        kill=lambda: None,
+        wait=lambda timeout=None: 0,
+    )
+    monkeypatch.setattr(drawbox_web.subprocess, "Popen", lambda *a, **k: proc)
+    yield w_fd
+    try:
+        os.close(w_fd)
+    except OSError:
+        pass
 
 
 @pytest.fixture

@@ -42,6 +42,7 @@ log = logging.getLogger("drawbox.web")
 REPO_DIR = Path.home() / "drawbox-repo"
 GUIDE_PATH = Path.home() / "drawbox-guide.html"
 SIMULATOR_PATH = Path.home() / "drawbox-simulator.html"
+LOG_STREAM_KEEPALIVE_S = 15
 
 # ── IMAGE GENERATION STATE ────────────────────────
 _gen_lock = threading.Lock()
@@ -316,8 +317,12 @@ def api_generate():
             print_image(path, printer_type=printer_type)
         except Exception as e:
             log.exception("print failed")
+            # OSErrors name the user's own devices (missing serial port,
+            # printer host down) — useful verbatim. Anything else (lp
+            # command lines, PIL internals) stays in the journal.
+            reason = str(e) if isinstance(e, OSError) else type(e).__name__
             return jsonify(ok=False, image=image_b64,
-                           error=f"Generated, but printing failed: {e}")
+                           error=f"Generated, but printing failed: {reason}")
         if printer_type in PRINTER_TYPES and printer_type != settings["printer_type"]:
             settings["printer_type"] = printer_type
             save_settings(settings)
@@ -336,9 +341,6 @@ def api_last_image():
         return jsonify(ok=False, error="Nothing generated yet"), 404
     return send_file(LAST_IMAGE_FILE, mimetype="image/png", max_age=0)
 
-LOG_STREAM_KEEPALIVE_S = 15
-
-
 @app.route("/api/logs")
 def api_logs():
     def stream():
@@ -349,23 +351,25 @@ def api_logs():
              "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
+        fd = proc.stdout.fileno()
         try:
             # journalctl -f never ends, and a vanished client is only
             # noticed when a write fails. On a quiet journal that pinned
             # worker threads forever and saturated gunicorn (2026-08-30
             # outage). The periodic SSE comment forces that write.
-            os.set_blocking(proc.stdout.fileno(), False)
+            # Raw os.read, not proc.stdout.read: no BufferedReader between
+            # select and the fd, so ready means readable and b"" means EOF.
             buf = b""
             while True:
-                ready, _, _ = select.select([proc.stdout], [], [],
+                ready, _, _ = select.select([fd], [], [],
                                             LOG_STREAM_KEEPALIVE_S)
                 if not ready:
                     yield ": keepalive\n\n"
                     continue
-                chunk = proc.stdout.read(65536)
+                chunk = os.read(fd, 65536)
                 if chunk == b"":
                     break  # journalctl exited
-                buf += chunk or b""
+                buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     yield "data: %s\n\n" % line.decode("utf-8", "replace").rstrip()

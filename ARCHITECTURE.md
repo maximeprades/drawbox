@@ -210,20 +210,18 @@ sudo lpadmin -p drawbox-printer -E \
 sudo lpoptions -d drawbox-printer
 ```
 
-For the M5Stack ATOM Printer (or any ESC/POS serial thermal printer), CUPS is
-not involved. Set `printer_type` to `escpos_serial` in the dashboard Settings
-— stored in `~/.drawbox/web_settings.json` along with `serial_port` and
-`serial_baud` — and `print_image()` hands the page to `drawbox_escpos.py`,
-which renders it to ESC/POS raster bytes and writes them straight to the
-serial port. The ATOM must be flashed once with the USB bridge sketch in
-`firmware/atom_printer_bridge/`.
+For the M5Stack ATOM Printer (or any ESC/POS serial thermal printer), CUPS
+is not involved. `print_image()` hands the page to `drawbox_escpos.py`,
+which renders it to ESC/POS raster bytes and writes them to the printer.
+The ATOM must be flashed once with the bridge sketch in
+`firmware/atom_printer_bridge_wifi/` (see its README).
 
-The ATOM can also print over the network: flash
-`firmware/atom_printer_bridge_wifi/` instead and it joins your WiFi,
-announces itself as `drawbox-atom.local`, and accepts one raw TCP client on
-port 9100. Set `printer_type` to `escpos_tcp` with `tcp_host` / `tcp_port`
-in Settings and the Pi prints to it with no cable. Same rendering path;
-`drawbox_escpos.py` writes the job to a socket instead of a serial port.
+Two transports, chosen by `printer_type` in the dashboard Settings (stored
+in `~/.drawbox/web_settings.json`): `escpos_tcp` prints over the network —
+the flashed ATOM joins your WiFi, announces itself as `drawbox-atom.local`,
+and accepts one raw TCP client on port 9100 (`tcp_host` / `tcp_port`) —
+and `escpos_serial` prints over a USB cable (`serial_port` /
+`serial_baud`). Same rendering path either way.
 
 ## Known Issues
 
