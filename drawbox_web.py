@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -327,6 +328,9 @@ def api_last_image():
         return jsonify(ok=False, error="Nothing generated yet"), 404
     return send_file(LAST_IMAGE_FILE, mimetype="image/png", max_age=0)
 
+LOG_STREAM_KEEPALIVE_S = 15
+
+
 @app.route("/api/logs")
 def api_logs():
     def stream():
@@ -335,11 +339,28 @@ def api_logs():
         proc = subprocess.Popen(
             ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
              "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         try:
-            for line in proc.stdout:
-                yield f"data: {line.rstrip()}\n\n"
+            # journalctl -f never ends, and a vanished client is only
+            # noticed when a write fails. On a quiet journal that pinned
+            # worker threads forever and saturated gunicorn (2026-08-30
+            # outage). The periodic SSE comment forces that write.
+            os.set_blocking(proc.stdout.fileno(), False)
+            buf = b""
+            while True:
+                ready, _, _ = select.select([proc.stdout], [], [],
+                                            LOG_STREAM_KEEPALIVE_S)
+                if not ready:
+                    yield ": keepalive\n\n"
+                    continue
+                chunk = proc.stdout.read(65536)
+                if chunk == b"":
+                    break  # journalctl exited
+                buf += chunk or b""
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    yield "data: %s\n\n" % line.decode("utf-8", "replace").rstrip()
         finally:
             proc.kill()
             try:

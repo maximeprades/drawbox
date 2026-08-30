@@ -1082,6 +1082,10 @@ function showPage(page) {
   if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadPoopMode(); loadApiKeys(); loadPairedDevices(); }
   if (page === 'scripts') loadScripts();
   if (page === 'wifi') { loadSavedWifi(); loadWifi(); }
+  // Stream logs only while the Logs page is visible — every open stream
+  // holds a gunicorn thread on the Pi.
+  if (page === 'logs') connectLogs();
+  else if (evtSrc) { evtSrc.close(); evtSrc = null; }
 }
 
 function toggleSidebar() {
@@ -1242,7 +1246,6 @@ function connectLogs() {
     $('logArea').textContent += '[log stream disconnected — reconnecting...]\n';
   };
 }
-connectLogs();
 function copyLog() {
   const text = ($('logArea').textContent || '').trimEnd();
   if (!text.trim()) { toast('No logs to copy', false); return; }

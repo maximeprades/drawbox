@@ -1,5 +1,6 @@
 """Device pairing: voice command, code redemption, and the API token guard."""
 
+import os
 import types
 
 import drawbox_core
@@ -156,17 +157,18 @@ def test_query_token_works_only_for_the_log_endpoints(client, drawbox_dir, monke
     code = drawbox_core.open_pairing_window()
     token = drawbox_core.redeem_pairing_code(code, "log viewer")
 
-    class FakeJournal:
-        stdout = iter(["hello from journalctl\n"])
-
-        def kill(self):
-            pass
-
-        def wait(self, timeout=None):
-            return 0
-
+    # A real pipe, closed after one line so the SSE stream terminates and
+    # the test client can consume the whole response.
+    r_fd, w_fd = os.pipe()
+    os.write(w_fd, b"hello from journalctl\n")
+    os.close(w_fd)
+    fake_journal = types.SimpleNamespace(
+        stdout=os.fdopen(r_fd, "rb"),
+        kill=lambda: None,
+        wait=lambda timeout=None: 0,
+    )
     monkeypatch.setattr(drawbox_web.subprocess, "Popen",
-                        lambda *a, **k: FakeJournal())
+                        lambda *a, **k: fake_journal)
     monkeypatch.setattr(
         drawbox_web.subprocess, "run",
         lambda *a, **k: types.SimpleNamespace(stdout="log text", stderr="", returncode=0))
