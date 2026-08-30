@@ -30,9 +30,15 @@ log = logging.getLogger("drawbox.escpos")
 PRINTER_WIDTH_DOTS = 384
 BAND_ROWS = 255  # max rows per GS v 0 block
 FEED_LINES = 4
+# Extra ~2 cm of blank paper after each page (160 dots at 203 dpi) so
+# drawings tear off cleanly instead of smudging into each other.
+TRAILING_GAP_DOTS = 160
 
 INIT = b"\x1b\x40"
-FEED_BYTES = b"\x0a" * FEED_LINES
+# ESC J n: feed n dots. More deterministic than stacking line feeds,
+# whose height depends on the head's line-spacing default.
+TEAR_OFF_GAP = b"\x1b\x4a" + bytes([TRAILING_GAP_DOTS])
+FEED_BYTES = b"\x0a" * FEED_LINES + TEAR_OFF_GAP
 
 
 def render_raster(img):

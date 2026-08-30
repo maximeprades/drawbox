@@ -15,7 +15,7 @@ import drawbox_escpos
 
 INIT = b"\x1b\x40"
 GS_V0 = b"\x1d\x76\x30"
-FEED = b"\x0a" * drawbox_escpos.FEED_LINES
+FEED = drawbox_escpos.FEED_BYTES
 
 
 # ── render_raster ──────────────────────────────────
@@ -60,6 +60,13 @@ def test_render_raster_blank_image_feeds_only():
     job = drawbox_escpos.render_raster(Image.new("L", (384, 100), 255))
     assert job == INIT + FEED
     assert GS_V0 not in job
+
+
+def test_render_raster_ends_with_tear_off_gap():
+    """Every job ends with line feeds plus an explicit ~2 cm paper feed
+    (ESC J 160 dots) so pages tear off without smudging together."""
+    job = drawbox_escpos.render_raster(Image.new("L", (384, 16), 0))
+    assert job.endswith(b"\x0a\x0a\x0a\x0a\x1b\x4a\xa0")
 
 
 # ── serial output ──────────────────────────────────
