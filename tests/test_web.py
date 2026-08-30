@@ -149,6 +149,28 @@ def test_settings_rejects_blank_or_non_string_serial_port(client):
     assert client.post("/api/settings", json={"serial_port": 123}).status_code == 400
 
 
+def test_settings_tcp_fields_round_trip(client):
+    client.post("/api/settings", json={
+        "printer_type": "escpos_tcp",
+        "tcp_host": "192.168.1.50",
+        "tcp_port": 9101,
+    })
+    body = client.get("/api/settings").get_json()
+    assert body["printer_type"] == "escpos_tcp"
+    assert body["tcp_host"] == "192.168.1.50"
+    assert body["tcp_port"] == 9101
+
+
+def test_settings_rejects_bad_tcp_values(client):
+    assert client.post("/api/settings", json={"tcp_host": ""}).status_code == 400
+    assert client.post("/api/settings", json={"tcp_host": 42}).status_code == 400
+    assert client.post("/api/settings", json={"tcp_port": 0}).status_code == 400
+    assert client.post("/api/settings", json={"tcp_port": 70000}).status_code == 400
+    body = client.get("/api/settings").get_json()
+    assert body["tcp_host"] == "drawbox-atom.local"
+    assert body["tcp_port"] == 9100
+
+
 # ── /api/scripts ───────────────────────────────────
 
 def test_scripts_get_includes_defaults(client):

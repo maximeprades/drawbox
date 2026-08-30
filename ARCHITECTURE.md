@@ -218,6 +218,13 @@ which renders it to ESC/POS raster bytes and writes them straight to the
 serial port. The ATOM must be flashed once with the USB bridge sketch in
 `firmware/atom_printer_bridge/`.
 
+The ATOM can also print over the network: flash
+`firmware/atom_printer_bridge_wifi/` instead and it joins your WiFi,
+announces itself as `drawbox-atom.local`, and accepts one raw TCP client on
+port 9100. Set `printer_type` to `escpos_tcp` with `tcp_host` / `tcp_port`
+in Settings and the Pi prints to it with no cable. Same rendering path;
+`drawbox_escpos.py` writes the job to a socket instead of a serial port.
+
 ## Known Issues
 
 | Issue | Cause | Fix |

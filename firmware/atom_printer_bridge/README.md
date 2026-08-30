@@ -5,6 +5,10 @@ printer for DrawBox. The stock firmware runs a WiFi AP + MQTT stack and never
 exposes the print head over USB; this sketch just forwards bytes between the
 USB serial port and the head.
 
+For cable-free printing over the network, flash
+`../atom_printer_bridge_wifi/` instead — it keeps this USB pipe and adds a
+TCP one.
+
 ## Flashing
 
 With the Arduino IDE:

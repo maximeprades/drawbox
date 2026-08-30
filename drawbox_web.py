@@ -411,6 +411,16 @@ def api_settings():
             if baud not in SERIAL_BAUDS:
                 raise ValueError(f"serial_baud must be one of {SERIAL_BAUDS}: {baud}")
             settings["serial_baud"] = baud
+        if "tcp_host" in data:
+            host = data["tcp_host"]
+            if not isinstance(host, str) or not host.strip():
+                raise ValueError(f"tcp_host must be a non-empty string: {host!r}")
+            settings["tcp_host"] = host.strip()
+        if "tcp_port" in data:
+            tcp_port = int(data["tcp_port"])
+            if not 1 <= tcp_port <= 65535:
+                raise ValueError(f"tcp_port must be 1-65535: {tcp_port}")
+            settings["tcp_port"] = tcp_port
     except (TypeError, ValueError) as e:
         return jsonify(ok=False, error=f"Invalid value: {e}"), 400
     save_settings(settings)

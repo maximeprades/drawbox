@@ -19,6 +19,7 @@ import argparse
 import fcntl
 import logging
 import os
+import socket
 import termios
 import threading
 
@@ -104,12 +105,46 @@ def _pump_logged(fd, job):
         log.error("serial print failed mid-write", exc_info=True)
 
 
+def _open_tcp(host, port):
+    """Connect to a raw ESC/POS TCP bridge (the WiFi ATOM sketch)."""
+    return socket.create_connection((host, int(port)), timeout=10)
+
+
+def _pump_tcp(sock, job):
+    """Write ``job`` to ``sock``. Always closes ``sock``.
+
+    No flock here: the bridge accepts one client at a time and holds the
+    next connection in its backlog, so jobs serialize at the printer.
+    """
+    try:
+        sock.sendall(job)
+    finally:
+        sock.close()
+
+
+def _pump_tcp_logged(sock, job):
+    """Thread body — no caller left to catch, so log."""
+    try:
+        _pump_tcp(sock, job)
+    except Exception:
+        log.error("tcp print failed mid-write", exc_info=True)
+
+
 def print_file(path, port, baud=9600):
     """Print the image at ``path`` over ``port``, blocking until the whole
     job is written. Returns the job byte count."""
     with Image.open(path) as img:
         job = render_raster(img)
     _pump(_open_serial(port, baud), job)
+    return len(job)
+
+
+def print_file_tcp(path, host, port=9100):
+    """Print the image at ``path`` to a TCP bridge, blocking until the whole
+    job is written. Returns the job byte count."""
+    with Image.open(path) as img:
+        job = render_raster(img)
+    _pump_tcp(_open_tcp(host, port), job)
     return len(job)
 
 
@@ -124,6 +159,17 @@ def start_print(path, port, baud=9600):
         job = render_raster(img)
     fd = _open_serial(port, baud)
     threading.Thread(target=_pump_logged, args=(fd, job), daemon=True).start()
+    return len(job)
+
+
+def start_print_tcp(path, host, port=9100):
+    """Like ``start_print``, but to a TCP bridge. Bad images and connection
+    failures raise here, before the thread starts."""
+    with Image.open(path) as img:
+        job = render_raster(img)
+    sock = _open_tcp(host, port)
+    threading.Thread(target=_pump_tcp_logged, args=(sock, job),
+                     daemon=True).start()
     return len(job)
 
 
@@ -145,21 +191,33 @@ def _test_pattern():
 def _main():
     parser = argparse.ArgumentParser(
         description="Print an image (or a built-in test pattern) to an "
-                    "ESC/POS serial thermal printer.")
-    parser.add_argument("--port", required=True,
+                    "ESC/POS serial or TCP thermal printer.")
+    parser.add_argument("--port",
                         help="serial device, e.g. /dev/ttyUSB0 (Linux) or "
                              "/dev/cu.usbserial-XXXX (macOS)")
     parser.add_argument("--baud", type=int, default=9600)
+    parser.add_argument("--host",
+                        help="TCP bridge host (WiFi ATOM), e.g. "
+                             "drawbox-atom.local")
+    parser.add_argument("--tcp-port", type=int, default=9100)
     parser.add_argument("image", nargs="?",
                         help="image file to print (default: test pattern)")
     args = parser.parse_args()
+    if bool(args.port) == bool(args.host):
+        parser.error("exactly one of --port or --host is required")
     if args.image:
-        sent = print_file(args.image, args.port, args.baud)
+        if args.host:
+            sent = print_file_tcp(args.image, args.host, args.tcp_port)
+        else:
+            sent = print_file(args.image, args.port, args.baud)
     else:
         job = render_raster(_test_pattern())
-        _pump(_open_serial(args.port, args.baud), job)
+        if args.host:
+            _pump_tcp(_open_tcp(args.host, args.tcp_port), job)
+        else:
+            _pump(_open_serial(args.port, args.baud), job)
         sent = len(job)
-    print(f"sent {sent} bytes to {args.port}")
+    print(f"sent {sent} bytes to {args.host or args.port}")
 
 
 if __name__ == "__main__":
