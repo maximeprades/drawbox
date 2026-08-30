@@ -1,10 +1,12 @@
 """Flask route tests — anything that doesn't shell out to hardware-specific
-binaries. We don't exercise /api/status, /api/logs, /api/diagnostics,
-/api/test/* or /api/service/* here because they shell out to systemctl,
-journalctl, nmcli, aplay, etc. that don't exist on macOS."""
+binaries. We don't exercise /api/status, /api/diagnostics, /api/test/* or
+/api/service/* here because they shell out to systemctl, nmcli, aplay, etc.
+that don't exist on macOS. /api/logs is tested against a faked journalctl."""
 
 import json
+import os
 import re
+import types
 from pathlib import Path
 
 import pytest
@@ -169,6 +171,31 @@ def test_settings_rejects_bad_tcp_values(client):
     body = client.get("/api/settings").get_json()
     assert body["tcp_host"] == "drawbox-atom.local"
     assert body["tcp_port"] == 9100
+
+
+# ── /api/logs stream ───────────────────────────────
+
+def test_logs_stream_emits_keepalives_on_quiet_journal(drawbox_dir, monkeypatch):
+    """Regression for the 2026-08-30 outage: with a quiet journal the SSE
+    stream must still write periodically, so a vanished client raises on
+    the next write and frees its gunicorn thread instead of pinning it."""
+    r_fd, w_fd = os.pipe()
+    proc = types.SimpleNamespace(
+        stdout=os.fdopen(r_fd, "rb"),
+        kill=lambda: None,
+        wait=lambda timeout=None: 0,
+    )
+    monkeypatch.setattr(drawbox_web.subprocess, "Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr(drawbox_web, "LOG_STREAM_KEEPALIVE_S", 0.05)
+    os.write(w_fd, b"hello journal\n")
+    try:
+        with drawbox_web.app.test_request_context("/api/logs"):
+            gen = drawbox_web.api_logs().response
+            assert next(gen) == "data: hello journal\n\n"
+            assert next(gen).startswith(": keepalive")
+            gen.close()
+    finally:
+        os.close(w_fd)
 
 
 # ── /api/scripts ───────────────────────────────────
