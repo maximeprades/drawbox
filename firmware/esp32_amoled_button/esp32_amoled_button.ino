@@ -95,6 +95,13 @@ static size_t wavLen = 0;  // header + PCM actually recorded
 
 static int recordSeconds = DEFAULT_RECORD_SECONDS;
 static uint32_t lastWifiAttempt = 0;
+static int16_t lastPeak = 0;
+
+// Below this peak the recording is room tone. Whisper hallucinates
+// text from near-silence (it invented Japanese from an empty room and
+// printed it), so quiet takes are rejected on-device. Speech at arm's
+// length peaks around 2000; ambient measured around 400.
+#define QUIET_PEAK 550
 
 // ── SMALL DRAW HELPERS ───────────────────────────
 
@@ -330,8 +337,11 @@ static bool micInit() {
   i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   i2s_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
-  i2s_config.dma_buf_count = 8;
-  i2s_config.dma_buf_len = 64;
+  // ~190 ms of stereo cushion: the face animation blocks this loop for
+  // tens of ms per frame, and the vendor's 8x64 buffer dropped samples
+  // (8 s of audio took 12 s of wall clock, chopping the speech).
+  i2s_config.dma_buf_count = 6;
+  i2s_config.dma_buf_len = 1024;
   i2s_config.use_apll = false;
   i2s_config.tx_desc_auto_clear = true;
   i2s_config.fixed_mclk = 0;
@@ -403,6 +413,7 @@ static size_t recordAudio(int seconds) {
   size_t pcmBytes = monoGot * sizeof(int16_t);
   writeWavHeader(wavBuf, pcmBytes);
   wavLen = 44 + pcmBytes;
+  lastPeak = max(peak[0], peak[1]);
   Serial.printf("[rec] done samples=%u bytes=%u slot=%d peak0=%d peak1=%d\n",
                 (unsigned)monoGot, (unsigned)wavLen, hot, peak[0], peak[1]);
   return pcmBytes;
@@ -596,10 +607,11 @@ static void fetchRecordSeconds() {
 static void handlePress() {
   setState(AppState::LISTENING);
   size_t pcmBytes = recordAudio(recordSeconds);
-  if (pcmBytes == 0) {
+  if (pcmBytes == 0 || lastPeak < QUIET_PEAK) {
+    Serial.printf("[rec] too quiet (peak=%d), not uploading\n", lastPeak);
     resultOk = false;
     resultTitle = "I didn't hear anything";
-    resultDetail = "";
+    resultDetail = "come closer and try again";
     setState(AppState::RESULT);
     return;
   }
