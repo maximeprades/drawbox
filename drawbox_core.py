@@ -597,6 +597,54 @@ def load_coloring_prompt():
     return load_settings().get("coloring_prompt") or DEFAULT_COLORING_PROMPT
 
 
+# ── TRANSCRIPTION ─────────────────────────────────
+
+def gateway_v4_post(url, payload, model_headers):
+    """POST JSON to an AI Gateway v4 endpoint and return the parsed reply.
+
+    The gateway's OpenAI-compatible /v1 surface has no audio routes; speech
+    and transcription speak the AI SDK's v4 protocol (bespoke headers,
+    base64 JSON payloads).
+    """
+    import urllib.request
+
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
+        "ai-gateway-protocol-version": AI_GATEWAY_PROTOCOL_VERSION,
+        **model_headers,
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def transcribe_audio(data, media_type="audio/wav"):
+    """Transcribe raw audio bytes with the gateway Whisper model.
+
+    ``media_type`` must match the actual bytes (the ESP32 voice box sends
+    WAV). Raises on a missing key or a gateway failure; callers own the
+    user-facing message.
+    """
+    apply_api_keys()  # keys may have been updated via the dashboard
+    if not AI_GATEWAY_API_KEY:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+    t0 = time.time()
+    reply = gateway_v4_post(
+        AI_GATEWAY_TRANSCRIPTION_URL,
+        {"audio": base64.b64encode(data).decode(), "mediaType": media_type},
+        {
+            "ai-transcription-model-specification-version": "4",
+            "ai-model-id": GATEWAY_STT_MODEL,
+        },
+    )
+    text = reply.get("text") or ""
+    log.info("transcribed %dKB in %.1fs: %r",
+             len(data) // 1024, time.time() - t0, text[:120])
+    return text
+
+
 # ── IMAGE GENERATION ──────────────────────────────
 
 def generate_image(desc, model=None):

@@ -115,6 +115,7 @@ Flask web app at `http://drawbox.local:5000`. Runs as a separate systemd service
 | `/guide` | GET | Serves drawbox-guide.html |
 | `/simulator` | GET | Serves drawbox-simulator.html |
 | `/api/generate` | POST | Safety check → generate image → print |
+| `/api/voice/generate` | POST | Raw WAV body → Whisper → same gates/pipeline as `/api/generate` (ESP32 voice button) |
 | `/api/logs` | GET | SSE stream of journalctl |
 | `/api/settings` | GET/POST | Read/write settings |
 | `/api/diagnostics` | POST | Run allowlisted diagnostic commands |
@@ -222,6 +223,16 @@ the flashed ATOM joins your WiFi, announces itself as `drawbox-atom.local`,
 and accepts one raw TCP client on port 9100 (`tcp_host` / `tcp_port`) —
 and `escpos_serial` prints over a USB cable (`serial_port` /
 `serial_baud`). Same rendering path either way.
+
+### ESP32 voice button (second box)
+
+A standalone one-button remote on a Waveshare ESP32-S3-Touch-AMOLED-2.16
+(`firmware/esp32_amoled_button/`). Tap the on-screen button, speak, and it
+records 16 kHz WAV from the onboard mics and POSTs it to the dashboard's
+`/api/voice/generate` with a paired-device token. Transcription, safety,
+generation, and printing all run on the Pi, so the firmware stays a thin
+record-and-upload client. See the firmware README for setup and the
+serial test hooks.
 
 ## Known Issues
 
