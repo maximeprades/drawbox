@@ -56,6 +56,16 @@ def test_voice_rejects_oversized_body(client, monkeypatch):
     assert r.get_json()["code"] == "too_large"
 
 
+def test_voice_body_backstop_catches_missing_content_length(client, monkeypatch):
+    # Bodies without a usable Content-Length (e.g. chunked) bypass the
+    # route's header check; the app-wide MAX_CONTENT_LENGTH must catch them
+    # and the 413 handler must still answer JSON.
+    monkeypatch.setitem(drawbox_web.app.config, "MAX_CONTENT_LENGTH", 16)
+    r = _post_audio(client)
+    assert r.status_code == 413
+    assert r.get_json()["ok"] is False
+
+
 # ── the happy path ────────────────────────────────
 
 def test_voice_happy_path_generates_prints_and_logs(client, monkeypatch, tmp_path):

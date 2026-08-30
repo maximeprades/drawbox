@@ -75,6 +75,15 @@ DIAGNOSTIC_COMMANDS = {
 # ── FLASK APP ────────────────────────────────────
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# Backstop for bodies without a Content-Length (e.g. chunked uploads),
+# which the per-route content_length check can't see. Nothing legitimate
+# sends more than a voice WAV.
+app.config["MAX_CONTENT_LENGTH"] = VOICE_AUDIO_MAX_BYTES
+
+
+@app.errorhandler(413)
+def request_too_large(_e):
+    return jsonify(ok=False, error="Request too large.", code="too_large"), 413
 
 # Origins that may call this dashboard from another host (the multi-Pi
 # "hub" page). Anchored regex on the *host* portion of the Origin header —

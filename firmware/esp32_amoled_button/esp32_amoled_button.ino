@@ -496,9 +496,11 @@ static void fetchRecordSeconds() {
   }
   client.stop();
   int v = jsonField(body, "record_seconds").toInt();
-  if (v >= 3 && v <= MAX_RECORD_SECONDS) {
-    recordSeconds = v;
-    Serial.printf("[cfg] record_seconds=%d (from dashboard)\n", v);
+  if (v >= 3) {
+    // The dashboard allows up to 30 s; the box clamps to its buffer.
+    recordSeconds = min(v, MAX_RECORD_SECONDS);
+    Serial.printf("[cfg] record_seconds=%d (dashboard said %d)\n",
+                  recordSeconds, v);
   }
 }
 
