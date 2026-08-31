@@ -57,6 +57,9 @@ The native USB port doubles as a console at 115200:
 - `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
 - `b` — speaker loopback self-test (plays a tone, reports the mic peak)
 - `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size, version, volume, brightness)
+- `w` — conversation-mode heap spike: opens a TLS websocket to xAI next to
+  the live UI and prints heap at each step (the go/no-go for the on-box
+  realtime agent; see `realtime_spike.h`)
 
 A full remote test from the Mac, no hands needed:
 
@@ -71,8 +74,10 @@ The onboard ES8311 codec drives the little speaker on the same I2S bus
 as the mics (full duplex). After WiFi comes up, the box fetches the
 dashboard voice catalog from `GET /api/voice/lines` and prefetches each
 line as 16 kHz mono WAV from `GET /api/voice/line?key=&i=`. Clips live
-in PSRAM for that boot. The spoken lines and jokes are the same ones the
-Pi arcade box uses, same voice included.
+in PSRAM. Each heartbeat reply carries the server's voice cache hash;
+when the scripts or the TTS voice change in the dashboard, the box drops
+its cache and refetches within a minute. The spoken lines and jokes are
+the same ones the Pi arcade box uses, same voice included.
 
 State changes play the matching line (`ready`, `listening`, `thinking`,
 `printing`, or the `voice_key` from `/api/voice/generate`). While the
@@ -87,9 +92,15 @@ never use the ES8311's own mic path.
 
 ## Behavior notes
 
-- The recording window follows the dashboard's `record_seconds` setting
-  (fetched once at boot, then refreshed on each heartbeat; defaults to
-  8 s if the first fetch fails).
+- Recording stops early ~1.5 s after the kid stops talking (peak-based
+  VAD, same thresholds as the Pi box); the dashboard's `record_seconds`
+  setting is the ceiling (fetched once at boot, then refreshed on each
+  heartbeat; defaults to 8 s if the first fetch fails).
+- Since v1.6.0 the upload uses the two-phase ack flow: the server answers
+  as soon as the transcript clears the gates with a personalized ack clip
+  (played immediately), then the box long-polls `/api/voice/result` for
+  the outcome, telling a joke while it waits. Old servers (no `job` field)
+  are parsed exactly like the legacy blocking flow.
 - Every 60 s the box POSTs a heartbeat to `/api/device/heartbeat`
   (`version`, WiFi RSSI, heap, PSRAM, voice-cache state). The dashboard
   Devices panel shows that status.

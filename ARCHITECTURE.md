@@ -54,9 +54,10 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | OS | Raspberry Pi OS Bookworm 64-bit Lite | Headless, no desktop |
 | Language | Python 3 | System Python, no virtualenv |
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
-| AI - Image | Vercel AI Gateway | nano-banana, flux-schnell, or gpt-image |
-| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1`) | Transcribes kid's voice |
+| AI - Image | Vercel AI Gateway | nano-banana, nano-banana-fast, flux-schnell, gpt-image, or any catalog id |
+| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1`) or xAI Grok STT | Selected by the `stt_provider` setting |
 | AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1`), ElevenLabs, or Grok (xAI) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
+| AI - Conversation | xAI Grok Voice Agent (`wss://api.x.ai/v1/realtime`) | Opt-in `conversation_mode`; live speech-to-speech with a gated draw tool |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |
@@ -67,7 +68,7 @@ Pin 11 (GPIO 17) ← Button COM terminal
 ### Python Dependencies
 
 ```
-openai, Pillow, numpy, sounddevice, soundfile, gpiozero, flask
+openai, Pillow, numpy, sounddevice, soundfile, gpiozero, flask, websockets
 ```
 
 ## Script Architecture (drawbox.py)
@@ -81,7 +82,7 @@ main()
        ├→ [if is_busy] → voice.play("busy") → continue
        └→ [normal press]:
             └→ voice.play("listening")
-            └→ record_audio()          # 10s recording at 44100Hz
+            └→ record_audio()          # record_seconds setting (default 10s) at 44100Hz
             └→ transcribe()            # Whisper API
             └→ is_safe()               # Blocklist check
             └→ voice.play("thinking")  # Random variation (5 options)
@@ -115,9 +116,14 @@ Flask web app at `http://drawbox.local:5000`. Runs as a separate systemd service
 | `/guide` | GET | Serves drawbox-guide.html |
 | `/simulator` | GET | Serves drawbox-simulator.html |
 | `/api/generate` | POST | Safety check → generate image → print |
-| `/api/voice/generate` | POST | Raw WAV body → Whisper → same gates/pipeline as `/api/generate`; responses carry a `voice_key` naming the script line to speak (ESP32 voice button) |
+| `/api/voice/generate` | POST | Raw WAV body → STT → same gates/pipeline as `/api/generate`; responses carry a `voice_key` naming the script line to speak. With `X-DrawBox-Ack: 1` (firmware >= 1.6.0) it answers right after the gates with a personalized `ack_key` clip while generation continues server-side |
+| `/api/voice/result` | GET | Long-poll the in-flight voice job (`?id=`) for the final outcome |
+| `/api/voice/clip` | GET | One synthesized 16 kHz WAV by cache key (`?k=`) — ack and intercept clips |
 | `/api/voice/lines` | GET | Voice-line manifest: variant counts per script key, joke count, cache hash |
 | `/api/voice/line` | GET | One script line or joke (`?key=K&i=N`) as 16 kHz mono WAV, disk-cached beside the daemon's mp3 cache |
+| `/api/realtime/token` | POST | Conversation mode: ephemeral xAI client secret + the shared session config |
+| `/api/agent/draw` | POST | Conversation mode: execute the agent's gated draw tool call |
+| `/api/agent/intercept` | POST | Conversation mode: run a transcript through the admin/blocklist interceptor |
 | `/api/logs` | GET | SSE stream of journalctl |
 | `/api/settings` | GET/POST | Read/write settings |
 | `/api/diagnostics` | POST | Run allowlisted diagnostic commands |
@@ -241,8 +247,23 @@ dashboard voice line (and jokes on demand) from `/api/voice/lines` +
 the same moments the button daemon speaks — ready, listening, a thinking
 variant, one joke while generating, and the `voice_key` line the server
 names in each response. Editing scripts or the TTS voice in the dashboard
-changes both boxes; the box re-fetches on every boot. Synthesized chirps
-remain only as a fallback when a line is missing. See the firmware README
+changes both boxes; the box re-fetches at boot and, via the cache hash in
+each heartbeat reply, within a minute of an edit. Synthesized chirps
+remain only as a fallback when a line is missing.
+
+### Conversation mode (opt-in)
+
+With the `conversation_mode` setting on, a press/tap starts a live Grok
+Voice Agent session (`drawbox_realtime.py` on the Pi; ESP32 support is
+gated on the Phase-2 heap spike — serial hook `w`). The session config —
+voice, editable `agent_instructions`, server VAD, the `draw_coloring_page`
+tool — is built once in `drawbox_core.realtime_session_config()` so both
+boxes share one personality. Safety is layered: the agent's tool calls run
+the full gates (`execute_draw_tool`), and every input/output transcript
+passes the deterministic `intercept_transcript` (exact-match admin
+commands, then the blocklist) with response-kill on a hit; two strikes end
+the session. Sessions cost ~$0.05/min (xAI), cap at 5 minutes client-side,
+and any failure falls back to the one-shot flow. See the firmware README
 for setup, build, and the serial test hooks.
 
 ## Known Issues
