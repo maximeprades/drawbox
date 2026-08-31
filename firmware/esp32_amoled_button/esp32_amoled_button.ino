@@ -85,6 +85,7 @@ static bool resultOk = false;
 static String resultTitle;
 static String resultDetail;
 static volatile bool pressRequested = false;
+static volatile bool dismissRequested = false;
 
 // One PSRAM block: 44-byte WAV header followed by PCM, so the serial
 // dump and the HTTP body read from the same contiguous bytes.
@@ -204,18 +205,16 @@ static void onTap(lv_event_t *) {
   if (state == AppState::IDLE) {
     pressRequested = true;
   } else if (state == AppState::RESULT) {
-    stateSince = 0;  // loop dismisses on the next pass
+    dismissRequested = true;
   }
 }
 
 static void blinkTimerCb(lv_timer_t *t) {
   static bool closed = false;
   if (state != AppState::IDLE) {
-    if (closed) {
-      lv_img_set_src(imgEyes, &img_eyes_open);
-      setPupils(true, 0);
-      closed = false;
-    }
+    // applyState already set the right face for the new state; restoring
+    // open eyes here would stomp the listening/thinking expression.
+    closed = false;
     return;
   }
   closed = !closed;
@@ -891,7 +890,9 @@ void loop() {
   handleSerial();
   lv_timer_handler();
 
-  if (pressRequested && state == AppState::IDLE) {
+  // Serial 't' may arrive during RESULT; a new take starts right away.
+  if (pressRequested &&
+      (state == AppState::IDLE || state == AppState::RESULT)) {
     pressRequested = false;
     handlePress();
     return;
@@ -923,7 +924,10 @@ void loop() {
 
     case AppState::RESULT: {
       uint32_t showFor = resultOk ? RESULT_OK_SHOW_MS : RESULT_ERR_SHOW_MS;
-      if (millis() - stateSince > showFor) setState(AppState::IDLE);
+      if (dismissRequested || millis() - stateSince > showFor) {
+        dismissRequested = false;
+        setState(AppState::IDLE);
+      }
       break;
     }
 
