@@ -61,7 +61,7 @@ def test_gateway_tts_request_shape(monkeypatch, tmp_path):
     assert req.get_header("Ai-speech-model-specification-version") == "4"
     assert req.get_header("Ai-model-id") == "openai/tts-1"
     body = json.loads(req.data)
-    assert body["text"].startswith(drawbox._TTS_WAKE_PREFIX)
+    assert body["text"].startswith(drawbox_core.TTS_WAKE_PREFIX)
     assert body["text"].endswith("hello kids")
     assert body["voice"] == "alloy"
     assert body["outputFormat"] == "mp3"

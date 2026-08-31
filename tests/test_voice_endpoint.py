@@ -47,6 +47,7 @@ def test_voice_rejects_tiny_body(client):
     body = r.get_json()
     assert body["ok"] is False
     assert body["code"] == "too_short"
+    assert body["voice_key"] == "too_short"
 
 
 def test_voice_rejects_oversized_body(client, monkeypatch):
@@ -76,6 +77,7 @@ def test_voice_happy_path_generates_prints_and_logs(client, monkeypatch, tmp_pat
     assert body["ok"] is True
     assert body["transcript"] == "a friendly dinosaur"
     assert body["message"] == drawbox_core.DEFAULT_VOICE_LINES["printing"]["text"]
+    assert body["voice_key"] == "printing"
     assert "image" not in body  # the box has no use for megabytes of base64
     assert len(printed) == 1
     events = [json.loads(line) for line in
@@ -105,6 +107,7 @@ def test_voice_short_transcript_is_too_short(client, monkeypatch):
     assert body["ok"] is False
     assert body["code"] == "too_short"
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["too_short"]["text"]
+    assert body["voice_key"] == "too_short"
 
 
 def test_voice_blocked_transcript_uses_script_line(client, monkeypatch):
@@ -116,6 +119,7 @@ def test_voice_blocked_transcript_uses_script_line(client, monkeypatch):
     assert body["code"] == "rejected"
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["blocked"]["text"]
     assert body["transcript"] == "a gun and a knife"
+    assert body["voice_key"] == "blocked"
 
 
 def test_voice_poop_blocked_when_poop_mode_off(client, monkeypatch):
@@ -125,6 +129,7 @@ def test_voice_poop_blocked_when_poop_mode_off(client, monkeypatch):
     body = _post_audio(client).get_json()
     assert body["ok"] is False
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["poop_blocked"]["text"]
+    assert body["voice_key"] == "poop_blocked"
 
 
 def test_voice_requires_please_when_please_mode_on(client, monkeypatch, tmp_path):
@@ -134,6 +139,7 @@ def test_voice_requires_please_when_please_mode_on(client, monkeypatch, tmp_path
     body = _post_audio(client).get_json()
     assert body["ok"] is False
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["say_please"]["text"]
+    assert body["voice_key"] == "say_please"
 
     _mock_pipeline(monkeypatch, tmp_path, transcript="a happy puppy please")
     assert _post_audio(client).get_json()["ok"] is True
@@ -152,6 +158,7 @@ def test_voice_transcription_failure_is_graceful(client, monkeypatch):
     assert body["ok"] is False
     assert body["code"] == "transcribe_failed"
     assert "/home/secret" not in body["error"]
+    assert body["voice_key"] == "error"
 
 
 def test_voice_busy_uses_busy_script_line(client, monkeypatch):
@@ -165,6 +172,7 @@ def test_voice_busy_uses_busy_script_line(client, monkeypatch):
     assert body["ok"] is False
     assert body["code"] == "busy"
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["busy"]["text"]
+    assert body["voice_key"] == "busy"
 
 
 def test_voice_generation_failure_uses_error_script_line(client, monkeypatch):
@@ -176,6 +184,7 @@ def test_voice_generation_failure_uses_error_script_line(client, monkeypatch):
     assert body["ok"] is False
     assert body["code"] == "generate_failed"
     assert body["error"] == drawbox_core.DEFAULT_VOICE_LINES["error"]["text"]
+    assert body["voice_key"] == "error"
 
 
 # ── drawbox_core.transcribe_audio ─────────────────
