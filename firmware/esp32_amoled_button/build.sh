@@ -26,7 +26,20 @@ fi
 if [ ! -d "$CACHE/.git" ]; then
     git clone --quiet "$LIBS_REPO" "$CACHE"
 fi
+git -C "$CACHE" checkout --quiet -- .
 git -C "$CACHE" -c advice.detachedHead=false checkout --quiet "$LIBS_SHA"
+# Our lv_conf overlay: vendor's config plus LV_USE_SNAPSHOT for the
+# serial screenshot hook.
+cp "$DIR/lv_conf.h" "$CACHE/examples/arduino/libraries/lv_conf.h"
+
+# The face bitmaps are generated, not committed (4+ MB of hex).
+if [ ! -f "$DIR/face_assets.h" ] || [ "$DIR/gen_face_assets.py" -nt "$DIR/face_assets.h" ]; then
+    echo "generating face assets..."
+    python3 "$DIR/gen_face_assets.py" || {
+        echo "asset generation failed — needs python3 with Pillow" >&2
+        exit 1
+    }
+fi
 
 case "${1:-build}" in
     build)
