@@ -70,11 +70,14 @@ DrawBox supports three image generation backends. Switch models from the web das
 
 No laser printer? DrawBox can also drive the [M5Stack ATOM Printer](https://docs.m5stack.com/en/guide/hobby_kit/atom_printer/usage) — a little 58mm receipt printer — or any ESC/POS serial thermal printer:
 
-1. Flash `firmware/atom_printer_bridge` onto the ATOM once (see its README). It replaces the stock WiFi firmware with a dumb USB-to-print-head bridge.
-2. Plug the printer into the Pi over USB.
-3. In the dashboard, switch **Settings → Printer** to "Thermal receipt" and set the serial port (usually `/dev/ttyUSB0`).
+1. Flash `firmware/atom_printer_bridge_wifi` onto the ATOM once (see its README). It replaces the stock firmware with a print-head bridge that works over WiFi (the ATOM joins your network as `drawbox-atom.local`) or plain USB.
+2. In the dashboard, switch **Settings → Printer** to the thermal option that matches: WiFi (host + port 9100) or USB serial.
 
 Pages come out as receipt strips and take ~20-30 seconds at 9600 baud — the suspense is free. Keep the printer on its 12V power supply or prints come out faint. Smoke test without DrawBox:
+
+### The Second Box: ESP32 Voice Button
+
+DrawBox also has a pocket-sized sibling: a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm) running `firmware/esp32_amoled_button/`. It shows a big animated emoji face — tap it, say what you want, and the same pipeline prints it. It speaks with the exact same voice, lines, and jokes as the big box (fetched from the dashboard, so editing scripts changes both), blinks while it waits, and mouths along while your kid talks. Setup, pairing, and build instructions live in its README.
 
 ```bash
 python3 drawbox_escpos.py --port /dev/ttyUSB0

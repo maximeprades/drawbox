@@ -182,8 +182,39 @@ def require_device_token():
     return jsonify(ok=False, error="Not paired"), 401
 
 
+# /api/pair is the only unauthenticated write path, and the pairing
+# window's 5-attempt budget is global — an anonymous flood could burn it
+# faster than the household can type the code. A per-IP hourly budget,
+# checked before the window file is ever touched, caps what one attacker
+# can burn while leaving the household's own budget intact.
+_PAIR_ATTEMPTS = {}
+_PAIR_HOURLY_LIMIT = 10
+
+
+def _pair_peer_ip():
+    """The TCP peer, not request.remote_addr: ProxyFix honors a client
+    supplied X-Forwarded-For, which would hand every spoofed header a
+    fresh budget. Behind the tunnel this collapses to one shared budget,
+    which is fine — pairing is a rare, LAN-side ceremony."""
+    orig = request.environ.get("werkzeug.proxy_fix.orig") or {}
+    return orig.get("REMOTE_ADDR") or request.remote_addr or ""
+
+
+def _pair_throttled(ip):
+    now = _time.time()
+    times = [t for t in _PAIR_ATTEMPTS.get(ip, []) if now - t < 3600]
+    throttled = len(times) >= _PAIR_HOURLY_LIMIT
+    if not throttled:
+        times.append(now)
+    _PAIR_ATTEMPTS[ip] = times
+    return throttled
+
+
 @app.route("/api/pair", methods=["POST"])
 def api_pair():
+    if _pair_throttled(_pair_peer_ip()):
+        return jsonify(ok=False,
+                       error="Too many attempts — wait a moment."), 429
     data = _request_dict()
     if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400
@@ -241,12 +272,27 @@ def simulator():
         return send_file(SIMULATOR_PATH)
     return "Simulator not found. Copy drawbox-simulator.html to ~/", 404
 
+# /api/status is public (deploy scripts poll it) and forks processes;
+# the cache keeps an anonymous request loop from pegging the Pi.
+_STATUS_CACHE = {"ts": 0.0, "payload": None}
+_STATUS_CACHE_S = 5.0
+
+
 @app.route("/api/status")
 def api_status():
+    now = _time.time()
+    if _STATUS_CACHE["payload"] is not None and \
+            now - _STATUS_CACHE["ts"] < _STATUS_CACHE_S:
+        return jsonify(**_STATUS_CACHE["payload"])
+
     # Service status
-    svc = subprocess.run(["systemctl", "is-active", "drawbox"],
-                         capture_output=True, text=True)
-    running = svc.stdout.strip() == "active"
+    running = False
+    try:
+        svc = subprocess.run(["systemctl", "is-active", "drawbox"],
+                             capture_output=True, text=True, timeout=5)
+        running = svc.stdout.strip() == "active"
+    except Exception:
+        pass
 
     # Temperature
     temp = "--"
@@ -283,8 +329,13 @@ def api_status():
     except Exception:
         pass
 
-    return jsonify(service_running=running, temperature=temp,
+    payload = dict(service_running=running, temperature=temp,
                    uptime=up, rpi_connect=rpi)
+    # Stamped after the probes: a hung systemctl eats its 5s timeout
+    # while gathering, and a before-the-probes stamp would already be
+    # expired by the time it lands.
+    _STATUS_CACHE.update(ts=_time.time(), payload=payload)
+    return jsonify(**payload)
 
 def _voice_line(key):
     """The kid-facing script line for ``key`` (dashboard overrides honored)."""
@@ -568,18 +619,30 @@ def api_last_image():
         return jsonify(ok=False, error="Nothing generated yet"), 404
     return send_file(LAST_IMAGE_FILE, mimetype="image/png", max_age=0)
 
+# Each log stream holds a journalctl -f and a worker thread until the
+# client leaves; unbounded streams could starve every other route.
+_LOG_STREAM_SLOTS = threading.BoundedSemaphore(2)
+
+
 @app.route("/api/logs")
 def api_logs():
     def stream():
-        # Cap the backfill at 1000 lines so the live view stays responsive on
-        # a chatty Pi. Full 24h is available via /api/logs/download.
-        proc = subprocess.Popen(
-            ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
-             "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
-        fd = proc.stdout.fileno()
+        # Acquired inside the generator: a generator that never starts
+        # never runs its finally, so acquiring before the Response could
+        # leak a slot when a client vanishes mid-headers.
+        if not _LOG_STREAM_SLOTS.acquire(blocking=False):
+            yield ": too many log streams open\n\n"
+            return
+        proc = None
         try:
+            # Cap the backfill at 1000 lines so the live view stays
+            # responsive on a chatty Pi. Full 24h via /api/logs/download.
+            proc = subprocess.Popen(
+                ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
+                 "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            fd = proc.stdout.fileno()
             # journalctl -f never ends, and a vanished client is only
             # noticed when a write fails. On a quiet journal that pinned
             # worker threads forever and saturated gunicorn (2026-08-30
@@ -601,11 +664,13 @@ def api_logs():
                     line, buf = buf.split(b"\n", 1)
                     yield "data: %s\n\n" % line.decode("utf-8", "replace").rstrip()
         finally:
-            proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+            _LOG_STREAM_SLOTS.release()
+            if proc is not None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
     return Response(
         stream(), mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -665,7 +730,13 @@ def api_settings():
             port = data["serial_port"]
             if not isinstance(port, str) or not port.strip():
                 raise ValueError(f"serial_port must be a non-empty string: {port!r}")
-            settings["serial_port"] = port.strip()
+            port = port.strip()
+            # Device nodes only: the print path opens this with O_RDWR as
+            # the pi user, so an arbitrary path would spray raster bytes
+            # at any TTY it can open.
+            if not re.match(r"^/dev/[A-Za-z0-9._/:-]+$", port):
+                raise ValueError(f"serial_port must be a /dev device: {port!r}")
+            settings["serial_port"] = port
         if "serial_baud" in data:
             baud = int(data["serial_baud"])
             if baud not in SERIAL_BAUDS:

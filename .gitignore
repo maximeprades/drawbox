@@ -16,6 +16,7 @@ firmware/atom_printer_bridge_wifi/wifi_credentials.h
 firmware/esp32_amoled_button/wifi_credentials.h
 firmware/esp32_amoled_button/.libs/
 firmware/esp32_amoled_button/face_assets.h
+firmware/esp32_amoled_button/face_preview.png
 node_modules/
 
 # macOS

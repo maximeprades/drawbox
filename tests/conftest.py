@@ -83,6 +83,10 @@ def drawbox_dir(tmp_path, monkeypatch):
         for name, value in overrides.items():
             if hasattr(drawbox_web, name):
                 monkeypatch.setattr(drawbox_web, name, value)
+        # Cross-test state: pairing throttle and status cache would leak
+        # 429s / stale payloads between tests otherwise.
+        drawbox_web._PAIR_ATTEMPTS.clear()
+        drawbox_web._STATUS_CACHE.update(ts=0.0, payload=None)
 
     yield dx
 

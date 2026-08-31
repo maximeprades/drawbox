@@ -265,8 +265,11 @@ def main():
                       (40, 40, 40))
     for i, s in enumerate(shots):
         sheet.paste(s, (10 + i * 490, 10))
-    sheet.save("/tmp/face_preview.png")
-    print("preview at /tmp/face_preview.png")
+    # Next to the generated header, not /tmp: a predictable world-writable
+    # path is a symlink-planting target on shared machines.
+    preview = __file__.replace("gen_face_assets.py", "face_preview.png")
+    sheet.save(preview)
+    print(f"preview at {preview}")
 
 
 if __name__ == "__main__":

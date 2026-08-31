@@ -79,41 +79,29 @@ ssh pi@drawbox.local "mkdir -p ~/templates"
 scp templates/index.html pi@drawbox.local:~/templates/
 ```
 
-## 6. Add the Replicate Token to the Service Files
+## 6. Add Your API Key
 
-The DrawBox systemd services need environment variables. Edit the main service:
+Do NOT put API keys in the systemd service files: those are world-readable
+(mode 644), and DrawBox no longer reads keys from them. Keys live in
+`~/.drawbox/api_keys.json` (mode 600), managed from the dashboard.
 
-```bash
-sudo nano /etc/systemd/system/drawbox.service
-```
+Once the dashboard is running (next step), open
+`http://drawbox.local:5000`, go to **Settings → API Keys**, and paste your
+`AI_GATEWAY_API_KEY` (plus ElevenLabs or xAI keys only if you switch the
+voice provider). The image model is picked in Settings too — no
+environment variables needed.
 
-Find the `[Service]` section and add the API token lines. It should look like:
+The main service file stays key-free:
 
 ```ini
 [Service]
 Type=simple
 User=pi
-Environment=OPENAI_API_KEY=sk-your-openai-key-here
-Environment=REPLICATE_API_TOKEN=r8_your-replicate-token-here
-Environment=GEMINI_API_KEY=AIza-your-gemini-key-here
-Environment=IMAGE_MODEL=flux-schnell
 WorkingDirectory=/home/pi
 ExecStart=/usr/bin/python3 /home/pi/drawbox.py
 Restart=on-failure
 RestartSec=10
 ```
-
-**`IMAGE_MODEL`** controls which image generator to use. Options: `flux-schnell` (default, fastest), `nano-banana` (Gemini), `gpt-image` (OpenAI). You only need the API key for the model you're using.
-
-Save: `Ctrl+O`, `Enter`, `Ctrl+X`
-
-Now do the same for the web dashboard service:
-
-```bash
-sudo nano /etc/systemd/system/drawbox-web.service
-```
-
-Add the same `Environment=` lines under `[Service]`.
 
 ## 7. Reload and Restart Services
 

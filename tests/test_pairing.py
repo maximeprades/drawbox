@@ -174,3 +174,63 @@ def test_query_token_works_only_for_the_log_endpoints(client, drawbox_dir, monke
 
     # ... but nothing else does.
     assert anon.get(f"/api/analytics?token={token}").status_code == 401
+
+
+def test_pair_throttles_per_ip_before_touching_the_window(client, drawbox_dir):
+    import drawbox_web
+    anon = drawbox_web.app.test_client()
+    code = drawbox_core.open_pairing_window()
+
+    # An attacker burns their hourly budget on wrong codes...
+    for _ in range(drawbox_web._PAIR_HOURLY_LIMIT):
+        anon.post("/api/pair", json={"code": _wrong_code(code), "name": "x"})
+    r = anon.post("/api/pair", json={"code": code, "name": "x"})
+    assert r.status_code == 429
+
+    # ...but the window itself survives for a fresh source: the throttle
+    # rejects before the attempt counter is spent. (Test clients share an
+    # IP, so clear the budget to simulate the household's own address.)
+    drawbox_web._PAIR_ATTEMPTS.clear()
+    code2 = drawbox_core.open_pairing_window()
+    body = anon.post("/api/pair", json={"code": code2, "name": "kid"}).get_json()
+    assert body["ok"] is True
+
+
+def test_status_is_cached_and_survives_hung_systemctl(client, drawbox_dir, monkeypatch):
+    import drawbox_web
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd[0])
+        if cmd[0] == "systemctl":
+            assert kwargs.get("timeout") == 5
+            raise drawbox_web.subprocess.TimeoutExpired(cmd, 5)
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(drawbox_web.subprocess, "run", fake_run)
+    anon = drawbox_web.app.test_client()
+
+    r = anon.get("/api/status")
+    assert r.status_code == 200
+    assert r.get_json()["service_running"] is False
+
+    # Second hit within the cache window forks nothing.
+    forks_before = len(calls)
+    assert anon.get("/api/status").status_code == 200
+    assert len(calls) == forks_before
+
+
+def test_pair_throttle_ignores_spoofed_forwarded_for(client, drawbox_dir):
+    import drawbox_web
+    anon = drawbox_web.app.test_client()
+    code = drawbox_core.open_pairing_window()
+
+    # Forging a fresh X-Forwarded-For per request must not mint fresh
+    # budgets: the throttle keys on the TCP peer, not the header.
+    for i in range(drawbox_web._PAIR_HOURLY_LIMIT):
+        anon.post("/api/pair", json={"code": _wrong_code(code), "name": "x"},
+                  headers={"X-Forwarded-For": f"10.0.0.{i}"})
+    r = anon.post("/api/pair", json={"code": code, "name": "x"},
+                  headers={"X-Forwarded-For": "10.0.0.99"})
+    assert r.status_code == 429
