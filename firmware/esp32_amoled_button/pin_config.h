@@ -21,3 +21,7 @@
 #define PIN_ES7210_LRCK 45
 #define PIN_ES7210_DIN 10
 #define PIN_ES7210_MCLK 42
+
+// ES8311 codec shares the same I2S clocks; speaker data out + amp enable.
+#define PIN_ES8311_DOUT 8
+#define PIN_PA 46
