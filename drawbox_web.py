@@ -638,13 +638,26 @@ def api_voice_generate():
                    message=_voice_line("printing"), voice_key="printing")
 
 
+# A running job older than this is presumed dead (worker crash mid-job);
+# generation itself is bounded well under it by the gunicorn timeout.
+_VOICE_JOB_STALE_S = 180
+
+
 def _start_voice_job(transcript):
     """Phase 1 of the ack flow: synthesize the ack, kick generation, return.
 
-    The lock check is advisory (the job thread's non-blocking acquire is
-    the real guard); it just spares the box an ack for a drawing that will
-    immediately report busy.
+    Busy is decided from the on-disk job slot, not just the per-process
+    lock: gunicorn runs two workers, and a second box hitting the other
+    worker would otherwise clobber the single job file mid-generation and
+    strand the first box's result poll on no_job (Bugbot, PR #39). The
+    job thread's non-blocking lock acquire remains the in-process guard.
     """
+    job = _read_voice_job()
+    if job and job.get("status") == "running" and \
+            _time.time() - job.get("ts", 0) < _VOICE_JOB_STALE_S:
+        return jsonify(ok=False, transcript=transcript,
+                       error=_voice_line("busy"), code="busy",
+                       voice_key="busy")
     if _gen_lock.locked():
         return jsonify(ok=False, transcript=transcript,
                        error=_voice_line("busy"), code="busy",

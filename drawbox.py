@@ -628,9 +628,10 @@ def _handle_long_press(btn, voice):
 def _run_conversation(voice):
     """One live agent session (conversation_mode on). Never raises.
 
-    Falls back to the one-shot flow when the session cannot start — missing
-    websockets package, missing XAI key, xAI unreachable — so a dead
-    session never bricks the button.
+    Falls back to the one-shot flow only when no session ever started —
+    missing websockets package, missing XAI key, xAI unreachable, config
+    rejected. A session that ran and then died mid-chat does NOT cascade
+    into "I'm listening!" (run_session already spoke the error line).
     """
     _set_busy(True)
     started = False

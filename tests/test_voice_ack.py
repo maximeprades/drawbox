@@ -119,6 +119,30 @@ def test_legacy_flow_unchanged_without_header(client, monkeypatch):
     assert "ack_key" not in body
 
 
+def test_ack_flow_refuses_while_another_job_runs(client, monkeypatch):
+    """The busy check reads the on-disk job slot, so the OTHER gunicorn
+    worker (or a second box) cannot clobber an in-flight job."""
+    import time as _t
+
+    import drawbox_web as web
+    _patch_generation(monkeypatch)
+    web._write_secure_json(web._voice_job_path(),
+                           {"id": "aaaa", "status": "running", "ts": _t.time()})
+
+    body = _post_audio(client).get_json()
+    assert body["ok"] is False
+    assert body["code"] == "busy"
+
+    # A stale running job (crashed worker) no longer blocks.
+    web._write_secure_json(web._voice_job_path(),
+                           {"id": "aaaa", "status": "running",
+                            "ts": _t.time() - 9999})
+    body = _post_audio(client).get_json()
+    assert body["ok"] is True
+    assert client.get(
+        f"/api/voice/result?id={body['job']}&timeout=10").get_json()["ok"]
+
+
 def test_voice_result_without_job_is_404(client):
     r = client.get("/api/voice/result?timeout=0")
     assert r.status_code == 404

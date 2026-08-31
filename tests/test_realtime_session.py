@@ -95,6 +95,44 @@ def test_blocked_agent_output_is_killed_mid_response(drawbox_dir):
     assert h.session.block_strikes == 1
 
 
+def test_killed_input_also_silences_the_inflight_response(drawbox_dir):
+    """A blocklist hit on the KID's words must stop the agent's current
+    reply too — later audio deltas for that response stay out of the
+    speaker queue (Bugbot, PR #39)."""
+    drawbox_core.ensure_safety_mode_default()
+    h = Harness()
+    h.feed(
+        {"type": "response.created", "response": {"id": "r7"}},
+        {"type": "response.audio.delta", "response_id": "r7",
+         "delta": _b64(b"11")},
+        {"type": "conversation.item.input_audio_transcription.completed",
+         "transcript": "draw a gun"},
+        {"type": "response.audio.delta", "response_id": "r7",
+         "delta": _b64(b"22")},
+    )
+    assert h.audio == b"11"
+    assert h.cleared == 1
+    assert "blocked" in h.spoken
+
+
+def test_error_before_configure_fails_the_session(drawbox_dir):
+    h = Harness()
+    h.feed({"type": "error", "error": {"message": "bad session config"}})
+    assert h.session.done is True
+    assert h.session.failed is True
+
+
+def test_error_after_configure_is_recoverable(drawbox_dir):
+    h = Harness()
+    h.feed(
+        {"type": "session.updated"},
+        {"type": "error", "error": {"message": "transient"}},
+    )
+    assert h.session.configured is True
+    assert h.session.done is False
+    assert h.session.failed is False
+
+
 def test_two_blocklist_strikes_end_the_session(drawbox_dir):
     drawbox_core.ensure_safety_mode_default()
     h = Harness()
