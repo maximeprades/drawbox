@@ -68,6 +68,22 @@ struct Note {
   uint16_t ms;
 };
 
+// Named before any function that mentions it: the .ino preprocessor
+// hoists prototypes above later type definitions.
+struct VoiceLine {
+  char key[20];
+  uint8_t variant;
+  int16_t *pcm;
+  uint32_t samples;
+};
+
+#define VOICE_CACHE_CAP 24
+#define VOICE_MAX_SECONDS 12
+#define VOICE_MAX_BYTES \
+  ((uint32_t)SAMPLE_RATE_HZ * VOICE_MAX_SECONDS * sizeof(int16_t))
+#define VOICE_FETCH_TIMEOUT_MS 15000UL
+#define VOICE_JOKE_WAIT_MS 2000UL
+
 static const char *stateName(AppState s) {
   switch (s) {
     case AppState::WIFI_CONNECTING: return "WIFI_CONNECTING";
@@ -90,8 +106,19 @@ static uint32_t stateSince = 0;
 static bool resultOk = false;
 static String resultTitle;
 static String resultDetail;
+static String resultVoiceKey;
 static volatile bool pressRequested = false;
 static volatile bool dismissRequested = false;
+
+static VoiceLine voiceCache[VOICE_CACHE_CAP];
+static int voiceCacheCount = 0;
+static int thinkingVariants = 1;
+static int jokeCount = 0;
+static struct {
+  int jokeIndex;
+  int16_t *pcm;
+  uint32_t samples;
+} jokeSlot = {-1, nullptr, 0};
 
 // One PSRAM block: 44-byte WAV header followed by PCM, so the serial
 // dump and the HTTP body read from the same contiguous bytes.
@@ -380,24 +407,12 @@ static void applyState() {
   lv_refr_now(NULL);
 }
 
-static void chirpListen();
-static void chirpDone();
-static void chirpError();
-static void chirpHello();
-
 static void setState(AppState next) {
-  AppState prev = state;
   Serial.printf("[state] %s -> %s @%lums\n",
                 stateName(state), stateName(next), (unsigned long)millis());
   state = next;
   stateSince = millis();
   applyState();
-  // Sound follows the screen. The listen chirp finishes before recording
-  // starts (setState returns first), so the mic never hears it.
-  if (next == AppState::LISTENING) chirpListen();
-  else if (next == AppState::RESULT) resultOk ? chirpDone() : chirpError();
-  else if (next == AppState::IDLE && prev == AppState::WIFI_CONNECTING)
-    chirpHello();
 }
 
 // ── WAV ──────────────────────────────────────────
@@ -583,6 +598,49 @@ static void chirpHello() {
   playChirp(seq, 2);
 }
 
+static void playPcm(const int16_t *pcm, uint32_t samples) {
+  if (!pcm || !samples) return;
+  static int16_t frame[512 * 2];
+  uint32_t t0 = millis();
+  uint32_t done = 0;
+  int chunks = 0;
+  while (done < samples) {
+    uint32_t chunk = min((uint32_t)512, samples - done);
+    for (uint32_t i = 0; i < chunk; i++) {
+      int16_t v = pcm[done + i];
+      frame[2 * i] = v;
+      frame[2 * i + 1] = v;
+    }
+    size_t written = 0;
+    i2s_write(I2S_CH, frame, chunk * 2 * sizeof(int16_t), &written,
+              pdMS_TO_TICKS(200));
+    done += chunk;
+    chunks++;
+    if ((chunks & 3) == 0) lv_timer_handler();
+  }
+  uint32_t totalMs = samples * 1000UL / SAMPLE_RATE_HZ;
+  int32_t left = (int32_t)totalMs + 80 - (int32_t)(millis() - t0);
+  if (left > 0) delay(left);
+}
+
+static void playLine(const char *key) {
+  int matches[VOICE_CACHE_CAP];
+  int n = 0;
+  for (int i = 0; i < voiceCacheCount; i++) {
+    if (voiceCache[i].pcm && strcmp(voiceCache[i].key, key) == 0)
+      matches[n++] = i;
+  }
+  if (n == 0) {
+    if (strcmp(key, "listening") == 0) chirpListen();
+    else if (strcmp(key, "printing") == 0) chirpDone();
+    else if (strcmp(key, "ready") == 0) chirpHello();
+    else chirpError();
+    return;
+  }
+  int pick = matches[esp_random() % (uint32_t)n];
+  playPcm(voiceCache[pick].pcm, voiceCache[pick].samples);
+}
+
 // Serial 'b': speaker loopback self-test. Plays a tone while reading the
 // mics on the same duplex bus in the same loop, so the RX window covers
 // the tone; a healthy speaker shows up as a big peak.
@@ -675,19 +733,30 @@ static size_t recordAudio(int seconds) {
 
 // ── HTTP ─────────────────────────────────────────
 
+// One mDNS resolve per boot instead of one per fetch: lookups take up to
+// 4 s each on a weak signal, and the voice prefetch alone makes 15 calls.
+static IPAddress serverIp;
+
+static void forgetServerIp() { serverIp = IPAddress(); }
+
 static IPAddress resolveServer() {
+  if (serverIp != IPAddress()) return serverIp;
   String host = DRAWBOX_HOST;
   IPAddress ip;
-  if (ip.fromString(host)) return ip;
+  if (ip.fromString(host)) {
+    serverIp = ip;
+    return ip;
+  }
   if (host.endsWith(".local")) {
     String name = host.substring(0, host.length() - 6);
     ip = MDNS.queryHost(name.c_str(), 4000);
-    if (ip != IPAddress()) return ip;
-    Serial.printf("[http] mDNS lookup failed for %s\n", host.c_str());
-    return IPAddress();
+    if (ip == IPAddress())
+      Serial.printf("[http] mDNS lookup failed for %s\n", host.c_str());
+  } else if (!WiFi.hostByName(host.c_str(), ip)) {
+    ip = IPAddress();
   }
-  if (WiFi.hostByName(host.c_str(), ip)) return ip;
-  return IPAddress();
+  serverIp = ip;
+  return ip;
 }
 
 // Pulls one flat field out of the server's JSON without a JSON library —
@@ -723,10 +792,15 @@ static String jsonField(const String &body, const char *key) {
   return out;
 }
 
+static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
+                          uint32_t *samples);
+
 // Reads one HTTP response (status line, headers, body) with a deadline,
 // pumping LVGL so the spinner keeps moving.
 static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
   uint32_t deadline = millis() + HTTP_RESPONSE_TIMEOUT_MS;
+  uint32_t waitStart = millis();
+  bool joked = false;
   String statusLine;
   while (millis() < deadline) {
     if (client.available()) {
@@ -734,6 +808,22 @@ static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
       break;
     }
     if (!client.connected() && !client.available()) return false;
+    if (!joked && jokeCount > 0 &&
+        millis() - waitStart >= VOICE_JOKE_WAIT_MS) {
+      joked = true;
+      int idx = (int)(esp_random() % (uint32_t)jokeCount);
+      int16_t *pcm = nullptr;
+      uint32_t samples = 0;
+      if (fetchVoiceWav("joke", idx, &pcm, &samples)) {
+        if (jokeSlot.pcm) free(jokeSlot.pcm);
+        jokeSlot.jokeIndex = idx;
+        jokeSlot.pcm = pcm;
+        jokeSlot.samples = samples;
+        Serial.printf("[voice] joke %d (%u samples)\n", idx,
+                      (unsigned)samples);
+        playPcm(jokeSlot.pcm, jokeSlot.samples);
+      }
+    }
     lv_timer_handler();
     delay(60);
   }
@@ -759,9 +849,11 @@ static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
 // POST the recorded WAV; fills the result fields. Never throws/blocks
 // past the HTTP deadline.
 static void sendToDrawBox() {
+  resultVoiceKey = "";
   IPAddress ip = resolveServer();
   if (ip == IPAddress()) {
     resultOk = false;
+    resultVoiceKey = "error";
     resultTitle = "Can't find DrawBox";
     resultDetail = String("looked for ") + DRAWBOX_HOST;
     return;
@@ -772,7 +864,9 @@ static void sendToDrawBox() {
                 ip.toString().c_str(), DRAWBOX_PORT, (unsigned)wavLen);
   uint32_t t0 = millis();
   if (!client.connect(ip, DRAWBOX_PORT)) {
+    forgetServerIp();
     resultOk = false;
+    resultVoiceKey = "error";
     resultTitle = "DrawBox is offline";
     resultDetail = ip.toString() + " didn't answer";
     return;
@@ -789,6 +883,7 @@ static void sendToDrawBox() {
     if (client.write(wavBuf + off, n) != n) {
       client.stop();
       resultOk = false;
+      resultVoiceKey = "error";
       resultTitle = "Upload failed";
       resultDetail = "WiFi hiccup - try again";
       return;
@@ -803,12 +898,14 @@ static void sendToDrawBox() {
                 (millis() - t0) / 1000.0, body.c_str());
   if (!gotReply) {
     resultOk = false;
+    resultVoiceKey = "error";
     resultTitle = "No answer";
     resultDetail = "DrawBox took too long";
     return;
   }
   if (status == 401) {
     resultOk = false;
+    resultVoiceKey = "error";
     resultTitle = "Not paired";
     resultDetail = "re-pair me with DrawBox";
     return;
@@ -816,6 +913,7 @@ static void sendToDrawBox() {
 
   String transcript = jsonField(body, "transcript");
   resultOk = jsonField(body, "ok") == "true";
+  resultVoiceKey = jsonField(body, "voice_key");
   if (resultOk) {
     resultTitle = jsonField(body, "message");
     if (!resultTitle.length()) resultTitle = "Here it comes!";
@@ -857,22 +955,265 @@ static void fetchRecordSeconds() {
   }
 }
 
+static bool readExact(WiFiClient &client, uint8_t *dst, size_t n,
+                      uint32_t deadline) {
+  size_t got = 0;
+  while (got < n) {
+    if (millis() >= deadline) return false;
+    int avail = client.available();
+    if (avail > 0) {
+      size_t want = n - got;
+      if ((size_t)avail < want) want = (size_t)avail;
+      int nread = client.read(dst + got, want);
+      if (nread <= 0) return false;
+      got += (size_t)nread;
+    } else if (!client.connected()) {
+      return false;
+    } else {
+      lv_timer_handler();
+      delay(5);
+    }
+  }
+  return true;
+}
+
+static bool skipExact(WiFiClient &client, size_t n, uint32_t deadline) {
+  uint8_t buf[64];
+  while (n > 0) {
+    size_t want = n < sizeof(buf) ? n : sizeof(buf);
+    if (!readExact(client, buf, want, deadline)) return false;
+    n -= want;
+  }
+  return true;
+}
+
+static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
+                          uint32_t *samples) {
+  *pcm = nullptr;
+  *samples = 0;
+  IPAddress ip = resolveServer();
+  if (ip == IPAddress()) return false;
+  WiFiClient client;
+  client.setTimeout(VOICE_FETCH_TIMEOUT_MS / 1000);
+  if (!client.connect(ip, DRAWBOX_PORT)) {
+    forgetServerIp();
+    return false;
+  }
+  uint32_t deadline = millis() + VOICE_FETCH_TIMEOUT_MS;
+  client.printf("GET /api/voice/line?key=%s&i=%d HTTP/1.1\r\n"
+                "Host: %s:%d\r\n"
+                "Authorization: Bearer %s\r\n"
+                "Connection: close\r\n\r\n",
+                key, variant, DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN);
+
+  while (millis() < deadline && !client.available()) {
+    if (!client.connected()) {
+      client.stop();
+      return false;
+    }
+    lv_timer_handler();
+    delay(10);
+  }
+  String statusLine = client.readStringUntil('\n');
+  if (!statusLine.startsWith("HTTP/")) {
+    client.stop();
+    return false;
+  }
+  int status = statusLine.substring(9, 12).toInt();
+  if (status != 200) {
+    Serial.printf("[voice] HTTP %d for %s\n", status, key);
+    client.stop();
+    return false;
+  }
+  while (millis() < deadline) {
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) break;
+  }
+
+  uint8_t riff[12];
+  if (!readExact(client, riff, 12, deadline) ||
+      memcmp(riff, "RIFF", 4) != 0 || memcmp(riff + 8, "WAVE", 4) != 0) {
+    client.stop();
+    return false;
+  }
+
+  bool haveFmt = false;
+  int16_t *buf = nullptr;
+  uint32_t nSamples = 0;
+  bool ok = false;
+  while (millis() < deadline) {
+    uint8_t ch[8];
+    if (!readExact(client, ch, 8, deadline)) break;
+    uint32_t sz = 0;
+    memcpy(&sz, ch + 4, 4);
+    if (memcmp(ch, "fmt ", 4) == 0) {
+      if (sz < 16) break;
+      uint8_t fmt[16];
+      if (!readExact(client, fmt, 16, deadline)) break;
+      if (sz > 16 && !skipExact(client, sz - 16, deadline)) break;
+      uint16_t channels = 0, bits = 0;
+      uint32_t rate = 0;
+      memcpy(&channels, fmt + 2, 2);
+      memcpy(&rate, fmt + 4, 4);
+      memcpy(&bits, fmt + 14, 2);
+      if (rate != SAMPLE_RATE_HZ || channels != 1 || bits != 16) {
+        Serial.printf("[voice] bad wav %s: %u Hz %u ch %u bit\n", key,
+                      (unsigned)rate, (unsigned)channels, (unsigned)bits);
+        break;
+      }
+      haveFmt = true;
+    } else if (memcmp(ch, "data", 4) == 0) {
+      if (sz > VOICE_MAX_BYTES) {
+        Serial.printf("[voice] clip too long for %s (%u bytes)\n", key,
+                      (unsigned)sz);
+        break;
+      }
+      buf = (int16_t *)ps_malloc(sz ? sz : 1);
+      if (!buf) {
+        Serial.printf("[voice] ps_malloc failed for %s\n", key);
+        break;
+      }
+      if (sz && !readExact(client, (uint8_t *)buf, sz, deadline)) {
+        free(buf);
+        buf = nullptr;
+        break;
+      }
+      nSamples = sz / 2;
+      if (haveFmt) ok = true;
+      break;
+    } else if (!skipExact(client, sz, deadline)) {
+      break;
+    }
+    if ((sz & 1) && !readExact(client, ch, 1, deadline)) break;
+  }
+
+  client.stop();
+  if (!ok) {
+    if (buf) free(buf);
+    return false;
+  }
+  *pcm = buf;
+  *samples = nSamples;
+  return true;
+}
+
+static bool voiceLineCached(const char *key, uint8_t variant) {
+  for (int i = 0; i < voiceCacheCount; i++) {
+    if (voiceCache[i].variant == variant &&
+        strcmp(voiceCache[i].key, key) == 0)
+      return true;
+  }
+  return false;
+}
+
+static void cacheVoiceLine(const char *key, uint8_t variant) {
+  if (voiceCacheCount >= VOICE_CACHE_CAP) return;
+  if (voiceLineCached(key, variant)) return;
+  int16_t *pcm = nullptr;
+  uint32_t samples = 0;
+  if (!fetchVoiceWav(key, variant, &pcm, &samples)) {
+    Serial.printf("[voice] fetch failed for %s\n", key);
+    return;
+  }
+  VoiceLine &slot = voiceCache[voiceCacheCount++];
+  strncpy(slot.key, key, sizeof(slot.key) - 1);
+  slot.key[sizeof(slot.key) - 1] = '\0';
+  slot.variant = variant;
+  slot.pcm = pcm;
+  slot.samples = samples;
+  Serial.printf("[voice] cached %s (%u samples)\n", key, (unsigned)samples);
+}
+
+// The full line set, attempted until every prefetch key is cached; the
+// idle loop retries on a flaky boot (weak WiFi made silent one-shot
+// failures a chirps-forever boot).
+static const char *const PREFETCH_KEYS[] = {
+    "ready",       "listening", "printing",     "error",     "too_short",
+    "busy",        "blocked",   "poop_blocked", "say_please"};
+#define PREFETCH_KEY_COUNT (sizeof(PREFETCH_KEYS) / sizeof(PREFETCH_KEYS[0]))
+static bool voiceCacheReady = false;
+static uint32_t lastVoiceAttempt = 0;
+
+static void fetchVoiceManifest() {
+  lastVoiceAttempt = millis();
+  IPAddress ip = resolveServer();
+  if (ip == IPAddress()) {
+    Serial.println("[voice] manifest skipped (no server)");
+    return;
+  }
+  WiFiClient client;
+  if (!client.connect(ip, DRAWBOX_PORT)) {
+    Serial.println("[voice] manifest connect failed");
+    forgetServerIp();
+    return;
+  }
+  client.printf("GET /api/voice/lines HTTP/1.1\r\n"
+                "Host: %s:%d\r\n"
+                "Authorization: Bearer %s\r\n"
+                "Connection: close\r\n\r\n",
+                DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN);
+  uint32_t deadline = millis() + 8000;
+  String body;
+  while ((client.connected() || client.available()) && millis() < deadline) {
+    if (client.available()) body += (char)client.read();
+    else {
+      lv_timer_handler();
+      delay(10);
+    }
+    if (body.length() > 8192) break;
+  }
+  client.stop();
+  int tv = jsonField(body, "thinking").toInt();
+  thinkingVariants = tv > 0 ? tv : 1;
+  int jc = jsonField(body, "jokes").toInt();
+  jokeCount = jc > 0 ? jc : 0;
+  Serial.printf("[voice] manifest thinking=%d jokes=%d\n", thinkingVariants,
+                jokeCount);
+
+  for (size_t i = 0; i < PREFETCH_KEY_COUNT; i++) {
+    cacheVoiceLine(PREFETCH_KEYS[i], 0);
+    lv_timer_handler();
+  }
+  for (int v = 0; v < thinkingVariants && voiceCacheCount < VOICE_CACHE_CAP;
+       v++) {
+    cacheVoiceLine("thinking", (uint8_t)v);
+    lv_timer_handler();
+  }
+
+  bool complete = true;
+  for (size_t i = 0; i < PREFETCH_KEY_COUNT; i++)
+    if (!voiceLineCached(PREFETCH_KEYS[i], 0)) complete = false;
+  for (int v = 0; v < thinkingVariants && v < VOICE_CACHE_CAP; v++)
+    if (!voiceLineCached("thinking", (uint8_t)v)) complete = false;
+  voiceCacheReady = complete;
+  Serial.printf("[voice] cache %s (%d lines)\n",
+                complete ? "ready" : "incomplete, will retry",
+                voiceCacheCount);
+}
+
 // ── THE ONE FLOW ─────────────────────────────────
 
 static void handlePress() {
   setState(AppState::LISTENING);
+  playLine("listening");
   size_t pcmBytes = recordAudio(recordSeconds);
   if (pcmBytes == 0 || lastPeak < QUIET_PEAK) {
     Serial.printf("[rec] too quiet (peak=%d), not uploading\n", lastPeak);
     resultOk = false;
+    resultVoiceKey = "too_short";
     resultTitle = "I didn't hear anything";
     resultDetail = "come closer and try again";
     setState(AppState::RESULT);
+    playLine("too_short");
     return;
   }
   setState(AppState::THINKING);
+  playLine("thinking");
   sendToDrawBox();
   setState(AppState::RESULT);
+  if (resultOk) playLine("printing");
+  else playLine(resultVoiceKey.length() ? resultVoiceKey.c_str() : "error");
 }
 
 // ── SERIAL TEST HOOKS ────────────────────────────
@@ -1054,7 +1395,9 @@ void loop() {
                       WiFi.localIP().toString().c_str(), WiFi.RSSI());
         MDNS.begin("drawbox-button");
         fetchRecordSeconds();
+        fetchVoiceManifest();
         setState(AppState::IDLE);
+        playLine("ready");
       } else if (millis() - lastWifiAttempt > 20000) {
         Serial.println("[wifi] retrying");
         WiFi.disconnect();
@@ -1065,8 +1408,12 @@ void loop() {
 
     case AppState::IDLE:
       if (WiFi.status() != WL_CONNECTED) {
+        forgetServerIp();
         setState(AppState::WIFI_CONNECTING);
         lastWifiAttempt = millis();
+      } else if (!voiceCacheReady &&
+                 millis() - lastVoiceAttempt > 30000) {
+        fetchVoiceManifest();
       }
       break;
 

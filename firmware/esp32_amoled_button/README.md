@@ -68,11 +68,20 @@ A full remote test from the Mac, no hands needed:
 ## Sound
 
 The onboard ES8311 codec drives the little speaker on the same I2S bus
-as the mics (full duplex). The box plays synthesized chirps at state
-changes: a rising "your turn" cue when listening starts (it finishes
-before the mic opens, so recordings never contain it), a major arpeggio
-on success, a descending womp on errors, and a soft hello when it comes
-online. Upstream quirk worth knowing: the DAC power-up hides inside
+as the mics (full duplex). After WiFi comes up, the box fetches the
+dashboard voice catalog from `GET /api/voice/lines` and prefetches each
+line as 16 kHz mono WAV from `GET /api/voice/line?key=&i=`. Clips live
+in PSRAM for that boot. The spoken lines and jokes are the same ones the
+Pi arcade box uses, same voice included.
+
+State changes play the matching line (`ready`, `listening`, `thinking`,
+`printing`, or the `voice_key` from `/api/voice/generate`). While the
+generate request is in flight, the box tells one joke after about two
+seconds if the catalog has any. Synthesized chirps stay as the fallback
+when a line is missing from the cache.
+
+The listen line finishes before the mic opens, so recordings never
+contain it. Upstream quirk worth knowing: the DAC power-up hides inside
 `es8311_microphone_config`, so that call is required even though we
 never use the ES8311's own mic path.
 
