@@ -36,7 +36,7 @@ def test_synthesize_routes_to_gateway_by_default(monkeypatch, tmp_path):
 
 def test_gateway_tts_request_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(drawbox, "TTS_VOICE_ID", "alloy")
-    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
 
     captured = {}
 
@@ -69,7 +69,7 @@ def test_gateway_tts_request_shape(monkeypatch, tmp_path):
 
 def test_elevenlabs_tts_request_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(drawbox, "ELEVENLABS_VOICE_ID", "voice123")
-    monkeypatch.setattr(drawbox_core, "ELEVENLABS_API_KEY", "el-test")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
 
     captured = {}
 
@@ -94,7 +94,7 @@ def test_elevenlabs_tts_request_shape(monkeypatch, tmp_path):
 
 def test_grok_tts_request_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(drawbox, "GROK_VOICE_ID", "ara")
-    monkeypatch.setattr(drawbox_core, "XAI_API_KEY", "xai-test")
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
 
     captured = {}
 

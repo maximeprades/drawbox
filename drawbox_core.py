@@ -680,6 +680,7 @@ def synthesize_speech(text, provider, voice_id, stability=0.5, style=0.0,
     """
     import urllib.request
 
+    apply_api_keys()  # keys may have been updated via the dashboard
     prefixed = TTS_WAKE_PREFIX + text
     if provider == "elevenlabs":
         if not ELEVENLABS_API_KEY:

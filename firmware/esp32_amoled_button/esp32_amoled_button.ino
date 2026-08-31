@@ -1166,6 +1166,10 @@ static void fetchVoiceManifest() {
   client.stop();
   int tv = jsonField(body, "thinking").toInt();
   thinkingVariants = tv > 0 ? tv : 1;
+  // The completeness check below must only demand what can fit next to
+  // the fixed keys, or a long dashboard pick-list stalls readiness forever.
+  int maxThinking = VOICE_CACHE_CAP - (int)PREFETCH_KEY_COUNT;
+  if (thinkingVariants > maxThinking) thinkingVariants = maxThinking;
   int jc = jsonField(body, "jokes").toInt();
   jokeCount = jc > 0 ? jc : 0;
   Serial.printf("[voice] manifest thinking=%d jokes=%d\n", thinkingVariants,
