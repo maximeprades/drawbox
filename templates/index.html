@@ -1168,7 +1168,7 @@ async function loadAnalytics() {
       tb.innerHTML = d.recent.map(r =>
         '<tr><td class="muted">' + fmtTime(r.ts) + '</td>' +
         '<td>' + esc(r.prompt) + '</td>' +
-        '<td><span class="badge badge-default">' + r.model + '</span></td>' +
+        '<td><span class="badge badge-default">' + esc(r.model) + '</span></td>' +
         '<td class="muted">' + (r.duration_s ? r.duration_s.toFixed(1) + 's' : '--') + '</td></tr>'
       ).join('');
     } else {

@@ -115,10 +115,9 @@ static int voiceCacheCount = 0;
 static int thinkingVariants = 1;
 static int jokeCount = 0;
 static struct {
-  int jokeIndex;
   int16_t *pcm;
   uint32_t samples;
-} jokeSlot = {-1, nullptr, 0};
+} jokeSlot = {nullptr, 0};
 
 // One PSRAM block: 44-byte WAV header followed by PCM, so the serial
 // dump and the HTTP body read from the same contiguous bytes.
@@ -816,7 +815,6 @@ static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
       uint32_t samples = 0;
       if (fetchVoiceWav("joke", idx, &pcm, &samples)) {
         if (jokeSlot.pcm) free(jokeSlot.pcm);
-        jokeSlot.jokeIndex = idx;
         jokeSlot.pcm = pcm;
         jokeSlot.samples = samples;
         Serial.printf("[voice] joke %d (%u samples)\n", idx,
@@ -827,10 +825,12 @@ static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
     lv_timer_handler();
     delay(60);
   }
-  if (!statusLine.startsWith("HTTP/")) return false;
+  if (!statusLine.startsWith("HTTP/") || statusLine.length() > 256)
+    return false;
   status = statusLine.substring(9, 12).toInt();
   while (millis() < deadline) {  // headers
     String line = client.readStringUntil('\n');
+    if (line.length() > 1024) return false;  // hostile header flood
     line.trim();
     if (!line.length()) break;
   }
@@ -914,6 +914,9 @@ static void sendToDrawBox() {
   String transcript = jsonField(body, "transcript");
   resultOk = jsonField(body, "ok") == "true";
   resultVoiceKey = jsonField(body, "voice_key");
+  // A hostile/buggy server could stuff kilobytes into these; the LVGL
+  // label pool is 48 KB and an allocation failure halts the box.
+  if (transcript.length() > 120) transcript = transcript.substring(0, 120);
   if (resultOk) {
     resultTitle = jsonField(body, "message");
     if (!resultTitle.length()) resultTitle = "Here it comes!";
@@ -922,6 +925,7 @@ static void sendToDrawBox() {
     if (!resultTitle.length()) resultTitle = "Something went wrong";
   }
   resultDetail = transcript;
+  if (resultTitle.length() > 96) resultTitle = resultTitle.substring(0, 96);
   Serial.printf("[result] ok=%d transcript=\"%s\"\n",
                 resultOk ? 1 : 0, transcript.c_str());
 }
@@ -1015,7 +1019,7 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
     delay(10);
   }
   String statusLine = client.readStringUntil('\n');
-  if (!statusLine.startsWith("HTTP/")) {
+  if (!statusLine.startsWith("HTTP/") || statusLine.length() > 256) {
     client.stop();
     return false;
   }
@@ -1027,6 +1031,10 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
   }
   while (millis() < deadline) {
     String line = client.readStringUntil('\n');
+    if (line.length() > 1024) {
+      client.stop();
+      return false;
+    }
     line.trim();
     if (!line.length()) break;
   }
@@ -1098,6 +1106,13 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
   return true;
 }
 
+// Total PSRAM budget for cached clips: the wav buffer and LVGL also live
+// there, and a hostile server could otherwise fill every slot with
+// max-length audio.
+#define VOICE_CACHE_BUDGET_BYTES (3u * 1024u * 1024u)
+static uint32_t voiceCacheBytes = 0;
+static bool voiceCacheFull = false;
+
 static bool voiceLineCached(const char *key, uint8_t variant) {
   for (int i = 0; i < voiceCacheCount; i++) {
     if (voiceCache[i].variant == variant &&
@@ -1116,6 +1131,13 @@ static void cacheVoiceLine(const char *key, uint8_t variant) {
     Serial.printf("[voice] fetch failed for %s\n", key);
     return;
   }
+  if (voiceCacheBytes + samples * 2 > VOICE_CACHE_BUDGET_BYTES) {
+    Serial.printf("[voice] cache budget reached, skipping %s\n", key);
+    voiceCacheFull = true;  // retrying can't help; stop the idle refetch
+    free(pcm);
+    return;
+  }
+  voiceCacheBytes += samples * 2;
   VoiceLine &slot = voiceCache[voiceCacheCount++];
   strncpy(slot.key, key, sizeof(slot.key) - 1);
   slot.key[sizeof(slot.key) - 1] = '\0';
@@ -1190,7 +1212,7 @@ static void fetchVoiceManifest() {
     if (!voiceLineCached(PREFETCH_KEYS[i], 0)) complete = false;
   for (int v = 0; v < thinkingVariants && v < VOICE_CACHE_CAP; v++)
     if (!voiceLineCached("thinking", (uint8_t)v)) complete = false;
-  voiceCacheReady = complete;
+  voiceCacheReady = complete || voiceCacheFull;
   Serial.printf("[voice] cache %s (%d lines)\n",
                 complete ? "ready" : "incomplete, will retry",
                 voiceCacheCount);

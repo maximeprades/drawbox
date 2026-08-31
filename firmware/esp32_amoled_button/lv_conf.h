@@ -271,8 +271,10 @@
 #define LV_USE_ASSERT_OBJ           0   /*Check the object's type and existence (e.g. not deleted). (Slow)*/
 
 /*Add a custom handler when assert happens e.g. to restart the MCU*/
-#define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
-#define LV_ASSERT_HANDLER while(1);   /*Halt by default*/
+/*Reboot instead of hanging: a silent while(1) on allocation failure
+ *bricks the kid's box until someone pulls the plug.*/
+#define LV_ASSERT_HANDLER_INCLUDE <esp_system.h>
+#define LV_ASSERT_HANDLER esp_restart();
 
 /*-------------
  * Others

@@ -361,7 +361,10 @@ def redeem_pairing_code(code, device_name):
     devices = list_paired_devices()
     devices.append({
         "id": secrets.token_hex(6),
-        "name": (device_name or "").strip()[:64] or "New device",
+        # Control chars stripped: the name is echoed into the journal, and
+        # a newline would let a paired client forge log lines.
+        "name": re.sub(r"[\x00-\x1f\x7f]", "",
+                       (device_name or "")).strip()[:64] or "New device",
         "token_hash": _hash_secret(token),
         "created": datetime.now().isoformat(timespec="seconds"),
     })

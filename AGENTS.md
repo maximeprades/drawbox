@@ -1,5 +1,32 @@
 # AGENTS.md
 
+## The two boxes rule
+
+DrawBox has TWO kid-facing devices, and every user-facing feature must ship
+across both:
+
+1. **The Pi box** — Raspberry Pi 5 + arcade button + USB mic/speaker
+   (`drawbox.py`, the button daemon).
+2. **The ESP32 box** — Waveshare ESP32-S3-Touch-AMOLED-2.16 with an on-screen
+   face (`firmware/esp32_amoled_button/`). It records voice and POSTs to the
+   dashboard's `/api/voice/generate`; the Pi does everything else.
+
+Before calling a feature done, walk this checklist:
+
+- Behavior or pipeline changes belong in `drawbox_core.py` or the shared
+  web helpers so both boxes inherit them. Never fork logic per device.
+- Spoken personality (script lines, jokes, TTS voice) lives in the dashboard
+  scripts + `/api/voice/lines`; the ESP32 fetches it at boot. Text changes
+  need zero firmware work — but NEW line keys the box should speak need a
+  firmware prefetch/playback hookup.
+- New `/api/voice/generate` outcomes must carry a `voice_key` the box can play.
+- Printer/rendering changes go in `drawbox_escpos.py` (shared by both paths).
+- If the ESP32 needs new behavior, update the firmware, reflash over USB from
+  the Mac (`./firmware/esp32_amoled_button/build.sh flash <port>`), and verify
+  with the serial hooks (`t`/`d`/`p`/`b`/`s` at 115200).
+- Deploys: server files via scp + service restart (or `deploy-web.sh`), Pi's
+  `~/drawbox-repo` clone synced to main, ESP32 reflashed when firmware changed.
+
 ## Cursor Cloud specific instructions
 
 DrawBox targets a Raspberry Pi 5. Most hardware code cannot run on the cloud VM.
@@ -16,6 +43,11 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
   GPIO hardware, a USB mic, a USB speaker, and a printer. It cannot run here.
 - `check.sh` — a Pi health check. It looks for files in `~/` and checks the
   printer, GPIO, and audio devices. It is not useful on the VM.
+- `firmware/` — ESP32 sketches (the AMOLED voice button and the ATOM printer
+  bridge). Building needs `arduino-cli` + the esp32 core; flashing needs the
+  physical device over USB. The Python suite still covers the server side of
+  their contracts (`tests/test_voice_endpoint.py`, `tests/test_voice_lines.py`,
+  `tests/test_escpos_printer.py`), so endpoint changes are testable here.
 
 ### API keys and image generation
 - The dashboard starts and works without API keys. The safety filter, settings,

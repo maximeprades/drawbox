@@ -115,7 +115,9 @@ Flask web app at `http://drawbox.local:5000`. Runs as a separate systemd service
 | `/guide` | GET | Serves drawbox-guide.html |
 | `/simulator` | GET | Serves drawbox-simulator.html |
 | `/api/generate` | POST | Safety check → generate image → print |
-| `/api/voice/generate` | POST | Raw WAV body → Whisper → same gates/pipeline as `/api/generate` (ESP32 voice button) |
+| `/api/voice/generate` | POST | Raw WAV body → Whisper → same gates/pipeline as `/api/generate`; responses carry a `voice_key` naming the script line to speak (ESP32 voice button) |
+| `/api/voice/lines` | GET | Voice-line manifest: variant counts per script key, joke count, cache hash |
+| `/api/voice/line` | GET | One script line or joke (`?key=K&i=N`) as 16 kHz mono WAV, disk-cached beside the daemon's mp3 cache |
 | `/api/logs` | GET | SSE stream of journalctl |
 | `/api/settings` | GET/POST | Read/write settings |
 | `/api/diagnostics` | POST | Run allowlisted diagnostic commands |
@@ -226,13 +228,22 @@ and `escpos_serial` prints over a USB cable (`serial_port` /
 
 ### ESP32 voice button (second box)
 
-A standalone one-button remote on a Waveshare ESP32-S3-Touch-AMOLED-2.16
-(`firmware/esp32_amoled_button/`). Tap the on-screen button, speak, and it
-records 16 kHz WAV from the onboard mics and POSTs it to the dashboard's
-`/api/voice/generate` with a paired-device token. Transcription, safety,
-generation, and printing all run on the Pi, so the firmware stays a thin
-record-and-upload client. See the firmware README for setup and the
-serial test hooks.
+A standalone voice box on a Waveshare ESP32-S3-Touch-AMOLED-2.16
+(`firmware/esp32_amoled_button/`). The screen is an animated emoji face
+(LVGL + host-prerendered bitmaps); tapping it records 16 kHz WAV from the
+onboard mics and POSTs it to the dashboard's `/api/voice/generate` with a
+paired-device token. Transcription, safety, generation, and printing all
+run on the Pi, so the firmware stays a thin record-and-upload client.
+
+It speaks with the Pi box's exact personality: at boot it prefetches every
+dashboard voice line (and jokes on demand) from `/api/voice/lines` +
+`/api/voice/line` into PSRAM and plays them through its ES8311 codec at
+the same moments the button daemon speaks — ready, listening, a thinking
+variant, one joke while generating, and the `voice_key` line the server
+names in each response. Editing scripts or the TTS voice in the dashboard
+changes both boxes; the box re-fetches on every boot. Synthesized chirps
+remain only as a fallback when a line is missing. See the firmware README
+for setup, build, and the serial test hooks.
 
 ## Known Issues
 
