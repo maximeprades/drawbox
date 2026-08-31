@@ -78,6 +78,7 @@ class AgentSession:
         self._out_transcripts = {}   # response_id → accumulated text
         self._killed_responses = set()
         self._current_response = None
+        self._seen_input_items = set()
 
     async def handle_event(self, event):
         etype = event.get("type", "")
@@ -87,6 +88,15 @@ class AgentSession:
             self.last_activity = time.time()
         elif etype == "conversation.item.input_audio_transcription.completed":
             self.last_activity = time.time()
+            # xAI delivers transcription as cumulative snapshots and can
+            # emit more than one completed event per item; without dedup,
+            # one blocked utterance burns both strikes and one "authorize"
+            # opens two pairing windows.
+            item_id = event.get("item_id")
+            if item_id:
+                if item_id in self._seen_input_items:
+                    return
+                self._seen_input_items.add(item_id)
             await self._check_input(event.get("transcript") or "")
         elif etype == "response.created":
             self._current_response = \

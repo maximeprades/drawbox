@@ -29,12 +29,12 @@ from drawbox_core import (
     PLEASE_MODE_FILE, PRINT_LOG_FILE,
     OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
     SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
-    _write_secure_json, apply_api_keys, contains_poop, default_scripts,
+    _write_secure_json, apply_api_keys, content_block, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
-    device_for_token, generate_image, has_please, is_safe,
+    device_for_token, generate_image, has_please,
     is_valid_device_token, list_paired_devices, load_scripts,
     load_settings, log_print_event,
-    mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
+    mask_key, please_mode_enabled, poop_mode_enabled,
     print_image, redeem_pairing_code, revoke_paired_device,
     safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
     transcribe_audio,
@@ -442,16 +442,17 @@ def _voice_line(key):
 
 
 def _rejection_error(desc, blocked_message):
-    """Run the poop → safety → please gates.
+    """Run the content gates (via the shared ``content_block``), then please.
 
-    Returns ``(voice_key, message)`` or None. The check order matches the
-    button daemon's flow. ``blocked_message`` differs per caller: the
-    dashboard explains, the voice box uses the spoken script line.
+    Returns ``(voice_key, message)`` or None. ``blocked_message`` differs
+    per caller: the dashboard explains, the voice box uses the spoken
+    script line — so a plain blocklist hit keeps the caller's message.
     """
-    if not poop_mode_enabled() and contains_poop(desc):
-        return "poop_blocked", poop_blocked_message()
-    if safety_mode_enabled() and not is_safe(desc):
-        return "blocked", blocked_message
+    hit = content_block(desc)
+    if hit:
+        message = blocked_message if hit["voice_key"] == "blocked" \
+            else hit["say"]
+        return hit["voice_key"], message
     if please_mode_enabled() and not has_please(desc):
         return "say_please", _voice_line("say_please")
     return None
@@ -563,6 +564,15 @@ def _run_voice_job(job_id, desc):
         key = "busy" if code == "busy" else "error"
         result = {"ok": False, "transcript": desc, "error": _voice_line(key),
                   "code": code, "voice_key": key}
+    # Compare-and-swap: a job that outlived the staleness window (nothing
+    # bounds this thread — gunicorn's timeout doesn't apply to it) may have
+    # been taken over; a late unconditional write would clobber the new
+    # box's running slot and strand its result poll.
+    current = _read_voice_job()
+    if current and current.get("id") != job_id:
+        log.warning("voice job %s finished after takeover; result dropped",
+                    job_id)
+        return
     _write_secure_json(_voice_job_path(),
                        {"id": job_id, "status": "done", "ts": _time.time(),
                         "result": result})
@@ -693,10 +703,13 @@ def api_voice_result():
     capped) mostly so tests don't wait 90 s.
     """
     job_id = request.args.get("id", "")
+    # 110 s, not 90: the firmware's read deadline is 120 s (matching the
+    # legacy blocking flow) — a 90 s cutoff told kids "error" while a
+    # 90-120 s generation still printed.
     try:
-        timeout = min(90.0, max(0.0, float(request.args.get("timeout", 90))))
+        timeout = min(110.0, max(0.0, float(request.args.get("timeout", 110))))
     except (TypeError, ValueError):
-        timeout = 90.0
+        timeout = 110.0
     deadline = _time.time() + timeout
     while True:
         job = _read_voice_job()
@@ -1562,7 +1575,15 @@ def api_realtime_token():
 
 @app.route("/api/agent/draw", methods=["POST"])
 def api_agent_draw():
-    """Execute the agent's draw_coloring_page tool call (gated, async)."""
+    """Execute the agent's draw_coloring_page tool call (gated, async).
+
+    403 when conversation mode is off, like the token endpoint — this
+    path intentionally skips the please gate (etiquette lives in the
+    conversation), so it must not be reachable outside the mode.
+    """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
     data = _request_dict()
     if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400
@@ -1581,6 +1602,9 @@ def api_agent_intercept():
     admin side effects have already run server-side; ``ack_key`` (when
     synthesis worked) lets the box speak the exact line via /api/voice/clip.
     """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
     data = _request_dict()
     if data is None:
         return jsonify(ok=False, error="Invalid JSON body"), 400

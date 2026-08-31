@@ -562,6 +562,23 @@ def script_line(key):
     return text.split("\n")[0].strip()
 
 
+def content_block(text):
+    """THE content gate: poop check, then the blocklist — in that order.
+
+    Single owner of the ordering invariant for every flow (one-shot
+    daemon/web, the agent draw tool, conversation transcripts). Returns
+    None when the text is fine, else a hit dict with the script key and
+    spoken line. Add new content gates HERE, nowhere else.
+    """
+    if not poop_mode_enabled() and contains_poop(text):
+        return {"action": "blocked", "say": poop_blocked_message(),
+                "voice_key": "poop_blocked"}
+    if safety_mode_enabled() and not is_safe(text):
+        return {"action": "blocked", "say": script_line("blocked"),
+                "voice_key": "blocked"}
+    return None
+
+
 # ── SETTINGS ──────────────────────────────────────
 DEFAULT_COLORING_PROMPT = """Create a simple coloring page for children ages 3-8.
 This is used by YOUNG CHILDREN — output MUST be 100% child-safe.
@@ -872,6 +889,10 @@ ACK_SYSTEM_PROMPT = (
     "No emojis, no quotes, no questions — you are about to draw it."
 )
 ACK_MAX_CHARS = 120
+# The ack exists purely to feel fast; the OpenAI client's 600 s default
+# (times retries) would hang the whole press on a wedged connection. A
+# late ack is worthless — fail fast into the canned line.
+ACK_TIMEOUT_S = 8
 
 
 def generate_ack_text(transcript):
@@ -883,7 +904,9 @@ def generate_ack_text(transcript):
     apply_api_keys()
     if not client:
         raise RuntimeError("AI_GATEWAY_API_KEY not set")
-    completion = client.chat.completions.create(
+    completion = client.with_options(
+        timeout=ACK_TIMEOUT_S, max_retries=0,
+    ).chat.completions.create(
         model=ACK_MODEL,
         messages=[
             {"role": "system", "content": ACK_SYSTEM_PROMPT},
@@ -1225,10 +1248,9 @@ def execute_draw_tool(description):
     if len(desc) < 2:
         return {"ok": False,
                 "message": "Ask the child what they would like drawn first."}
-    if not poop_mode_enabled() and contains_poop(desc):
-        return {"ok": False, "message": poop_blocked_message()}
-    if safety_mode_enabled() and not is_safe(desc):
-        return {"ok": False, "message": script_line("blocked")}
+    hit = content_block(desc)
+    if hit:
+        return {"ok": False, "message": hit["say"]}
     if not _DRAW_TOOL_LOCK.acquire(blocking=False):
         return {"ok": False, "message": script_line("busy")}
 
@@ -1288,13 +1310,7 @@ def intercept_transcript(text):
             say = ("Pairing mode! The code is " + spoken_code
                    + ". Type it within two minutes.")
         return {"action": "pairing", "say": say, "voice_key": None}
-    if not poop_mode_enabled() and contains_poop(text):
-        return {"action": "blocked", "say": poop_blocked_message(),
-                "voice_key": "poop_blocked"}
-    if safety_mode_enabled() and not is_safe(text):
-        return {"action": "blocked", "say": script_line("blocked"),
-                "voice_key": "blocked"}
-    return None
+    return content_block(text)
 
 
 # ── ANALYTICS LOGGING ─────────────────────────────

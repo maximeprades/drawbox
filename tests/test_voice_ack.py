@@ -162,6 +162,23 @@ def test_job_slot_is_claimed_before_ack_synthesis(client, monkeypatch):
         f"/api/voice/result?id={body['job']}&timeout=10").get_json()["ok"]
 
 
+def test_late_job_result_does_not_clobber_takeover(client, monkeypatch):
+    """A job thread finishing after a stale-timeout takeover must not
+    overwrite the new job's running slot (compare-and-swap on the id)."""
+    import time as _t
+
+    import drawbox_web as web
+    _patch_generation(monkeypatch)
+    web._write_secure_json(web._voice_job_path(),
+                           {"id": "bbbb", "status": "running", "ts": _t.time()})
+
+    web._run_voice_job("aaaa", "a cat")  # the old job, finishing late
+
+    job = web._read_voice_job()
+    assert job["id"] == "bbbb"
+    assert job["status"] == "running"
+
+
 def test_voice_result_without_job_is_404(client):
     r = client.get("/api/voice/result?timeout=0")
     assert r.status_code == 404
@@ -189,6 +206,10 @@ def _ack_client(monkeypatch, content):
             self.chat = SimpleNamespace(
                 completions=SimpleNamespace(create=fake_create))
 
+        def with_options(self, **options):
+            seen["options"] = options
+            return self
+
     monkeypatch.setattr(drawbox_core, "OpenAI", FakeClient)
     drawbox_core.apply_api_keys()
     return seen
@@ -200,6 +221,9 @@ def test_generate_ack_text_returns_one_clean_line(drawbox_dir, monkeypatch):
         "Ooh, a purple dinosaur!"
     assert seen["model"] == drawbox_core.ACK_MODEL
     assert seen["messages"][1]["content"] == "a purple dinosaur"
+    # Fail-fast is the point of the ack: a late one is worthless.
+    assert seen["options"]["timeout"] == drawbox_core.ACK_TIMEOUT_S
+    assert seen["options"]["max_retries"] == 0
 
 
 def test_generate_ack_text_raises_on_empty_reply(drawbox_dir, monkeypatch):

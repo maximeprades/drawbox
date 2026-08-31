@@ -148,6 +148,21 @@ def test_two_blocklist_strikes_end_the_session(drawbox_dir):
     assert h.spoken.count("blocked") == 2
 
 
+def test_duplicate_transcription_snapshots_intercept_once(drawbox_dir, monkeypatch):
+    """xAI can emit multiple cumulative completed snapshots per item; one
+    utterance must not open two pairing windows or burn two strikes."""
+    monkeypatch.setattr(drawbox_core, "print_image",
+                        lambda p, printer_type=None: None)
+    h = Harness()
+    h.feed(
+        {"type": "conversation.item.input_audio_transcription.completed",
+         "item_id": "i1", "transcript": "authorize"},
+        {"type": "conversation.item.input_audio_transcription.completed",
+         "item_id": "i1", "transcript": "authorize"},
+    )
+    assert len([s for s in h.spoken if "Pairing mode!" in s]) == 1
+
+
 def test_admin_command_intercepted_deterministically(drawbox_dir, monkeypatch):
     monkeypatch.setattr(drawbox_core, "print_image",
                         lambda p, printer_type=None: None)

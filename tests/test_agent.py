@@ -129,6 +129,19 @@ def test_intercept_blocklist_and_clean_text(drawbox_dir):
     assert drawbox_core.intercept_transcript("a friendly dragon") is None
 
 
+def test_content_block_checks_poop_before_safety(drawbox_dir):
+    """The shared gate owns the ordering invariant: poop first, blocklist
+    second — matching the historical one-shot flow."""
+    drawbox_core.ensure_safety_mode_default()
+    drawbox_core.set_poop_mode_enabled(False)
+    hit = drawbox_core.content_block("a bloody poop monster")
+    assert hit["voice_key"] == "poop_blocked"
+    drawbox_core.set_poop_mode_enabled(True)
+    hit = drawbox_core.content_block("a bloody poop monster")
+    assert hit["voice_key"] == "blocked"
+    assert drawbox_core.content_block("a rainbow") is None
+
+
 # ── endpoints ─────────────────────────────────────
 
 class _FakeSecretResponse:
@@ -178,12 +191,23 @@ def test_realtime_token_without_xai_key_is_503(client, monkeypatch):
     assert r.get_json()["code"] == "no_key"
 
 
+def test_agent_endpoints_403_when_conversation_off(client):
+    """The draw path skips the please gate, so it must be unreachable
+    outside conversation mode — same 403 as the token endpoint."""
+    r = client.post("/api/agent/draw", json={"description": "a cat"})
+    assert r.status_code == 403
+    assert r.get_json()["code"] == "conversation_off"
+    r = client.post("/api/agent/intercept", json={"transcript": "a cat"})
+    assert r.status_code == 403
+
+
 def test_agent_draw_endpoint_gates_and_runs(client, monkeypatch):
     calls = {}
     monkeypatch.setattr(drawbox_web.drawbox_core, "generate_image",
                         lambda d, model=None: calls.setdefault("gen", d) or "p.png")
     monkeypatch.setattr(drawbox_web.drawbox_core, "print_image",
                         lambda p, printer_type=None: calls.setdefault("printed", p))
+    drawbox_core.save_settings({"conversation_mode": True})
     drawbox_core.ensure_safety_mode_default()
 
     blocked = client.post("/api/agent/draw",
@@ -198,6 +222,7 @@ def test_agent_draw_endpoint_gates_and_runs(client, monkeypatch):
 
 
 def test_agent_intercept_endpoint_returns_clip(client, monkeypatch):
+    drawbox_core.save_settings({"conversation_mode": True})
     monkeypatch.setattr(drawbox_core, "synthesize_speech",
                         lambda *a, **k: b"mp3bytes")
     real_run = drawbox_web.subprocess.run
