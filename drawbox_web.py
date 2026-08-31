@@ -563,6 +563,13 @@ def _run_voice_job(job_id, desc):
         key = "busy" if code == "busy" else "error"
         result = {"ok": False, "transcript": desc, "error": _voice_line(key),
                   "code": code, "voice_key": key}
+    # Only write if we still own the slot — a second box/worker may have
+    # claimed it; clobbering would leave the first firmware client stranded.
+    current = _read_voice_job()
+    if current and current.get("id") != job_id:
+        log.warning("voice job %s superseded by %s; dropping result",
+                    job_id, current.get("id"))
+        return
     _write_secure_json(_voice_job_path(),
                        {"id": job_id, "status": "done", "ts": _time.time(),
                         "result": result})
@@ -643,9 +650,15 @@ def _start_voice_job(transcript):
 
     The lock check is advisory (the job thread's non-blocking acquire is
     the real guard); it just spares the box an ack for a drawing that will
-    immediately report busy.
+    immediately report busy. The on-disk running check spans gunicorn
+    workers — `_gen_lock` alone does not.
     """
     if _gen_lock.locked():
+        return jsonify(ok=False, transcript=transcript,
+                       error=_voice_line("busy"), code="busy",
+                       voice_key="busy")
+    existing = _read_voice_job()
+    if existing and existing.get("status") == "running":
         return jsonify(ok=False, transcript=transcript,
                        error=_voice_line("busy"), code="busy",
                        voice_key="busy")

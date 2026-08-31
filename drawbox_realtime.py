@@ -69,13 +69,29 @@ class AgentSession:
         self._enqueue_audio = enqueue_audio
         self._clear_audio = clear_audio
         self.done = False
+        self.failed = False          # fatal server error → end + signal caller
         self.last_activity = time.time()
         self.block_strikes = 0
         self._out_transcripts = {}   # response_id → accumulated text
         self._killed_responses = set()
+        self._active_response_id = None
+        self._kill_pending = False   # kill the next response that appears
 
     async def handle_event(self, event):
         etype = event.get("type", "")
+        rid = event.get("response_id") or ""
+        if not rid and etype == "response.done":
+            rid = (event.get("response") or {}).get("id") or ""
+        if rid:
+            self._active_response_id = rid
+            if self._kill_pending:
+                already = rid in self._killed_responses
+                self._killed_responses.add(rid)
+                # Keep pending across late deltas of the in-flight response
+                # so the *next* response (the model's reply to the blocked
+                # words) is still caught.
+                if not already:
+                    self._kill_pending = False
         if etype == "input_audio_buffer.speech_started":
             self.last_activity = time.time()
         elif etype == "conversation.item.input_audio_transcription.completed":
@@ -100,6 +116,8 @@ class AgentSession:
                 (event.get("response") or {}).get("id"), None)
         elif etype == "error":
             log.warning("realtime error event: %s", event.get("error"))
+            self.failed = True
+            self.done = True
 
     async def _check_input(self, transcript):
         """The kid's words: admin commands first (side effects run in
@@ -109,8 +127,14 @@ class AgentSession:
         log.info("kid said: %r", transcript[:120])
         hit = drawbox_core.intercept_transcript(transcript)
         if not hit:
+            self._kill_pending = False
             return
         log.info("intercepted (%s) in conversation", hit["action"])
+        # response.cancel is a no-op under server VAD — the local kill set
+        # is what stops later audio deltas from reaching the speaker.
+        if self._active_response_id:
+            self._killed_responses.add(self._active_response_id)
+        self._kill_pending = True
         await self._kill_current_response()
         self._speak(hit["voice_key"] or hit["say"])
         if hit["action"] == "blocked":
@@ -217,7 +241,7 @@ class _Speaker:
                 log.warning("playback failed: %s", e)
 
 
-async def _run_session_async(voice):
+async def _run_session_async(voice, on_started):
     import sounddevice as sd
     import websockets
 
@@ -255,14 +279,17 @@ async def _run_session_async(voice):
         session = AgentSession(send, speak, speaker.enqueue, speaker.clear)
         await send({"type": "session.update", "session": config})
         speaker.start()
-        started = time.time()
+        t0 = time.time()
         log.info("conversation session started")
+        # Reuse one recv across iterations — websockets forbids concurrent
+        # recv(), and cancelling without awaiting leaves a live one behind.
+        recv_task = None
         try:
             with sd.InputStream(samplerate=MIC_RATE, channels=1,
                                 callback=mic_cb):
                 while not session.done:
                     now = time.time()
-                    if now - started > drawbox_core.AGENT_SESSION_MAX_S:
+                    if now - t0 > drawbox_core.AGENT_SESSION_MAX_S:
                         log.info("session cap reached")
                         break
                     if now - session.last_activity > IDLE_TIMEOUT_S:
@@ -270,24 +297,45 @@ async def _run_session_async(voice):
                         break
                     # Pump mic chunks and socket events, whichever is ready.
                     send_task = asyncio.create_task(mic_chunks.get())
-                    recv_task = asyncio.create_task(ws.recv())
-                    done, pending = await asyncio.wait(
+                    if recv_task is None:
+                        recv_task = asyncio.create_task(ws.recv())
+                    done, _pending = await asyncio.wait(
                         {send_task, recv_task}, timeout=1.0,
                         return_when=asyncio.FIRST_COMPLETED)
-                    for task in pending:
-                        task.cancel()
-                    if send_task in done:
+                    if send_task not in done:
+                        send_task.cancel()
+                        try:
+                            await send_task
+                        except asyncio.CancelledError:
+                            pass
+                    else:
                         await send({
                             "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(send_task.result()).decode(),
+                            "audio": base64.b64encode(
+                                send_task.result()).decode(),
                         })
                     if recv_task in done:
                         try:
                             event = json.loads(recv_task.result())
                         except (ValueError, TypeError):
+                            recv_task = None
                             continue
+                        recv_task = None
                         await session.handle_event(event)
+                        if session.failed:
+                            raise RuntimeError(
+                                f"realtime error event: {event.get('error')}")
+                        if event.get("type") == "session.updated":
+                            # Session is actually usable — mid-chat drops
+                            # after this must not fall back to one-shot.
+                            on_started()
         finally:
+            if recv_task is not None:
+                recv_task.cancel()
+                try:
+                    await recv_task
+                except asyncio.CancelledError:
+                    pass
             speaker.close()
     log.info("conversation session ended")
 
@@ -299,9 +347,15 @@ def run_session(voice):
     start — the caller falls back to the one-shot flow so a dead xAI
     session never bricks the button.
     """
+    started = False
+
+    def on_started():
+        nonlocal started
+        started = True
+
     try:
-        asyncio.run(_run_session_async(voice))
+        asyncio.run(_run_session_async(voice, on_started))
         return True
     except Exception as e:
         log.warning("conversation session failed: %s", e)
-        return False
+        return started
