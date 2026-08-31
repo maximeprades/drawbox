@@ -56,7 +56,7 @@ The native USB port doubles as a console at 115200:
 - `d` — dump the last recording as base64 WAV between marker lines
 - `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
 - `b` — speaker loopback self-test (plays a tone, reports the mic peak)
-- `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size)
+- `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size, version, volume, brightness)
 
 A full remote test from the Mac, no hands needed:
 
@@ -88,7 +88,13 @@ never use the ES8311's own mic path.
 ## Behavior notes
 
 - The recording window follows the dashboard's `record_seconds` setting
-  (fetched once at boot; defaults to 8 s if the fetch fails).
+  (fetched once at boot, then refreshed on each heartbeat; defaults to
+  8 s if the first fetch fails).
+- Every 60 s the box POSTs a heartbeat to `/api/device/heartbeat`
+  (`version`, WiFi RSSI, heap, PSRAM, voice-cache state). The dashboard
+  Devices panel shows that status.
+- Speaker volume and screen brightness follow Settings → ESP32 Box. Each
+  heartbeat applies the live values.
 - Both mics are captured; the louder channel is kept, so covering one mic
   doesn't mute the box.
 - Responses show the dashboard's own script lines ("Here it comes!",

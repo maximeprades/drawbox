@@ -54,6 +54,8 @@ def test_settings_get_returns_defaults(client):
     body = r.get_json()
     assert body["coloring_prompt"] == drawbox_core.DEFAULT_COLORING_PROMPT
     assert body["record_seconds"] == 10
+    assert body["esp32_volume"] == 85
+    assert body["esp32_brightness"] == 200
 
 
 def test_settings_post_resolves_tts_voice(client):
@@ -144,6 +146,32 @@ def test_settings_rejects_unsupported_baud(client):
     r = client.post("/api/settings", json={"serial_baud": 12345})
     assert r.status_code == 400
     assert client.get("/api/settings").get_json()["serial_baud"] == 19200
+
+
+def test_settings_esp32_fields_round_trip(client):
+    client.post("/api/settings", json={"esp32_volume": 40, "esp32_brightness": 128})
+    body = client.get("/api/settings").get_json()
+    assert body["esp32_volume"] == 40
+    assert body["esp32_brightness"] == 128
+
+
+def test_settings_rejects_esp32_volume_out_of_range(client):
+    client.post("/api/settings", json={"esp32_volume": 50})
+    assert client.post("/api/settings", json={"esp32_volume": -1}).status_code == 400
+    assert client.post("/api/settings", json={"esp32_volume": 101}).status_code == 400
+    assert client.get("/api/settings").get_json()["esp32_volume"] == 50
+
+
+def test_settings_rejects_esp32_brightness_out_of_range(client):
+    client.post("/api/settings", json={"esp32_brightness": 128})
+    assert client.post("/api/settings", json={"esp32_brightness": 9}).status_code == 400
+    assert client.post("/api/settings", json={"esp32_brightness": 256}).status_code == 400
+    assert client.get("/api/settings").get_json()["esp32_brightness"] == 128
+
+
+def test_settings_rejects_non_int_esp32_fields(client):
+    assert client.post("/api/settings", json={"esp32_volume": "loud"}).status_code == 400
+    assert client.post("/api/settings", json={"esp32_brightness": "bright"}).status_code == 400
 
 
 def test_settings_rejects_blank_or_non_string_serial_port(client):

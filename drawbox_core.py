@@ -36,6 +36,7 @@ SCRIPTS_FILE = DRAWBOX_DIR / "voice_scripts.json"
 CACHE_DIR = DRAWBOX_DIR / "voice_cache"
 PAIRING_FILE = DRAWBOX_DIR / "pairing.json"
 PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
+DEVICE_STATUS_FILE = DRAWBOX_DIR / "device_status.json"
 LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────
@@ -384,12 +385,19 @@ def list_paired_devices():
     return devices if isinstance(devices, list) else []
 
 
-def is_valid_device_token(token):
+def device_for_token(token):
+    """Return the paired-device entry whose token matches, or None."""
     if not token:
-        return False
+        return None
     token_hash = _hash_secret(token)
-    return any(hmac.compare_digest(d.get("token_hash", ""), token_hash)
-               for d in list_paired_devices())
+    for device in list_paired_devices():
+        if hmac.compare_digest(device.get("token_hash", ""), token_hash):
+            return device
+    return None
+
+
+def is_valid_device_token(token):
+    return device_for_token(token) is not None
 
 
 def revoke_paired_device(device_id):
@@ -535,6 +543,8 @@ DEFAULT_SETTINGS = {
     "serial_baud": 9600,
     "tcp_host": "drawbox-atom.local",
     "tcp_port": 9100,
+    "esp32_volume": 85,
+    "esp32_brightness": 200,
 }
 
 
