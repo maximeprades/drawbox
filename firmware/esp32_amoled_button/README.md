@@ -55,6 +55,7 @@ The native USB port doubles as a console at 115200:
 - `t` — simulate a button press (full record → upload → result cycle)
 - `d` — dump the last recording as base64 WAV between marker lines
 - `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
+- `b` — speaker loopback self-test (plays a tone, reports the mic peak)
 - `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size)
 
 A full remote test from the Mac, no hands needed:
@@ -63,6 +64,17 @@ A full remote test from the Mac, no hands needed:
 (sleep 3 && say "draw me a dinosaur") & \
     python3 dbx_serial.py /dev/cu.usbmodemXXXX 45 t 1
 ```
+
+## Sound
+
+The onboard ES8311 codec drives the little speaker on the same I2S bus
+as the mics (full duplex). The box plays synthesized chirps at state
+changes: a rising "your turn" cue when listening starts (it finishes
+before the mic opens, so recordings never contain it), a major arpeggio
+on success, a descending womp on errors, and a soft hello when it comes
+online. Upstream quirk worth knowing: the DAC power-up hides inside
+`es8311_microphone_config`, so that call is required even though we
+never use the ES8311's own mic path.
 
 ## Behavior notes
 

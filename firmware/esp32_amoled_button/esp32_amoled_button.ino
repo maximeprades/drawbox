@@ -28,6 +28,7 @@
 #include "Arduino_GFX_Library.h"
 #include "TouchDrvCSTXXX.hpp"
 #include "es7210.h"
+#include "es8311.h"
 #include "face_assets.h"
 #include "pin_config.h"
 #include "wifi_credentials.h"
@@ -61,6 +62,11 @@
 #define WAVE_COLOR lv_color_make(90, 200, 255)
 
 enum class AppState { WIFI_CONNECTING, IDLE, LISTENING, THINKING, RESULT };
+
+struct Note {
+  float freq;  // Hz; 0 = rest
+  uint16_t ms;
+};
 
 static const char *stateName(AppState s) {
   switch (s) {
@@ -374,12 +380,24 @@ static void applyState() {
   lv_refr_now(NULL);
 }
 
+static void chirpListen();
+static void chirpDone();
+static void chirpError();
+static void chirpHello();
+
 static void setState(AppState next) {
+  AppState prev = state;
   Serial.printf("[state] %s -> %s @%lums\n",
                 stateName(state), stateName(next), (unsigned long)millis());
   state = next;
   stateSince = millis();
   applyState();
+  // Sound follows the screen. The listen chirp finishes before recording
+  // starts (setState returns first), so the mic never hears it.
+  if (next == AppState::LISTENING) chirpListen();
+  else if (next == AppState::RESULT) resultOk ? chirpDone() : chirpError();
+  else if (next == AppState::IDLE && prev == AppState::WIFI_CONNECTING)
+    chirpHello();
 }
 
 // ── WAV ──────────────────────────────────────────
@@ -434,7 +452,8 @@ static bool micInit() {
   }
 
   i2s_config_t i2s_config = {};
-  i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  // Full duplex: RX from the ES7210 mics, TX to the ES8311 speaker DAC.
+  i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX);
   i2s_config.sample_rate = SAMPLE_RATE_HZ;
   i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   // Both slots: mic1 and mic2 arrive interleaved; recordAudio keeps the
@@ -460,7 +479,7 @@ static bool micInit() {
   pins.ws_io_num = PIN_ES7210_LRCK;
   pins.data_in_num = PIN_ES7210_DIN;
   pins.mck_io_num = PIN_ES7210_MCLK;
-  pins.data_out_num = I2S_PIN_NO_CHANGE;
+  pins.data_out_num = PIN_ES8311_DOUT;
 
   if (i2s_driver_install(I2S_CH, &i2s_config, 0, NULL) != ESP_OK ||
       i2s_set_pin(I2S_CH, &pins) != ESP_OK) {
@@ -469,6 +488,132 @@ static bool micInit() {
   }
   i2s_zero_dma_buffer(I2S_CH);
   return true;
+}
+
+// ── SPEAKER ──────────────────────────────────────
+// The ES8311 DAC shares the mic's I2S clocks (full duplex, one bus).
+
+#define SPEAKER_VOLUME 85
+
+static bool speakerInit() {
+  pinMode(PIN_PA, OUTPUT);
+  digitalWrite(PIN_PA, HIGH);
+  es8311_handle_t es = es8311_create(0, ES8311_ADDRRES_0);
+  if (!es) {
+    Serial.println("[spk] es8311 create failed");
+    return false;
+  }
+  const es8311_clock_config_t clk = {
+      .mclk_inverted = false,
+      .sclk_inverted = false,
+      .mclk_from_mclk_pin = true,
+      .mclk_frequency = SAMPLE_RATE_HZ * 256,
+      .sample_frequency = SAMPLE_RATE_HZ,
+  };
+  // microphone_config is misnamed upstream: it also powers up the DAC
+  // (SYSTEM_REG12) and bypasses its EQ. Without it the speaker is mute.
+  if (es8311_init(es, &clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) !=
+          ESP_OK ||
+      es8311_sample_frequency_config(es, clk.mclk_frequency,
+                                     clk.sample_frequency) != ESP_OK ||
+      es8311_microphone_config(es, false) != ESP_OK ||
+      es8311_voice_volume_set(es, SPEAKER_VOLUME, NULL) != ESP_OK) {
+    Serial.println("[spk] es8311 init failed");
+    return false;
+  }
+  return true;
+}
+
+// Renders and plays a note sequence: sine plus a soft second harmonic,
+// short attack, exponential decay. Blocks until the sound has actually
+// left the speaker: the TX DMA holds ~380 ms, so i2s_write alone returns
+// while the chirp is still playing — straight into the next recording,
+// which defeated the quiet gate (the mic heard the chirp at peak 32227).
+static void playChirp(const Note *notes, int count) {
+  static int16_t frame[512 * 2];
+  uint32_t t0 = millis();
+  uint32_t totalMs = 0;
+  for (int n = 0; n < count; n++) totalMs += notes[n].ms;
+  for (int n = 0; n < count; n++) {
+    uint32_t total = (uint32_t)notes[n].ms * SAMPLE_RATE_HZ / 1000;
+    float phase = 0.0f;
+    float step = 2.0f * PI * notes[n].freq / SAMPLE_RATE_HZ;
+    uint32_t done = 0;
+    while (done < total) {
+      uint32_t chunk = min((uint32_t)512, total - done);
+      for (uint32_t i = 0; i < chunk; i++) {
+        float t = (float)(done + i) / total;
+        float env = min(1.0f, (done + i) / (0.008f * SAMPLE_RATE_HZ)) *
+                    expf(-3.2f * t);
+        float s = notes[n].freq
+                      ? (sinf(phase) + 0.25f * sinf(2 * phase)) * env
+                      : 0.0f;
+        int16_t v = (int16_t)(s * 22000.0f);
+        frame[2 * i] = v;
+        frame[2 * i + 1] = v;
+        phase += step;
+      }
+      size_t written = 0;
+      i2s_write(I2S_CH, frame, chunk * 2 * sizeof(int16_t), &written,
+                pdMS_TO_TICKS(200));
+      done += chunk;
+    }
+  }
+  int32_t left = (int32_t)totalMs + 80 - (int32_t)(millis() - t0);
+  if (left > 0) delay(left);
+}
+
+static void chirpListen() {
+  static const Note seq[] = {{587, 110}, {880, 200}, {0, 90}};
+  playChirp(seq, 3);
+}
+
+static void chirpDone() {
+  static const Note seq[] = {{523, 110}, {659, 110}, {784, 240}};
+  playChirp(seq, 3);
+}
+
+static void chirpError() {
+  static const Note seq[] = {{330, 160}, {262, 280}};
+  playChirp(seq, 2);
+}
+
+static void chirpHello() {
+  static const Note seq[] = {{392, 90}, {523, 160}};
+  playChirp(seq, 2);
+}
+
+// Serial 'b': speaker loopback self-test. Plays a tone while reading the
+// mics on the same duplex bus in the same loop, so the RX window covers
+// the tone; a healthy speaker shows up as a big peak.
+static void beepSelfTest() {
+  static int16_t tx[512 * 2];
+  int16_t rx[512];
+  int16_t peak = 0;
+  float phase = 0.0f;
+  const float step = 2.0f * PI * 880.0f / SAMPLE_RATE_HZ;
+  const uint32_t total = SAMPLE_RATE_HZ * 7 / 10;
+  uint32_t done = 0;
+  while (done < total) {
+    uint32_t chunk = min((uint32_t)512, total - done);
+    for (uint32_t i = 0; i < chunk; i++) {
+      int16_t v = (int16_t)(sinf(phase) * 26000.0f);
+      tx[2 * i] = v;
+      tx[2 * i + 1] = v;
+      phase += step;
+    }
+    size_t written = 0, got = 0;
+    i2s_write(I2S_CH, tx, chunk * 2 * sizeof(int16_t), &written,
+              pdMS_TO_TICKS(200));
+    i2s_read(I2S_CH, rx, sizeof(rx), &got, pdMS_TO_TICKS(50));
+    for (size_t i = 0; i < got / 2; i++) {
+      if (rx[i] > peak) peak = rx[i];
+      if (-rx[i] > peak) peak = (int16_t)-rx[i];
+    }
+    done += chunk;
+  }
+  Serial.printf("[beep] played 880Hz, mic loopback peak=%d %s\n", peak,
+                peak > QUIET_PEAK ? "(speaker heard)" : "(NOT heard)");
 }
 
 // Records both mic slots interleaved, keeps the louder one as mono PCM
@@ -800,6 +945,8 @@ static void handleSerial() {
       else Serial.println("[dump] no recording yet");
     } else if (c == 'p') {
       dumpScreenshot();
+    } else if (c == 'b') {
+      beepSelfTest();
     } else if (c == 's') {
       printStatus();
     }
@@ -878,6 +1025,7 @@ void setup() {
   }
 
   if (!micInit()) lv_label_set_text(lblBig, "Mic init failed");
+  if (!speakerInit()) Serial.println("[boot] speaker unavailable");
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
