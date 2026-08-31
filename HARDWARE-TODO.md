@@ -17,6 +17,8 @@ the heap spike). Full design: `ARCHITECTURE.md`, and the PR description.
 
 ## 0. Preconditions
 
+- Check PR #39 for Bugbot comments newer than commit 35c07cb and address
+  them before merging (the five findings on 9a8916c are already fixed).
 - This branch is merged (or checked out) and you are on the home network.
 - `ping drawbox.local` answers; `ls /dev/cu.usbmodem*` shows the ESP32.
 - Ask the owner before restarting anything if the kids are mid-drawing.
