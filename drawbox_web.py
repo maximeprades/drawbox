@@ -2,6 +2,7 @@
 """DrawBox web dashboard — Flask control panel for the Pi."""
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -292,18 +293,18 @@ def _voice_line(key):
 
 
 def _rejection_error(desc, blocked_message):
-    """Run the poop → safety → please gates; return an error string or None.
+    """Run the poop → safety → please gates.
 
-    The check order matches the button daemon's flow. ``blocked_message``
-    differs per caller: the dashboard explains, the voice box uses the
-    spoken script line.
+    Returns ``(voice_key, message)`` or None. The check order matches the
+    button daemon's flow. ``blocked_message`` differs per caller: the
+    dashboard explains, the voice box uses the spoken script line.
     """
     if not poop_mode_enabled() and contains_poop(desc):
-        return poop_blocked_message()
+        return "poop_blocked", poop_blocked_message()
     if safety_mode_enabled() and not is_safe(desc):
-        return blocked_message
+        return "blocked", blocked_message
     if please_mode_enabled() and not has_please(desc):
-        return _voice_line("say_please")
+        return "say_please", _voice_line("say_please")
     return None
 
 
@@ -367,13 +368,13 @@ def api_generate():
         return jsonify(ok=False, error="Please describe what to draw.")
     if len(desc) > 500:
         return jsonify(ok=False, error="Description too long (max 500 chars).")
-    error = _rejection_error(
+    rejected = _rejection_error(
         desc,
         "That description contains blocked words. "
         "Try something fun like an animal or a rainbow!",
     )
-    if error:
-        return jsonify(ok=False, error=error)
+    if rejected:
+        return jsonify(ok=False, error=rejected[1])
 
     printer_type = data.get("printer_type")
     if printer_type is not None and printer_type not in PRINTER_TYPES:
@@ -396,7 +397,7 @@ def api_voice_generate():
     audio = request.get_data(cache=False)
     if len(audio) < VOICE_AUDIO_MIN_BYTES:
         return jsonify(ok=False, error=_voice_line("too_short"),
-                       code="too_short"), 400
+                       code="too_short", voice_key="too_short"), 400
     mime = request.mimetype or ""
     media_type = mime if mime.startswith("audio/") else "audio/wav"
     try:
@@ -404,23 +405,161 @@ def api_voice_generate():
     except Exception:
         log.exception("voice transcription failed")
         return jsonify(ok=False, error=_voice_line("error"),
-                       code="transcribe_failed"), 502
+                       code="transcribe_failed", voice_key="error"), 502
     transcript = (transcript or "").strip()
     if len(transcript) < 2:
         return jsonify(ok=False, transcript=transcript,
-                       error=_voice_line("too_short"), code="too_short")
-    error = _rejection_error(transcript, _voice_line("blocked"))
-    if error:
+                       error=_voice_line("too_short"), code="too_short",
+                       voice_key="too_short")
+    rejected = _rejection_error(transcript, _voice_line("blocked"))
+    if rejected:
+        voice_key, error = rejected
         return jsonify(ok=False, transcript=transcript, error=error,
-                       code="rejected")
+                       code="rejected", voice_key=voice_key)
     out = _generate_and_print(transcript[:500], source="esp32",
                               include_image=False)
     if not out.get("ok"):
         code = out.get("code", "generate_failed")
-        line = _voice_line("busy") if code == "busy" else _voice_line("error")
-        return jsonify(ok=False, transcript=transcript, error=line, code=code)
+        if code == "busy":
+            line, voice_key = _voice_line("busy"), "busy"
+        else:
+            line, voice_key = _voice_line("error"), "error"
+        return jsonify(ok=False, transcript=transcript, error=line, code=code,
+                       voice_key=voice_key)
     return jsonify(ok=True, transcript=transcript,
-                   message=_voice_line("printing"))
+                   message=_voice_line("printing"), voice_key="printing")
+
+
+def _variant_count(text):
+    n = sum(1 for ln in (text or "").split("\n") if ln.strip())
+    return max(1, n)
+
+
+def _line_variants(text):
+    return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+
+
+def _active_tts():
+    """Provider, voice id, and ElevenLabs knobs, matching the daemon."""
+    s = load_settings()
+    provider = s["voice_provider"]
+    if provider == "elevenlabs":
+        raw = s.get("elevenlabs_voice_id")
+        voice_id = raw.strip() if isinstance(raw, str) and raw.strip() else \
+            drawbox_core.DEFAULT_SETTINGS["elevenlabs_voice_id"]
+    elif provider == "grok":
+        raw = s.get("grok_voice_id")
+        voice_id = raw.strip() if isinstance(raw, str) and raw.strip() else \
+            drawbox_core.DEFAULT_SETTINGS["grok_voice_id"]
+    else:
+        voice_id = resolve_tts_voice(s.get("tts_voice_id"))
+    stability = max(0.0, min(1.0, float(s.get("tts_stability", 0.5))))
+    style = max(0.0, min(1.0, float(s.get("tts_style", 0.0))))
+    return provider, voice_id, stability, style
+
+
+def _voice_cache_hash(scripts, provider, voice_id, stability, style):
+    """12-hex digest the voice box uses to drop its on-device audio cache.
+
+    The payload is a JSON list so field order cannot drift: provider, voice,
+    ElevenLabs knobs, sorted voice-line texts, then jokes in list order.
+    """
+    payload = [
+        provider,
+        voice_id,
+        stability,
+        style,
+        [[k, scripts["voice_lines"][k]] for k in sorted(scripts["voice_lines"])],
+        scripts["jokes"],
+    ]
+    blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.md5(blob.encode()).hexdigest()[:12]
+
+
+def _write_bytes_atomic(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@app.route("/api/voice/lines")
+def api_voice_lines():
+    scripts = load_scripts()
+    provider, voice_id, stability, style = _active_tts()
+    body = {k: _variant_count(v) for k, v in scripts["voice_lines"].items()}
+    body["jokes"] = len(scripts["jokes"])
+    body["cache_hash"] = _voice_cache_hash(
+        scripts, provider, voice_id, stability, style)
+    return jsonify(body)
+
+
+@app.route("/api/voice/line")
+def api_voice_line():
+    key = request.args.get("key", "")
+    try:
+        index = int(request.args.get("i", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Unknown line"), 404
+    scripts = load_scripts()
+    if key == "joke":
+        items = scripts["jokes"]
+        if index < 0 or index >= len(items):
+            return jsonify(ok=False, error="Unknown line"), 404
+        text = items[index]
+    elif key in scripts["voice_lines"]:
+        items = _line_variants(scripts["voice_lines"][key])
+        if index < 0 or index >= len(items):
+            return jsonify(ok=False, error="Unknown line"), 404
+        text = items[index]
+    else:
+        return jsonify(ok=False, error="Unknown line"), 404
+
+    provider, voice_id, stability, style = _active_tts()
+    cache_key = drawbox_core.tts_cache_key(
+        text, provider, voice_id, stability, style)
+    cache_dir = drawbox_core.CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mp3_path = cache_dir / f"{cache_key}.mp3"
+    wav_path = cache_dir / f"{cache_key}.16k.wav"
+
+    if not mp3_path.exists():
+        try:
+            data = drawbox_core.synthesize_speech(
+                text, provider, voice_id, stability, style)
+            _write_bytes_atomic(mp3_path, data)
+        except Exception:
+            log.exception("voice line synthesis failed")
+            try:
+                mp3_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return jsonify(ok=False, error="Synthesis failed"), 503
+
+    if not wav_path.exists():
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(mp3_path),
+                 "-ar", "16000", "-ac", "1", "-f", "wav", str(wav_path)],
+                check=True, capture_output=True, timeout=30,
+            )
+        except Exception:
+            log.exception("voice line ffmpeg failed")
+            try:
+                wav_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return jsonify(ok=False, error="Synthesis failed"), 503
+
+    return send_file(wav_path, mimetype="audio/wav", max_age=0)
 
 @app.route("/api/last-image")
 def api_last_image():

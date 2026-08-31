@@ -1,9 +1,9 @@
 """DrawBox core — shared logic for the button script and the web dashboard.
 
 This module owns configuration on disk (API keys, settings, scripts, sentinels),
-the safety blocklist, image generation via Vercel AI Gateway, image post-
-processing, and analytics logging. Both ``drawbox.py`` and ``drawbox_web.py``
-import from here so behavior stays consistent.
+the safety blocklist, TTS synthesis, image generation via Vercel AI Gateway,
+image post-processing, and analytics logging. Both ``drawbox.py`` and
+``drawbox_web.py`` import from here so behavior stays consistent.
 """
 
 import base64
@@ -643,6 +643,97 @@ def transcribe_audio(data, media_type="audio/wav"):
     log.info("transcribed %dKB in %.1fs: %r",
              len(data) // 1024, time.time() - t0, text[:120])
     return text
+
+
+# ── TTS SYNTHESIS ─────────────────────────────────
+# Leading pause so a sleeping USB speaker wakes before the first syllable.
+# The cache key is computed from the raw text; only the provider request
+# gets the prefix. That keeps on-disk mp3 names identical to the daemon's.
+TTS_WAKE_PREFIX = "... "
+
+
+def tts_cache_key(text, provider, voice_id, stability=0.5, style=0.0):
+    """12-hex md5 prefix matching VoiceFeedback._tts_path on the Pi daemon.
+
+    Byte-identical keys are load-bearing: the web server must reuse the
+    daemon's on-disk mp3 cache. Formulas:
+      elevenlabs → "{voice_id}:{stability}:{style}:{text}"
+      grok       → "grok:{voice_id}:{text}"
+      gateway    → "{voice_id}:{text}"
+    """
+    if provider == "elevenlabs":
+        material = f"{voice_id}:{stability}:{style}:{text}"
+    elif provider == "grok":
+        material = f"grok:{voice_id}:{text}"
+    else:
+        material = f"{voice_id}:{text}"
+    return hashlib.md5(material.encode()).hexdigest()[:12]
+
+
+def synthesize_speech(text, provider, voice_id, stability=0.5, style=0.0,
+                      similarity_boost=0.75):
+    """Return mp3 bytes for ``text``, or raise.
+
+    Prepends TTS_WAKE_PREFIX for the provider request only. Callers own
+    caching via ``tts_cache_key`` on the raw text. Request shapes stay
+    byte-identical to the daemon's historical TTS posts.
+    """
+    import urllib.request
+
+    apply_api_keys()  # keys may have been updated via the dashboard
+    prefixed = TTS_WAKE_PREFIX + text
+    if provider == "elevenlabs":
+        if not ELEVENLABS_API_KEY:
+            raise RuntimeError(
+                "ELEVENLABS_API_KEY not set. "
+                "Add it via the web dashboard or the ELEVENLABS_API_KEY env var.")
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        payload = {
+            "text": prefixed,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": stability,
+                "similarity_boost": similarity_boost,
+                "style": style,
+                "use_speaker_boost": True,
+            },
+        }
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+    elif provider == "grok":
+        if not XAI_API_KEY:
+            raise RuntimeError(
+                "XAI_API_KEY not set. "
+                "Add it via the web dashboard or the XAI_API_KEY env var.")
+        url = "https://api.x.ai/v1/tts"
+        payload = {"text": prefixed, "voice_id": voice_id, "language": "en"}
+        headers = {
+            "Authorization": "Bearer " + XAI_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+    else:
+        if not AI_GATEWAY_API_KEY:
+            raise RuntimeError(
+                "AI_GATEWAY_API_KEY not set. "
+                "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+        reply = gateway_v4_post(
+            AI_GATEWAY_SPEECH_URL,
+            {"text": prefixed, "voice": voice_id, "outputFormat": "mp3"},
+            {
+                "ai-speech-model-specification-version": "4",
+                "ai-model-id": GATEWAY_TTS_MODEL,
+            },
+        )
+        return base64.b64decode(reply["audio"])
+
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read()
 
 
 # ── IMAGE GENERATION ──────────────────────────────

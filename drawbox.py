@@ -12,12 +12,9 @@ Hold for 5 seconds to reboot.
 """
 
 import base64
-import hashlib
-import json
 import logging
 import os
 import random
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -69,8 +66,6 @@ TTS_PROVIDER_KEYS = {
     "grok": "XAI_API_KEY",
 }
 
-_TTS_WAKE_PREFIX = "... "   # leading pause helps the USB speaker wake
-
 # ── VOICE LINES ─────────────────────────────────
 # Built from the shared defaults; the dashboard's Scripts page can override
 # either single strings or "one-per-line" pick-lists.
@@ -114,23 +109,6 @@ def _apply_tts_settings():
 _apply_tts_settings()
 
 
-# ── GATEWAY v4 AUDIO ────────────────────────────
-# The gateway's OpenAI-compatible /v1 surface has no audio routes; speech and
-# transcription speak the AI SDK's v4 protocol (bespoke headers, base64 JSON).
-
-def _gateway_v4_post(url, payload, model_headers):
-    """POST JSON to an AI Gateway v4 endpoint and return the parsed reply."""
-    import urllib.request
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {drawbox_core.AI_GATEWAY_API_KEY}",
-        "ai-gateway-protocol-version": drawbox_core.AI_GATEWAY_PROTOCOL_VERSION,
-        **model_headers,
-    })
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
-
-
 class VoiceFeedback:
     """Caches TTS lines as .mp3 keyed by content hash.
 
@@ -151,14 +129,13 @@ class VoiceFeedback:
     def _tts_path(self, text):
         """Cache filename keyed on provider + voice + tuning + text."""
         if self.provider == "elevenlabs":
-            # Byte-identical to the historical ElevenLabs format so existing
-            # on-disk caches stay valid.
-            key = f"{ELEVENLABS_VOICE_ID}:{TTS_STABILITY}:{TTS_STYLE}:{text}"
+            voice_id = ELEVENLABS_VOICE_ID
         elif self.provider == "grok":
-            key = f"grok:{GROK_VOICE_ID}:{text}"
+            voice_id = GROK_VOICE_ID
         else:
-            key = f"{TTS_VOICE_ID}:{text}"
-        h = hashlib.md5(key.encode()).hexdigest()[:12]
+            voice_id = TTS_VOICE_ID
+        h = drawbox_core.tts_cache_key(
+            text, self.provider, voice_id, TTS_STABILITY, TTS_STYLE)
         return CACHE_DIR / f"{h}.mp3"
 
     def _generate_one(self, text):
@@ -236,61 +213,28 @@ class VoiceFeedback:
             self._tts_rate_limit_logged = True
 
     def _gateway_tts(self, text, out_path):
-        if not drawbox_core.AI_GATEWAY_API_KEY:
-            raise RuntimeError("AI_GATEWAY_API_KEY not set")
-        reply = _gateway_v4_post(
-            drawbox_core.AI_GATEWAY_SPEECH_URL,
-            {
-                "text": _TTS_WAKE_PREFIX + text,
-                "voice": TTS_VOICE_ID,
-                "outputFormat": "mp3",
-            },
-            {
-                "ai-speech-model-specification-version": "4",
-                "ai-model-id": drawbox_core.GATEWAY_TTS_MODEL,
-            },
-        )
+        data = drawbox_core.synthesize_speech(
+            text, provider="gateway", voice_id=TTS_VOICE_ID,
+            stability=TTS_STABILITY, style=TTS_STYLE,
+            similarity_boost=TTS_SIMILARITY_BOOST)
         with open(out_path, "wb") as f:
-            f.write(base64.b64decode(reply["audio"]))
+            f.write(data)
 
     def _elevenlabs_tts(self, text, out_path):
-        self._fetch_audio(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
-            {
-                "text": _TTS_WAKE_PREFIX + text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": TTS_STABILITY,
-                    "similarity_boost": TTS_SIMILARITY_BOOST,
-                    "style": TTS_STYLE,
-                    "use_speaker_boost": True,
-                },
-            },
-            {"xi-api-key": drawbox_core.ELEVENLABS_API_KEY},
-            out_path,
-        )
+        data = drawbox_core.synthesize_speech(
+            text, provider="elevenlabs", voice_id=ELEVENLABS_VOICE_ID,
+            stability=TTS_STABILITY, style=TTS_STYLE,
+            similarity_boost=TTS_SIMILARITY_BOOST)
+        with open(out_path, "wb") as f:
+            f.write(data)
 
     def _grok_tts(self, text, out_path):
-        self._fetch_audio(
-            "https://api.x.ai/v1/tts",
-            {
-                "text": _TTS_WAKE_PREFIX + text,
-                "voice_id": GROK_VOICE_ID,
-                "language": "en",
-            },
-            {"Authorization": f"Bearer {drawbox_core.XAI_API_KEY}"},
-            out_path,
-        )
-
-    def _fetch_audio(self, url, payload, auth_headers, out_path):
-        import urllib.request
-        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-            **auth_headers,
-        })
-        with urllib.request.urlopen(req, timeout=30) as resp, open(out_path, "wb") as f:
-            shutil.copyfileobj(resp, f, length=8192)
+        data = drawbox_core.synthesize_speech(
+            text, provider="grok", voice_id=GROK_VOICE_ID,
+            stability=TTS_STABILITY, style=TTS_STYLE,
+            similarity_boost=TTS_SIMILARITY_BOOST)
+        with open(out_path, "wb") as f:
+            f.write(data)
 
     def warm_up(self):
         """Generate and cache every voice line and joke. Needs the network;
@@ -518,7 +462,7 @@ def transcribe(path):
             raise RuntimeError("AI_GATEWAY_API_KEY not set")
         with open(path, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode()
-        reply = _gateway_v4_post(
+        reply = drawbox_core.gateway_v4_post(
             drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL,
             # mediaType must match the bytes; record_audio writes WAV.
             {"audio": audio_b64, "mediaType": "audio/wav"},

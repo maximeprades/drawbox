@@ -135,7 +135,7 @@ def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, c
 def test_gateway_tts_http_429_triggers_rate_limit(monkeypatch, tmp_path, caplog):
     feedback = drawbox.VoiceFeedback()
     monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     attempts = []
 
     def rate_limited_urlopen(req, timeout=None):
@@ -157,7 +157,7 @@ def test_gateway_tts_http_429_triggers_rate_limit(monkeypatch, tmp_path, caplog)
 def test_gateway_tts_http_error_warns_without_rate_limit(monkeypatch, tmp_path, caplog):
     feedback = drawbox.VoiceFeedback()
     monkeypatch.setattr(drawbox, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
 
     def not_found_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
@@ -235,7 +235,7 @@ def test_play_falls_back_to_live_tts_for_uncached_key(monkeypatch):
 
 
 def test_transcribe_posts_wav_and_unlinks_recording(monkeypatch, tmp_path):
-    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     clip = tmp_path / "clip.wav"
     clip.write_bytes(b"RIFF-fake-wav")
 
@@ -272,7 +272,7 @@ def test_transcribe_posts_wav_and_unlinks_recording(monkeypatch, tmp_path):
 
 
 def test_transcribe_unlinks_recording_when_gateway_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(drawbox_core, "AI_GATEWAY_API_KEY", "vck-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     clip = tmp_path / "clip.wav"
     clip.write_bytes(b"RIFF-fake-wav")
 
