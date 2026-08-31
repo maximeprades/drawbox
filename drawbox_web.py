@@ -662,6 +662,13 @@ def _start_voice_job(transcript):
         return jsonify(ok=False, transcript=transcript,
                        error=_voice_line("busy"), code="busy",
                        voice_key="busy")
+    # Claim the slot BEFORE ack synthesis: the LLM + TTS round trips take
+    # seconds, plenty for a second box to pass the busy checks above and
+    # clobber this job (Bugbot round 2). The remaining check-to-claim race
+    # is sub-millisecond — fine for a household of two boxes.
+    job_id = secrets.token_hex(8)
+    _write_secure_json(_voice_job_path(),
+                       {"id": job_id, "status": "running", "ts": _time.time()})
     ack_key = None
     if load_settings()["natural_ack"]:
         try:
@@ -671,9 +678,6 @@ def _start_voice_job(transcript):
         except Exception:
             # Box falls back to its cached "thinking" line — never fatal.
             log.exception("ack synthesis failed")
-    job_id = secrets.token_hex(8)
-    _write_secure_json(_voice_job_path(),
-                       {"id": job_id, "status": "running", "ts": _time.time()})
     threading.Thread(target=_run_voice_job, args=(job_id, transcript),
                      daemon=True).start()
     return jsonify(ok=True, transcript=transcript, ack_key=ack_key,

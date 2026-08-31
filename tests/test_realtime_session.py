@@ -18,10 +18,13 @@ class Harness:
         self.audio = b""
         self.cleared = 0
         self.session = drawbox_realtime.AgentSession(
-            self._send, self.spoken.append, self._enqueue, self._clear)
+            self._send, self._speak, self._enqueue, self._clear)
 
     async def _send(self, payload):
         self.sent.append(payload)
+
+    async def _speak(self, text):
+        self.spoken.append(text)
 
     def _enqueue(self, data):
         self.audio += data

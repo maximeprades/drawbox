@@ -57,10 +57,12 @@ def resample_to_pcm16(chunk, src_rate=MIC_RATE, dst_rate=AGENT_AUDIO_RATE):
 class AgentSession:
     """Protocol/policy half of a realtime session.
 
-    ``send`` is an async callable posting one JSON event to the socket;
-    ``speak`` plays a deterministic local line (cached key or dynamic
-    text) through the VoiceFeedback speaker; ``enqueue_audio`` /
-    ``clear_audio`` feed the playback queue.
+    ``send`` and ``speak`` are async callables: ``send`` posts one JSON
+    event to the socket; ``speak`` plays a deterministic local line
+    (cached key or dynamic text) through the VoiceFeedback speaker —
+    async so the blocking mpg123 playback runs in an executor and the
+    event loop keeps answering websocket pings meanwhile.
+    ``enqueue_audio`` / ``clear_audio`` feed the playback queue.
     """
 
     def __init__(self, send, speak, enqueue_audio, clear_audio):
@@ -128,7 +130,7 @@ class AgentSession:
             return
         log.info("intercepted (%s) in conversation", hit["action"])
         await self._kill_current_response()
-        self._speak(hit["voice_key"] or hit["say"])
+        await self._speak(hit["voice_key"] or hit["say"])
         if hit["action"] == "blocked":
             self._strike()
 
@@ -144,7 +146,7 @@ class AgentSession:
             log.warning("agent output blocked: %r", text[-120:])
             self._killed_responses.add(response_id)
             await self._kill_current_response()
-            self._speak("blocked")
+            await self._speak("blocked")
             self._strike()
 
     async def _run_tool(self, event):
@@ -263,13 +265,19 @@ async def _run_session_async(voice, state):
         async def send(payload):
             await ws.send(json.dumps(payload))
 
-        def speak(key_or_text):
+        def _blocking_speak(key_or_text):
             # Cached keys play instantly; anything else (the pairing
             # message with its one-time code) synthesizes live.
             if key_or_text in drawbox_core.load_scripts()["voice_lines"]:
                 voice.play(key_or_text)
             else:
                 voice.play_dynamic(key_or_text)
+
+        async def speak(key_or_text):
+            # Executor keeps the event loop alive (websocket pings, frame
+            # buffering) while mpg123 blocks; the pump still waits, which
+            # preserves audio ordering after a moderation kill.
+            await loop.run_in_executor(None, _blocking_speak, key_or_text)
 
         session = AgentSession(send, speak, speaker.enqueue, speaker.clear)
         await send({"type": "session.update", "session": config})

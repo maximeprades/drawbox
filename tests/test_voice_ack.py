@@ -143,6 +143,25 @@ def test_ack_flow_refuses_while_another_job_runs(client, monkeypatch):
         f"/api/voice/result?id={body['job']}&timeout=10").get_json()["ok"]
 
 
+def test_job_slot_is_claimed_before_ack_synthesis(client, monkeypatch):
+    """The running slot must exist while the (seconds-long) ack synthesis
+    runs, or a concurrent request slips past the busy check."""
+    _patch_generation(monkeypatch)
+    seen = {}
+
+    def ack_probe(_transcript):
+        job = drawbox_web._read_voice_job()
+        seen["status_during_ack"] = job and job.get("status")
+        raise RuntimeError("skip synthesis")
+
+    monkeypatch.setattr(drawbox_core, "generate_ack_text", ack_probe)
+
+    body = _post_audio(client).get_json()
+    assert seen["status_during_ack"] == "running"
+    assert client.get(
+        f"/api/voice/result?id={body['job']}&timeout=10").get_json()["ok"]
+
+
 def test_voice_result_without_job_is_404(client):
     r = client.get("/api/voice/result?timeout=0")
     assert r.status_code == 404
