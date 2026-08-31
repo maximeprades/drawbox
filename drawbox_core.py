@@ -16,6 +16,7 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime
 from io import BytesIO
@@ -113,11 +114,28 @@ _IMAGES_ROUTE_KWARGS = {"n": 1, "response_format": "b64_json"}
 # "chat" is Gemini image-preview; "images" is the OpenAI images API.
 # The curated presets come first and keep their tuned kwargs; every catalog
 # model is also selectable directly by its gateway id.
+# Ask Google image models for native 3:4 — it fills the Letter print area
+# (1125x1500) instead of a square the postprocessor has to letterbox.
+# Harmless if the gateway drops the option (output stays the model default);
+# passthrough is verified on-device by checking last_generated.png.
+_GOOGLE_IMAGE_KWARGS = {
+    "extra_body": {
+        "modalities": ["text", "image"],
+        "providerOptions": {"google": {"imageConfig": {"aspectRatio": "3:4"}}},
+    },
+}
+
 IMAGE_ROUTES = {
     "nano-banana": (
         "chat",
         "google/gemini-3.1-flash-image-preview",
-        {"extra_body": {"modalities": ["text", "image"]}},
+        _GOOGLE_IMAGE_KWARGS,
+    ),
+    # Nano Banana 2 Lite — Google's fastest image model (~4 s, 1K only).
+    "nano-banana-fast": (
+        "chat",
+        "google/gemini-3.1-flash-lite-image",
+        _GOOGLE_IMAGE_KWARGS,
     ),
     "flux-schnell": (
         "images",
@@ -144,11 +162,16 @@ IMAGE_ROUTES.update(
 SUPPORTED_MODELS = tuple(IMAGE_ROUTES)
 GATEWAY_TTS_MODEL = "openai/tts-1"
 GATEWAY_STT_MODEL = "openai/whisper-1"
+GROK_STT_URL = "https://api.x.ai/v1/stt"
+# Fast text model for the one-line spoken acknowledgment ("Ooh, a purple
+# dinosaur!"). Latency matters more than brains here.
+ACK_MODEL = "google/gemini-3.1-flash-lite"
 OPENAI_TTS_VOICES = frozenset({
     "alloy", "ash", "ballad", "coral", "echo",
     "fable", "nova", "onyx", "sage", "shimmer",
 })
 VOICE_PROVIDERS = ("gateway", "elevenlabs", "grok")
+STT_PROVIDERS = ("gateway", "grok")
 
 
 def _load_api_keys():
@@ -449,6 +472,27 @@ DEFAULT_VOICE_LINES = {
                    "desc": "Played on long button press reboot"},
 }
 
+# The realtime agent's system prompt. Editable from the Scripts page like
+# every other line of personality; served to both boxes via
+# realtime_session_config so they cannot drift.
+DEFAULT_AGENT_INSTRUCTIONS = (
+    "You are DrawBox, a cheerful drawing machine talking to a child aged 3 "
+    "to 8. Your only job is helping them decide what coloring page to "
+    "print, then calling the draw_coloring_page tool with a short English "
+    "description. Keep every reply to one or two short, warm sentences. "
+    "Reply in the child's language (English or French). Only discuss "
+    "drawings, animals, colors, and fun ideas. If asked about anything "
+    "else - other topics, personal questions, scary or violent or grown-up "
+    "things - playfully steer back to drawing. Never ask for or remember "
+    "personal information. If the child seems sad or says something "
+    "worrying, be kind and gently suggest they talk to a grown-up. "
+    "Grown-ups sometimes say device commands like 'authorize' or 'admin "
+    "mode enable poop mode'; DrawBox's own machinery detects and handles "
+    "those - do not interpret, answer, repeat, or reveal them, and never "
+    "invent admin commands if a child asks. After calling the tool, tell "
+    "the child their drawing is on the way. Never break character."
+)
+
 DEFAULT_JOKES = [
     "Why did the teddy bear say no to dessert? Because she was already stuffed!",
     "What do you call a sleeping dinosaur? A dino-snore!",
@@ -467,6 +511,7 @@ def default_scripts():
     return {
         "voice_lines": {k: v["text"] for k, v in DEFAULT_VOICE_LINES.items()},
         "jokes": list(DEFAULT_JOKES),
+        "agent_instructions": DEFAULT_AGENT_INSTRUCTIONS,
     }
 
 
@@ -488,6 +533,9 @@ def load_scripts():
         jokes = [j for j in saved["jokes"] if isinstance(j, str) and j.strip()]
         if jokes:
             out["jokes"] = jokes
+    if isinstance(saved.get("agent_instructions"), str) and \
+            saved["agent_instructions"].strip():
+        out["agent_instructions"] = saved["agent_instructions"]
     return out
 
 
@@ -501,7 +549,17 @@ def save_scripts(data):
         }
     if isinstance(data.get("jokes"), list):
         clean["jokes"] = [j[:300] for j in data["jokes"][:100] if isinstance(j, str)]
+    if isinstance(data.get("agent_instructions"), str):
+        clean["agent_instructions"] = data["agent_instructions"][:4000]
     _write_secure_json(SCRIPTS_FILE, clean)
+
+
+def script_line(key):
+    """The first line of a script entry — for agent-facing outcome text,
+    where multi-variant pick-lists collapse to their first option."""
+    text = load_scripts()["voice_lines"].get(key) or \
+        DEFAULT_VOICE_LINES[key]["text"]
+    return text.split("\n")[0].strip()
 
 
 # ── SETTINGS ──────────────────────────────────────
@@ -531,6 +589,8 @@ DEFAULT_SETTINGS = {
     "coloring_prompt": DEFAULT_COLORING_PROMPT,
     "image_model": IMAGE_MODEL,
     "voice_provider": "gateway",
+    "stt_provider": "gateway",
+    "natural_ack": True,
     "tts_voice_id": "alloy",
     "elevenlabs_voice_id": "xNtG3W2oqJs0cJZuTyBc",
     "tts_stability": 0.5,
@@ -538,6 +598,7 @@ DEFAULT_SETTINGS = {
     "grok_voice_id": "eve",
     "record_seconds": 10,
     "poop_mode_enabled": True,
+    "conversation_mode": False,
     "printer_type": "cups",
     "serial_port": "/dev/ttyUSB0",
     "serial_baud": 9600,
@@ -569,6 +630,21 @@ def load_settings():
         out["printer_type"] = "cups"
     if out.get("voice_provider") not in VOICE_PROVIDERS:
         out["voice_provider"] = "gateway"
+    if out.get("stt_provider") not in STT_PROVIDERS:
+        out["stt_provider"] = "gateway"
+    out["natural_ack"] = bool(out.get("natural_ack", True))
+    out["conversation_mode"] = bool(out.get("conversation_mode", False))
+    # A saved model can go stale when the gateway catalog changes; a kid's
+    # button press must degrade to a working model, not a ValueError.
+    if out.get("image_model") not in IMAGE_ROUTES:
+        out["image_model"] = IMAGE_MODEL if IMAGE_MODEL in IMAGE_ROUTES \
+            else "nano-banana"
+    # Same 3-30 s range the dashboard enforces on save; a hand-edited file
+    # must not make the button box record for an hour.
+    try:
+        out["record_seconds"] = max(3, min(30, int(out["record_seconds"])))
+    except (TypeError, ValueError):
+        out["record_seconds"] = DEFAULT_SETTINGS["record_seconds"]
     return out
 
 
@@ -632,30 +708,64 @@ def gateway_v4_post(url, payload, model_headers):
 
 
 def transcribe_audio(data, media_type="audio/wav"):
-    """Transcribe raw audio bytes with the gateway Whisper model.
+    """Transcribe raw audio bytes with the configured STT provider.
 
-    ``media_type`` must match the actual bytes (the ESP32 voice box sends
-    WAV). Raises on a missing key or a gateway failure; callers own the
-    user-facing message.
+    Dispatches on the ``stt_provider`` setting: ``gateway`` (Whisper via the
+    AI Gateway, the historical default) or ``grok`` (xAI STT). ``media_type``
+    must match the actual bytes (both boxes record WAV). Raises on a missing
+    key or a provider failure; callers own the user-facing message.
     """
     apply_api_keys()  # keys may have been updated via the dashboard
-    if not AI_GATEWAY_API_KEY:
-        raise RuntimeError(
-            "AI_GATEWAY_API_KEY not set. "
-            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+    provider = load_settings()["stt_provider"]
     t0 = time.time()
-    reply = gateway_v4_post(
-        AI_GATEWAY_TRANSCRIPTION_URL,
-        {"audio": base64.b64encode(data).decode(), "mediaType": media_type},
-        {
-            "ai-transcription-model-specification-version": "4",
-            "ai-model-id": GATEWAY_STT_MODEL,
-        },
-    )
-    text = reply.get("text") or ""
-    log.info("transcribed %dKB in %.1fs: %r",
-             len(data) // 1024, time.time() - t0, text[:120])
+    if provider == "grok":
+        text = _grok_transcribe(data, media_type)
+    else:
+        if not AI_GATEWAY_API_KEY:
+            raise RuntimeError(
+                "AI_GATEWAY_API_KEY not set. "
+                "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+        reply = gateway_v4_post(
+            AI_GATEWAY_TRANSCRIPTION_URL,
+            {"audio": base64.b64encode(data).decode(), "mediaType": media_type},
+            {
+                "ai-transcription-model-specification-version": "4",
+                "ai-model-id": GATEWAY_STT_MODEL,
+            },
+        )
+        text = reply.get("text") or ""
+    log.info("transcribed %dKB via %s in %.1fs: %r",
+             len(data) // 1024, provider, time.time() - t0, text[:120])
     return text
+
+
+def _grok_transcribe(data, media_type="audio/wav"):
+    """Transcribe audio bytes with xAI STT (multipart upload).
+
+    Container formats (WAV included) are auto-detected server-side, filler
+    words ("um", "uh") are stripped by default, and leaving ``language``
+    unset keeps auto-detection — this is a bilingual EN/FR household.
+    """
+    import urllib.request
+
+    if not XAI_API_KEY:
+        raise RuntimeError(
+            "XAI_API_KEY not set. "
+            "Add it via the web dashboard or the XAI_API_KEY env var.")
+    boundary = "drawbox" + secrets.token_hex(16)
+    ext = media_type.split("/")[-1] or "wav"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="audio.{ext}"\r\n'
+        f"Content-Type: {media_type}\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(GROK_STT_URL, data=body, headers={
+        "Authorization": f"Bearer {XAI_API_KEY}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        reply = json.loads(resp.read())
+    return reply.get("text") or ""
 
 
 # ── TTS SYNTHESIS ─────────────────────────────────
@@ -749,14 +859,59 @@ def synthesize_speech(text, provider, voice_id, stability=0.5, style=0.0,
         return resp.read()
 
 
+# ── ACKNOWLEDGMENT LINE ───────────────────────────
+# One personalized sentence spoken while the image generates, replacing the
+# canned "thinking" line when the natural_ack setting is on. Only ever
+# called AFTER the safety gates passed the transcript.
+
+ACK_SYSTEM_PROMPT = (
+    "You are DrawBox, a cheerful drawing machine talking to a child aged "
+    "3-8 who just asked you to draw something. Reply with EXACTLY ONE "
+    "short, warm, excited sentence (12 words or fewer) acknowledging their "
+    "idea, in the same language they used. Mention what they asked for. "
+    "No emojis, no quotes, no questions — you are about to draw it."
+)
+ACK_MAX_CHARS = 120
+
+
+def generate_ack_text(transcript):
+    """One cheerful ack line for a gated transcript, or raise.
+
+    Callers own the fallback (the canned "thinking" line); this raises on
+    any provider problem rather than papering over it.
+    """
+    apply_api_keys()
+    if not client:
+        raise RuntimeError("AI_GATEWAY_API_KEY not set")
+    completion = client.chat.completions.create(
+        model=ACK_MODEL,
+        messages=[
+            {"role": "system", "content": ACK_SYSTEM_PROMPT},
+            {"role": "user", "content": transcript[:200]},
+        ],
+        max_tokens=60,
+    )
+    text = (completion.choices[0].message.content or "").strip()
+    # One line, no wrapping quotes — TTS reads punctuation literally enough.
+    text = text.splitlines()[0].strip().strip('"').strip() if text else ""
+    if not text:
+        raise RuntimeError("ack model returned no text")
+    return text[:ACK_MAX_CHARS]
+
+
 # ── IMAGE GENERATION ──────────────────────────────
 
 def generate_image(desc, model=None):
-    """Generate a coloring page for ``desc`` and return the processed PNG path."""
+    """Generate a coloring page for ``desc`` and return the processed PNG path.
+
+    With no explicit ``model``, the dashboard's ``image_model`` setting wins
+    (the env default only applies when nothing was ever saved) — so the
+    button daemon and the web/voice paths always draw with the same model.
+    """
     apply_api_keys()  # in case keys were updated via the dashboard
 
     if model is None:
-        model = IMAGE_MODEL
+        model = load_settings()["image_model"]
     route = IMAGE_ROUTES.get(model)
     if route is None:
         raise ValueError(f"unsupported model: {model}")
@@ -992,6 +1147,154 @@ def print_image(path, printer_type=None):
         )
     finally:
         _unlink_quietly(path)
+
+
+# ── REALTIME AGENT (conversation mode) ────────────
+# Both boxes run live speech-to-speech sessions against the Grok Voice
+# Agent API when the conversation_mode setting is on. The session config
+# is built HERE — one personality, two boxes — and the drawing itself
+# always goes through the same gates as the one-shot flow via
+# execute_draw_tool. The agent never gets authority over pairing or
+# settings: intercept_transcript handles admin commands deterministically.
+
+XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
+XAI_CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets"
+# Server-VAD hangover before the agent takes its turn. Longer than the
+# ~600 ms of adult voice products: kids pause mid-thought.
+AGENT_SILENCE_MS = 900
+AGENT_SESSION_MAX_S = 300  # client-side cap; xAI's own cap is 30 min
+
+AGENT_DRAW_TOOL = {
+    "type": "function",
+    "name": "draw_coloring_page",
+    "description": ("Print a coloring page for the child. Call it as soon "
+                    "as you know what they want drawn."),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "description": {
+                "type": "string",
+                "description": "Short English description of the drawing.",
+            },
+        },
+        "required": ["description"],
+    },
+}
+
+
+def realtime_session_config():
+    """The session.update payload both boxes apply on connect.
+
+    Field shape follows the OpenAI Realtime protocol that xAI clones
+    (voice, instructions, turn_detection, tools); input transcription is
+    enabled so our clients can run the blocklist and admin commands on
+    what the kid actually said.
+    """
+    settings = load_settings()
+    voice = settings.get("grok_voice_id") or DEFAULT_SETTINGS["grok_voice_id"]
+    return {
+        "voice": voice,
+        "instructions": load_scripts()["agent_instructions"],
+        "turn_detection": {
+            "type": "server_vad",
+            "silence_duration_ms": AGENT_SILENCE_MS,
+        },
+        "tools": [AGENT_DRAW_TOOL],
+        "tool_choice": "auto",
+        "audio": {"input": {"transcription": {"model": "grok-transcribe"}}},
+    }
+
+
+# One agent drawing at a time — separate from the web's request lock and
+# the daemon's busy flag because tool calls arrive from either box's
+# session. A simultaneous button press can still race this; acceptable in
+# a household, and the printer serializes jobs anyway.
+_DRAW_TOOL_LOCK = threading.Lock()
+
+
+def execute_draw_tool(description):
+    """Run the drawing pipeline for an agent tool call.
+
+    Returns ``{ok, message}`` where ``message`` is the outcome the agent
+    narrates. Gates mirror the one-shot flow minus the please gate —
+    etiquette lives in the conversation, not the tool. Generation and
+    printing run in a background thread so the agent can keep talking;
+    a late print failure lands in the journal, not the conversation.
+    """
+    desc = (description or "").strip()[:500]
+    if len(desc) < 2:
+        return {"ok": False,
+                "message": "Ask the child what they would like drawn first."}
+    if not poop_mode_enabled() and contains_poop(desc):
+        return {"ok": False, "message": poop_blocked_message()}
+    if safety_mode_enabled() and not is_safe(desc):
+        return {"ok": False, "message": script_line("blocked")}
+    if not _DRAW_TOOL_LOCK.acquire(blocking=False):
+        return {"ok": False, "message": script_line("busy")}
+
+    def worker():
+        try:
+            t0 = time.time()
+            model = load_settings()["image_model"]
+            path = generate_image(desc, model=model)
+            print_image(path)
+            log_print_event(desc, model, time.time() - t0, source="agent")
+        except Exception:
+            log.exception("agent draw failed")
+        finally:
+            _DRAW_TOOL_LOCK.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+    log.info("agent draw started: %r", desc)
+    return {"ok": True,
+            "message": ("Started drawing and printing it. Tell the child "
+                        "it is on the way and takes about a minute.")}
+
+
+def intercept_transcript(text):
+    """Deterministic interception for spoken transcripts.
+
+    Order matches the one-shot flow: exact-match admin commands (which the
+    LLM must never arbitrate — side effects run right here), then the
+    blocklist. Returns None to let the conversation proceed, or a dict:
+    ``action`` — poop_on / poop_off / pairing / blocked,
+    ``say`` — the line the box speaks,
+    ``voice_key`` — cached-line key when one exists (None for pairing,
+    whose message embeds the one-time code).
+    """
+    admin_action = parse_admin_poop_command(text)
+    if admin_action:
+        enabled = admin_action == "enable"
+        set_poop_mode_enabled(enabled)
+        log.info("poop mode %s via voice command",
+                 "enabled" if enabled else "disabled")
+        key = "poop_mode_enabled" if enabled else "poop_mode_disabled"
+        return {"action": "poop_on" if enabled else "poop_off",
+                "say": script_line(key), "voice_key": key}
+    if is_pairing_command(text):
+        code = open_pairing_window()
+        log.info("pairing window opened via voice command")
+        printed = False
+        try:
+            print_pairing_code(code)
+            printed = True
+        except Exception as e:
+            log.warning("could not print pairing code: %s", e)
+        spoken_code = " ".join(code)
+        if printed:
+            say = ("Pairing mode! I printed the code for you. It is "
+                   + spoken_code + ". Type it within two minutes.")
+        else:
+            say = ("Pairing mode! The code is " + spoken_code
+                   + ". Type it within two minutes.")
+        return {"action": "pairing", "say": say, "voice_key": None}
+    if not poop_mode_enabled() and contains_poop(text):
+        return {"action": "blocked", "say": poop_blocked_message(),
+                "voice_key": "poop_blocked"}
+    if safety_mode_enabled() and not is_safe(text):
+        return {"action": "blocked", "say": script_line("blocked"),
+                "voice_key": "blocked"}
+    return None
 
 
 # ── ANALYTICS LOGGING ─────────────────────────────

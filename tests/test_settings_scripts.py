@@ -42,6 +42,25 @@ def test_load_settings_clamps_unknown_voice_provider(drawbox_dir):
     assert drawbox_core.load_settings()["voice_provider"] == "gateway"
 
 
+def test_load_settings_clamps_stale_image_model(drawbox_dir, monkeypatch):
+    # A model removed from the gateway catalog must not brick the button.
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "dall-e-1"}))
+    monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "flux-schnell")
+    assert drawbox_core.load_settings()["image_model"] == "flux-schnell"
+    # And a garbage env default falls through to the safe preset.
+    monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "also-removed")
+    assert drawbox_core.load_settings()["image_model"] == "nano-banana"
+
+
+def test_load_settings_clamps_record_seconds(drawbox_dir):
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"record_seconds": 999}))
+    assert drawbox_core.load_settings()["record_seconds"] == 30
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"record_seconds": 1}))
+    assert drawbox_core.load_settings()["record_seconds"] == 3
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"record_seconds": "nope"}))
+    assert drawbox_core.load_settings()["record_seconds"] == 10
+
+
 def test_corrupted_settings_falls_back_to_defaults(drawbox_dir):
     drawbox_core.SETTINGS_FILE.write_text("not json")
     s = drawbox_core.load_settings()

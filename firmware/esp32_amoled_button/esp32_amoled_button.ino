@@ -16,6 +16,7 @@
  *   d  — dump the last recording as base64 WAV between marker lines
  *   p  — dump a screenshot of the live UI as base64 RGB565
  *   s  — print status (state, WiFi, heap, PSRAM, version, vol, bri)
+ *   w  — conversation-mode spike: WSS+TLS heap probe (realtime_spike.h)
  */
 
 #include <Arduino.h>
@@ -31,9 +32,10 @@
 #include "es8311.h"
 #include "face_assets.h"
 #include "pin_config.h"
+#include "realtime_spike.h"
 #include "wifi_credentials.h"
 
-#define FIRMWARE_VERSION "1.4.0"
+#define FIRMWARE_VERSION "1.6.0"
 
 // ── AUDIO ────────────────────────────────────────
 #define SAMPLE_RATE_HZ 16000
@@ -47,6 +49,11 @@
 // it), so quiet takes are rejected on-device. Speech at arm's length
 // peaks around 2000; ambient measured around 400.
 #define QUIET_PEAK 550
+// A chunk this loud means the kid started talking; once speech started,
+// this much quiet (in mono samples) ends the take early. 1.5 s because
+// kids pause mid-thought — the Pi box uses the same numbers.
+#define SPEECH_START_PEAK (2 * QUIET_PEAK)
+#define SILENCE_STOP_SAMPLES ((uint32_t)SAMPLE_RATE_HZ * 3 / 2)
 
 // ── HTTP ─────────────────────────────────────────
 // Generation takes 10–60 s; the server's gunicorn allows 120 s.
@@ -109,6 +116,9 @@ static bool resultOk = false;
 static String resultTitle;
 static String resultDetail;
 static String resultVoiceKey;
+// Cache key of a dynamic server-spoken clip (pairing message with the
+// one-time code, admin confirmations); wins over resultVoiceKey.
+static String resultAckKey;
 static volatile bool pressRequested = false;
 static volatile bool dismissRequested = false;
 
@@ -712,12 +722,15 @@ static size_t recordAudio(int seconds) {
 
   Serial.printf("[rec] start seconds=%d\n", seconds);
   i2s_zero_dma_buffer(I2S_CH);
+  bool speechStarted = false;
+  size_t lastLoudAt = 0;  // stereo sample index after the last loud chunk
   while (got < stereoSamples) {
     size_t want = min((size_t)READ_CHUNK_SAMPLES * 2, stereoSamples - got);
     size_t bytesRead = 0;
     i2s_read(I2S_CH, pcm + got, want * sizeof(int16_t), &bytesRead,
              pdMS_TO_TICKS(200));
     size_t n = bytesRead / sizeof(int16_t);
+    int16_t chunkPeak = 0;
     for (size_t i = 0; i < n; i++) {
       int16_t v = pcm[got + i];
       int slot = (got + i) & 1;
@@ -726,8 +739,22 @@ static size_t recordAudio(int seconds) {
       if (-v > peak[slot]) peak[slot] = (int16_t)-v;
       if (v > framePeak) framePeak = v;
       if (-v > framePeak) framePeak = (int16_t)-v;
+      if (v > chunkPeak) chunkPeak = v;
+      if (-v > chunkPeak) chunkPeak = (int16_t)-v;
     }
     got += n;
+    if (chunkPeak >= SPEECH_START_PEAK) {
+      speechStarted = true;
+      lastLoudAt = got;
+    }
+    // Stop early once the kid stopped talking (SILENCE_STOP_SAMPLES is
+    // mono; got counts stereo samples, hence the *2).
+    if (speechStarted && got - lastLoudAt >= SILENCE_STOP_SAMPLES * 2) {
+      Serial.printf("[rec] speech ended, stopping early at %.1fs\n",
+                    got / 2.0f / SAMPLE_RATE_HZ);
+      lv_arc_set_value(arcRing, 100);
+      break;
+    }
     if (millis() - lastFrame > 90) {
       // Fast attack, slow decay: the mouth pops open with the voice and
       // eases shut in pauses.
@@ -869,10 +896,81 @@ static bool readHttpResponse(WiFiClient &client, int &status, String &body) {
   return true;
 }
 
+// Speak the personalized ack from the server (fetched by cache key), or
+// fall back to the canned thinking line so the kid always hears something.
+static void playAckClip(const String &ackKey) {
+  if (ackKey.length() == 12) {
+    int16_t *pcm = nullptr;
+    uint32_t samples = 0;
+    String path = String("/api/voice/clip?k=") + ackKey;
+    if (fetchWavFromPath(path.c_str(), &pcm, &samples)) {
+      playPcm(pcm, samples);
+      free(pcm);
+      return;
+    }
+    Serial.println("[voice] ack fetch failed, using canned line");
+  }
+  playLine("thinking");
+}
+
+// Phase 2 of the ack flow: long-poll /api/voice/result for the outcome.
+// readHttpResponse pumps LVGL and tells a joke while waiting, same as the
+// legacy blocking call did.
+static void fetchVoiceResult(const String &jobId) {
+  IPAddress ip = resolveServer();
+  if (ip == IPAddress()) {
+    resultOk = false;
+    resultVoiceKey = "error";
+    resultTitle = "Can't find DrawBox";
+    return;
+  }
+  WiFiClient client;
+  client.setTimeout(HTTP_CONNECT_TIMEOUT_MS / 1000);
+  if (!client.connect(ip, DRAWBOX_PORT)) {
+    forgetServerIp();
+    resultOk = false;
+    resultVoiceKey = "error";
+    resultTitle = "DrawBox is offline";
+    return;
+  }
+  client.printf("GET /api/voice/result?id=%s HTTP/1.1\r\n"
+                "Host: %s:%d\r\n"
+                "Authorization: Bearer %s\r\n"
+                "Connection: close\r\n\r\n",
+                jobId.c_str(), DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN);
+  int status = 0;
+  String body;
+  bool gotReply = readHttpResponse(client, status, body);
+  client.stop();
+  Serial.printf("[http] result status=%d body=%s\n", status, body.c_str());
+  if (!gotReply) {
+    resultOk = false;
+    resultVoiceKey = "error";
+    resultTitle = "No answer";
+    resultDetail = "DrawBox took too long";
+    return;
+  }
+  resultOk = jsonField(body, "ok") == "true";
+  resultVoiceKey = jsonField(body, "voice_key");
+  if (resultOk) {
+    resultTitle = jsonField(body, "message");
+    if (!resultTitle.length()) resultTitle = "Here it comes!";
+  } else {
+    resultTitle = jsonField(body, "error");
+    if (!resultTitle.length()) resultTitle = "Something went wrong";
+  }
+  if (resultTitle.length() > 96) resultTitle = resultTitle.substring(0, 96);
+}
+
 // POST the recorded WAV; fills the result fields. Never throws/blocks
-// past the HTTP deadline.
+// past the HTTP deadline. With a >= 1.6.0 server the response comes back
+// as soon as the transcript clears the gates (carrying the ack clip key
+// and a job id); the final outcome then comes from /api/voice/result.
+// A response without a job id — old server, or any rejection — is parsed
+// as the final result directly, exactly like the legacy flow.
 static void sendToDrawBox() {
   resultVoiceKey = "";
+  resultAckKey = "";
   IPAddress ip = resolveServer();
   if (ip == IPAddress()) {
     resultOk = false;
@@ -899,6 +997,7 @@ static void sendToDrawBox() {
                 "Authorization: Bearer %s\r\n"
                 "Content-Type: audio/wav\r\n"
                 "Content-Length: %u\r\n"
+                "X-DrawBox-Ack: 1\r\n"
                 "Connection: close\r\n\r\n",
                 DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN, (unsigned)wavLen);
   for (size_t off = 0; off < wavLen; off += 4096) {
@@ -940,14 +1039,30 @@ static void sendToDrawBox() {
   // A hostile/buggy server could stuff kilobytes into these; the LVGL
   // label pool is 48 KB and an allocation failure halts the box.
   if (transcript.length() > 120) transcript = transcript.substring(0, 120);
+  resultDetail = transcript;
+
+  String jobId = jsonField(body, "job");
+  if (resultOk && jobId.length()) {
+    // Two-phase flow: generation is already running server-side. Speak
+    // the ack now — it lands inside generation time — then wait for the
+    // outcome (jokes included).
+    playAckClip(jsonField(body, "ack_key"));
+    fetchVoiceResult(jobId);
+    Serial.printf("[result] ok=%d transcript=\"%s\" (ack flow)\n",
+                  resultOk ? 1 : 0, transcript.c_str());
+    return;
+  }
+
   if (resultOk) {
     resultTitle = jsonField(body, "message");
     if (!resultTitle.length()) resultTitle = "Here it comes!";
   } else {
     resultTitle = jsonField(body, "error");
     if (!resultTitle.length()) resultTitle = "Something went wrong";
+    // Intercepted admin commands (pairing, poop toggle) carry a dynamic
+    // clip so the box can speak the exact server line.
+    resultAckKey = jsonField(body, "ack_key");
   }
-  resultDetail = transcript;
   if (resultTitle.length() > 96) resultTitle = resultTitle.substring(0, 96);
   Serial.printf("[result] ok=%d transcript=\"%s\"\n",
                 resultOk ? 1 : 0, transcript.c_str());
@@ -1014,8 +1129,8 @@ static bool skipExact(WiFiClient &client, size_t n, uint32_t deadline) {
   return true;
 }
 
-static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
-                          uint32_t *samples) {
+static bool fetchWavFromPath(const char *path, int16_t **pcm,
+                             uint32_t *samples) {
   *pcm = nullptr;
   *samples = 0;
   IPAddress ip = resolveServer();
@@ -1027,11 +1142,11 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
     return false;
   }
   uint32_t deadline = millis() + VOICE_FETCH_TIMEOUT_MS;
-  client.printf("GET /api/voice/line?key=%s&i=%d HTTP/1.1\r\n"
+  client.printf("GET %s HTTP/1.1\r\n"
                 "Host: %s:%d\r\n"
                 "Authorization: Bearer %s\r\n"
                 "Connection: close\r\n\r\n",
-                key, variant, DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN);
+                path, DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN);
 
   while (millis() < deadline && !client.available()) {
     if (!client.connected()) {
@@ -1048,7 +1163,7 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
   }
   int status = statusLine.substring(9, 12).toInt();
   if (status != 200) {
-    Serial.printf("[voice] HTTP %d for %s\n", status, key);
+    Serial.printf("[voice] HTTP %d for %s\n", status, path);
     client.stop();
     return false;
   }
@@ -1089,20 +1204,20 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
       memcpy(&rate, fmt + 4, 4);
       memcpy(&bits, fmt + 14, 2);
       if (rate != SAMPLE_RATE_HZ || channels != 1 || bits != 16) {
-        Serial.printf("[voice] bad wav %s: %u Hz %u ch %u bit\n", key,
+        Serial.printf("[voice] bad wav %s: %u Hz %u ch %u bit\n", path,
                       (unsigned)rate, (unsigned)channels, (unsigned)bits);
         break;
       }
       haveFmt = true;
     } else if (memcmp(ch, "data", 4) == 0) {
       if (sz > VOICE_MAX_BYTES) {
-        Serial.printf("[voice] clip too long for %s (%u bytes)\n", key,
+        Serial.printf("[voice] clip too long for %s (%u bytes)\n", path,
                       (unsigned)sz);
         break;
       }
       buf = (int16_t *)ps_malloc(sz ? sz : 1);
       if (!buf) {
-        Serial.printf("[voice] ps_malloc failed for %s\n", key);
+        Serial.printf("[voice] ps_malloc failed for %s\n", path);
         break;
       }
       if (sz && !readExact(client, (uint8_t *)buf, sz, deadline)) {
@@ -1127,6 +1242,13 @@ static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
   *pcm = buf;
   *samples = nSamples;
   return true;
+}
+
+static bool fetchVoiceWav(const char *key, int variant, int16_t **pcm,
+                          uint32_t *samples) {
+  char path[96];
+  snprintf(path, sizeof(path), "/api/voice/line?key=%s&i=%d", key, variant);
+  return fetchWavFromPath(path, pcm, samples);
 }
 
 // Total PSRAM budget for cached clips: the wav buffer and LVGL also live
@@ -1180,6 +1302,29 @@ static const char *const PREFETCH_KEYS[] = {
 static bool voiceCacheReady = false;
 static uint32_t lastVoiceAttempt = 0;
 static uint32_t lastHeartbeat = 0;
+// The server's 12-hex digest over provider, voice, and every script text.
+// It arrives in the /api/voice/lines manifest and in each heartbeat reply;
+// a change means the cached audio is stale and must be refetched.
+static String voiceCacheHash;
+static bool voiceCacheStale = false;
+
+// Drop every cached clip (the joke slot too) so the next manifest fetch
+// rebuilds the cache with the server's current audio.
+static void flushVoiceCache() {
+  for (int i = 0; i < voiceCacheCount; i++) {
+    if (voiceCache[i].pcm) free(voiceCache[i].pcm);
+    voiceCache[i].pcm = nullptr;
+  }
+  voiceCacheCount = 0;
+  voiceCacheBytes = 0;
+  voiceCacheFull = false;
+  voiceCacheReady = false;
+  if (jokeSlot.pcm) {
+    free(jokeSlot.pcm);
+    jokeSlot.pcm = nullptr;
+    jokeSlot.samples = 0;
+  }
+}
 
 static void fetchVoiceManifest() {
   lastVoiceAttempt = millis();
@@ -1210,6 +1355,17 @@ static void fetchVoiceManifest() {
     if (body.length() > 8192) break;
   }
   client.stop();
+  // Flush before prefetching when the scripts changed behind our back;
+  // fetchVoiceManifest is the only place that flushes, so a hash that
+  // changes and changes back between beats keeps the still-valid cache.
+  String hash = jsonField(body, "cache_hash");
+  if (hash.length() && hash != voiceCacheHash) {
+    if (voiceCacheCount > 0) {
+      Serial.println("[voice] scripts changed, dropping cached lines");
+      flushVoiceCache();
+    }
+    voiceCacheHash = hash;
+  }
   int tv = jsonField(body, "thinking").toInt();
   thinkingVariants = tv > 0 ? tv : 1;
   // The completeness check below must only demand what can fit next to
@@ -1325,6 +1481,13 @@ static void sendHeartbeat() {
   if (bri > 0) setScreenBrightness(bri);
   int rec = jsonField(body, "record_seconds").toInt();
   if (rec > 0) recordSeconds = min(max(rec, 3), MAX_RECORD_SECONDS);
+  // Flag only — handlePress also beats, and a full refetch there would
+  // stall the kid's upload. The idle loop does the actual refresh.
+  String hash = jsonField(body, "cache_hash");
+  if (hash.length() && voiceCacheHash.length() && hash != voiceCacheHash) {
+    Serial.println("[hb] voice scripts changed on server");
+    voiceCacheStale = true;
+  }
   Serial.printf("[hb] ok vol=%d bri=%d rec=%d\n", speakerVolume,
                 screenBrightness, recordSeconds);
 }
@@ -1346,14 +1509,28 @@ static void handlePress() {
     return;
   }
   setState(AppState::THINKING);
-  playLine("thinking");
+  // No canned line here: sendToDrawBox speaks the personalized ack (or
+  // the thinking fallback) as soon as the transcript clears the gates.
   // Generation can outlast the 150 s online window; beat once here so
   // a busy box never reads as offline in the dashboard.
   sendHeartbeat();
   sendToDrawBox();
   setState(AppState::RESULT);
-  if (resultOk) playLine("printing");
-  else playLine(resultVoiceKey.length() ? resultVoiceKey.c_str() : "error");
+  if (resultOk) {
+    playLine("printing");
+  } else if (resultAckKey.length() == 12) {
+    int16_t *pcm = nullptr;
+    uint32_t samples = 0;
+    String path = String("/api/voice/clip?k=") + resultAckKey;
+    if (fetchWavFromPath(path.c_str(), &pcm, &samples)) {
+      playPcm(pcm, samples);
+      free(pcm);
+    } else {
+      playLine(resultVoiceKey.length() ? resultVoiceKey.c_str() : "error");
+    }
+  } else {
+    playLine(resultVoiceKey.length() ? resultVoiceKey.c_str() : "error");
+  }
 }
 
 // ── SERIAL TEST HOOKS ────────────────────────────
@@ -1432,6 +1609,9 @@ static void handleSerial() {
       beepSelfTest();
     } else if (c == 's') {
       printStatus();
+    } else if (c == 'w') {
+      if (WiFi.status() == WL_CONNECTED) runRealtimeSpike();
+      else Serial.println("[spike] WiFi not connected");
     }
   }
 }
@@ -1555,8 +1735,12 @@ void loop() {
         setState(AppState::WIFI_CONNECTING);
         lastWifiAttempt = millis();
       } else {
-        if (!voiceCacheReady && millis() - lastVoiceAttempt > 30000)
+        if (voiceCacheStale) {
+          voiceCacheStale = false;
+          fetchVoiceManifest();  // sees the new hash, flushes, refetches
+        } else if (!voiceCacheReady && millis() - lastVoiceAttempt > 30000) {
           fetchVoiceManifest();
+        }
         if (millis() - lastHeartbeat > 60000) sendHeartbeat();
       }
       break;

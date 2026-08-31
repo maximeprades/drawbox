@@ -41,7 +41,11 @@ python3 -c "import gunicorn" 2>/dev/null || {
     echo "   Installing gunicorn..."
     sudo pip3 install --break-system-packages gunicorn
 }
-echo "   ✅ Flask + gunicorn ready"
+python3 -c "import websockets" 2>/dev/null || {
+    echo "   Installing websockets (conversation mode)..."
+    sudo pip3 install --break-system-packages websockets
+}
+echo "   ✅ Flask + gunicorn + websockets ready"
 
 # Clone repo for software updates (skip if already exists)
 if [ ! -d ~/drawbox-repo ]; then
