@@ -485,6 +485,16 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
       </div>
     </div>
 
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <div class="card-title">Devices</div>
+        <div class="card-desc">Raspberry Pi and paired boxes</div>
+      </div>
+      <div class="card-content" id="devicesList">
+        <div style="color:var(--muted-foreground);font-size:13px">Loading...</div>
+      </div>
+    </div>
+
     <div class="analytics-grid">
       <div class="card">
         <div class="card-header">
@@ -696,6 +706,20 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Record Duration (seconds)</label>
           <input class="input" type="number" id="cfgRecSec" min="3" max="30" style="max-width:120px" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">ESP32 Box</div></div>
+      <div class="card-content">
+        <div class="form-group">
+          <label class="form-label">Speaker volume: <span id="cfgEsp32VolVal">85</span></label>
+          <input type="range" id="cfgEsp32Vol" min="0" max="100" step="1" value="85" style="width:100%;max-width:300px" oninput="$('cfgEsp32VolVal').textContent=this.value" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Screen brightness: <span id="cfgEsp32BriVal">200</span></label>
+          <input type="range" id="cfgEsp32Bri" min="10" max="255" step="1" value="200" style="width:100%;max-width:300px" oninput="$('cfgEsp32BriVal').textContent=this.value" />
         </div>
       </div>
     </div>
@@ -1077,7 +1101,7 @@ function showPage(page) {
   });
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('show');
-  if (page === 'overview') loadAnalytics();
+  if (page === 'overview') { loadAnalytics(); refreshDevices(); }
   if (page === 'generate') loadLastImage();
   if (page === 'settings') { loadSettings(); loadPleaseMode(); loadSafetyMode(); loadPoopMode(); loadApiKeys(); loadPairedDevices(); }
   if (page === 'scripts') loadScripts();
@@ -1094,6 +1118,9 @@ function toggleSidebar() {
 }
 
 // ── STATUS ────────────────────────────────────
+let _piStatus = {online: false, temperature: '--', uptime: '--'};
+let _espDevices = [];
+
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
@@ -1110,10 +1137,93 @@ async function refreshStatus() {
       .replace(/(\d+)\s*minutes?/i, '$1m')
       .replace(/,\s*/g, ' ');
     $('ovUptime').textContent = ut;
+    _piStatus = {online: !!status, temperature: d.temperature || '--', uptime: ut};
+    renderDevices();
   } catch(e) {}
 }
 refreshStatus();
 setInterval(refreshStatus, 15000);
+
+function fmtLastSeen(s) {
+  if (s == null) return 'never seen';
+  if (s < 60) return 'last seen ' + s + 's ago';
+  return 'last seen ' + Math.floor(s / 60) + 'm ago';
+}
+
+function fmtMem(n) {
+  if (n == null) return '';
+  n = Number(n);
+  if (!Number.isFinite(n)) return '';
+  if (n >= 1024 * 1024) {
+    const mb = n / (1024 * 1024);
+    return (mb >= 10 ? Math.round(mb) : mb.toFixed(1)) + ' MB';
+  }
+  if (n >= 1024) {
+    const kb = n / 1024;
+    return (kb >= 10 ? Math.round(kb) : kb.toFixed(1)) + ' KB';
+  }
+  return n + ' B';
+}
+
+function deviceStatusBits(st) {
+  if (!st) return '';
+  const bits = [];
+  if (st.version) bits.push(esc(st.version));
+  if (st.ip) bits.push(esc(st.ip));
+  if (st.rssi != null) bits.push('\u2212' + esc(String(Math.abs(Number(st.rssi)))) + ' dBm');
+  if (st.cache_lines != null) bits.push(esc(String(st.cache_lines)) + ' lines');
+  const heap = fmtMem(st.heap);
+  if (heap) bits.push('heap ' + heap);
+  const psram = fmtMem(st.psram);
+  if (psram) bits.push('PSRAM ' + psram);
+  return bits.join(' \u00b7 ');
+}
+
+function renderDevices() {
+  const list = $('devicesList');
+  if (!list) return;
+  const piOn = !!_piStatus.online;
+  const piMeta = esc(_piStatus.temperature) + ' \u00b7 ' + esc(_piStatus.uptime);
+  let html =
+    '<div class="setting-row">' +
+      '<div class="setting-info">' +
+        '<div class="setting-name">' +
+          '<span class="dot ' + (piOn ? 'dot-green' : 'dot-red') + '"></span>Raspberry Pi ' +
+          '<span class="badge ' + (piOn ? 'badge-success' : 'badge-destructive') + '">' +
+            (piOn ? 'Online' : 'Offline') + '</span>' +
+        '</div>' +
+        '<div class="setting-desc">' + piMeta + '</div>' +
+      '</div>' +
+    '</div>';
+  html += (_espDevices || []).map(dev => {
+    const on = !!dev.online;
+    const seen = fmtLastSeen(dev.last_seen_s);
+    const bits = deviceStatusBits(dev.status);
+    return '<div class="setting-row">' +
+      '<div class="setting-info">' +
+        '<div class="setting-name">' +
+          '<span class="dot ' + (on ? 'dot-green' : 'dot-red') + '"></span>' + esc(dev.name) + ' ' +
+          '<span class="badge ' + (on ? 'badge-success' : 'badge-destructive') + '">' +
+            (on ? 'Online' : 'Offline') + '</span>' +
+        '</div>' +
+        '<div class="setting-desc">' + esc(seen) + (bits ? ' \u00b7 ' + bits : '') + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  list.innerHTML = html;
+}
+
+async function refreshDevices() {
+  if (!$('page-overview').classList.contains('active')) return;
+  try {
+    const r = await fetch('/api/devices');
+    const d = await r.json();
+    _espDevices = Array.isArray(d) ? d : [];
+    renderDevices();
+  } catch(e) {}
+}
+refreshDevices();
+setInterval(refreshDevices, 10000);
 
 // ── ANALYTICS ─────────────────────────────────
 async function loadAnalytics() {
@@ -1308,6 +1418,10 @@ async function loadSettings() {
     $('cfgGrokVoice').value = d.grok_voice_id || 'eve';
     updateVoiceProviderFields();
     $('cfgRecSec').value = d.record_seconds || 10;
+    $('cfgEsp32Vol').value = d.esp32_volume != null ? d.esp32_volume : 85;
+    $('cfgEsp32VolVal').textContent = d.esp32_volume != null ? d.esp32_volume : 85;
+    $('cfgEsp32Bri').value = d.esp32_brightness != null ? d.esp32_brightness : 200;
+    $('cfgEsp32BriVal').textContent = d.esp32_brightness != null ? d.esp32_brightness : 200;
     $('cfgPrinterType').value = d.printer_type;
     $('genPrinterType').value = d.printer_type;
     $('cfgSerialPort').value = d.serial_port;
@@ -1351,6 +1465,8 @@ async function saveSettings() {
     tts_style: parseFloat($('cfgStyle').value),
     grok_voice_id: $('cfgGrokVoice').value.trim(),
     record_seconds: parseInt($('cfgRecSec').value) || 10,
+    esp32_volume: parseInt($('cfgEsp32Vol').value),
+    esp32_brightness: parseInt($('cfgEsp32Bri').value),
     printer_type: $('cfgPrinterType').value,
     serial_port: $('cfgSerialPort').value.trim(),
     serial_baud: parseInt($('cfgSerialBaud').value),
@@ -1837,21 +1953,31 @@ async function rebootPi() {
 // ── PAIRED DEVICES ────────────────────────────
 async function loadPairedDevices() {
   try {
-    const r = await fetch('/api/pair/devices');
-    const d = await r.json();
+    const [pr, dr] = await Promise.all([
+      fetch('/api/pair/devices'),
+      fetch('/api/devices'),
+    ]);
+    const d = await pr.json();
+    const live = await dr.json();
+    const byId = {};
+    (Array.isArray(live) ? live : []).forEach(x => { byId[x.id] = x; });
     const list = $('pairedList');
     if (!d.devices || !d.devices.length) {
       list.textContent = 'No paired devices yet.';
       return;
     }
-    list.innerHTML = d.devices.map(dev =>
-      `<div class="setting-row">
+    list.innerHTML = d.devices.map(dev => {
+      const info = byId[dev.id] || {};
+      const on = !!info.online;
+      const seen = fmtLastSeen(info.last_seen_s);
+      return `<div class="setting-row">
         <div class="setting-info">
-          <div class="setting-name">${esc(dev.name)}</div>
-          <div class="setting-desc">Paired ${esc(dev.created || 'a while ago')}</div>
+          <div class="setting-name"><span class="dot ${on ? 'dot-green' : 'dot-red'}"></span>${esc(dev.name)}</div>
+          <div class="setting-desc">${esc(seen)} · Paired ${esc(dev.created || 'a while ago')}</div>
         </div>
         <button class="btn btn-outline btn-sm" onclick="revokeDevice('${esc(dev.id)}')">Revoke</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch(e) {}
 }
 

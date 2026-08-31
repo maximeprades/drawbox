@@ -30,8 +30,9 @@ from drawbox_core import (
     SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
     _write_secure_json, apply_api_keys, contains_poop, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
-    generate_image, has_please, is_safe, is_valid_device_token,
-    list_paired_devices, load_scripts, load_settings, log_print_event,
+    device_for_token, generate_image, has_please, is_safe,
+    is_valid_device_token, list_paired_devices, load_scripts,
+    load_settings, log_print_event,
     mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
     print_image, redeem_pairing_code, revoke_paired_device,
     safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
@@ -191,11 +192,12 @@ _PAIR_ATTEMPTS = {}
 _PAIR_HOURLY_LIMIT = 10
 
 
-def _pair_peer_ip():
-    """The TCP peer, not request.remote_addr: ProxyFix honors a client
+def _peer_ip():
+    """The TCP peer, not request.remote_addr: pairing throttle and
+    heartbeat IP both key off this. ProxyFix honors a client
     supplied X-Forwarded-For, which would hand every spoofed header a
-    fresh budget. Behind the tunnel this collapses to one shared budget,
-    which is fine — pairing is a rare, LAN-side ceremony."""
+    fresh identity. Behind the tunnel this collapses to one shared
+    peer, which is fine — pairing is a rare, LAN-side ceremony."""
     orig = request.environ.get("werkzeug.proxy_fix.orig") or {}
     return orig.get("REMOTE_ADDR") or request.remote_addr or ""
 
@@ -212,7 +214,7 @@ def _pair_throttled(ip):
 
 @app.route("/api/pair", methods=["POST"])
 def api_pair():
-    if _pair_throttled(_pair_peer_ip()):
+    if _pair_throttled(_peer_ip()):
         return jsonify(ok=False,
                        error="Too many attempts — wait a moment."), 429
     data = _request_dict()
@@ -248,6 +250,77 @@ def api_revoke_device(device_id):
     if not revoke_paired_device(device_id):
         return jsonify(ok=False, error="Unknown device"), 404
     return jsonify(ok=True)
+
+
+# ── DEVICE HEARTBEAT ─────────────────────────────
+# The ESP32 box posts here every 60 s. Stored in memory; a 150 s
+# silence is offline. The response carries the knobs the box should
+# apply (volume, brightness, record window).
+_DEVICE_STATUS = {}
+_DEVICE_ONLINE_S = 150
+
+
+def _optional_clamped_int(value, lo, hi):
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/api/device/heartbeat", methods=["POST"])
+def api_device_heartbeat():
+    device = device_for_token(_request_token())
+    if device is None:
+        return jsonify(ok=False, error="Not paired"), 401
+    body = _request_dict()
+    if body is None:
+        return jsonify(ok=False, error="Invalid JSON body"), 400
+    # Heap/PSRAM arrive in bytes; RSSI is dBm. The caps are what an
+    # ESP32-class board can actually report, so a garbage heartbeat
+    # can't blow out the dashboard.
+    rec = {
+        "version": str(body.get("version") or "")[:32],
+        "uptime_s": _optional_clamped_int(body.get("uptime_s"), 0, 10 * 365 * 24 * 3600),
+        "rssi": _optional_clamped_int(body.get("rssi"), -200, 20),
+        "heap": _optional_clamped_int(body.get("heap"), 0, 64 * 1024 * 1024),
+        "psram": _optional_clamped_int(body.get("psram"), 0, 64 * 1024 * 1024),
+        "cache_lines": _optional_clamped_int(body.get("cache_lines"), 0, 1_000_000),
+        "cache_ready": bool(body.get("cache_ready")),
+        "ip": _peer_ip(),
+        "ts": _time.time(),
+    }
+    _DEVICE_STATUS[device.get("id", "")] = rec
+    settings = load_settings()
+    return jsonify(ok=True,
+                   volume=settings["esp32_volume"],
+                   brightness=settings["esp32_brightness"],
+                   record_seconds=settings["record_seconds"])
+
+
+@app.route("/api/devices")
+def api_devices():
+    now = _time.time()
+    out = []
+    for d in list_paired_devices():
+        rec = _DEVICE_STATUS.get(d.get("id"))
+        if rec:
+            age = now - rec["ts"]
+            status = {k: v for k, v in rec.items() if k != "ts"}
+            last_seen_s = int(age)
+            online = age <= _DEVICE_ONLINE_S
+        else:
+            status = None
+            last_seen_s = None
+            online = False
+        out.append({
+            "id": d.get("id", ""),
+            "name": d.get("name", ""),
+            "created": d.get("created", ""),
+            "online": online,
+            "last_seen_s": last_seen_s,
+            "status": status,
+        })
+    return jsonify(out)
 
 
 # ── ROUTES ───────────────────────────────────────
@@ -752,6 +825,16 @@ def api_settings():
             if not 1 <= tcp_port <= 65535:
                 raise ValueError(f"tcp_port must be 1-65535: {tcp_port}")
             settings["tcp_port"] = tcp_port
+        if "esp32_volume" in data:
+            vol = int(data["esp32_volume"])
+            if not 0 <= vol <= 100:
+                raise ValueError(f"esp32_volume must be 0-100: {vol}")
+            settings["esp32_volume"] = vol
+        if "esp32_brightness" in data:
+            bri = int(data["esp32_brightness"])
+            if not 10 <= bri <= 255:
+                raise ValueError(f"esp32_brightness must be 10-255: {bri}")
+            settings["esp32_brightness"] = bri
     except (TypeError, ValueError) as e:
         return jsonify(ok=False, error=f"Invalid value: {e}"), 400
     save_settings(settings)

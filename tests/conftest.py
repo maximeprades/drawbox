@@ -86,6 +86,7 @@ def drawbox_dir(tmp_path, monkeypatch):
         # Cross-test state: pairing throttle and status cache would leak
         # 429s / stale payloads between tests otherwise.
         drawbox_web._PAIR_ATTEMPTS.clear()
+        drawbox_web._DEVICE_STATUS.clear()
         drawbox_web._STATUS_CACHE.update(ts=0.0, payload=None)
 
     yield dx

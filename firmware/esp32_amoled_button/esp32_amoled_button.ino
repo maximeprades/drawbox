@@ -15,7 +15,7 @@
  *   t  — simulate a button press
  *   d  — dump the last recording as base64 WAV between marker lines
  *   p  — dump a screenshot of the live UI as base64 RGB565
- *   s  — print status (state, WiFi, heap, PSRAM)
+ *   s  — print status (state, WiFi, heap, PSRAM, version, vol, bri)
  */
 
 #include <Arduino.h>
@@ -32,6 +32,8 @@
 #include "face_assets.h"
 #include "pin_config.h"
 #include "wifi_credentials.h"
+
+#define FIRMWARE_VERSION "1.4.0"
 
 // ── AUDIO ────────────────────────────────────────
 #define SAMPLE_RATE_HZ 16000
@@ -509,11 +511,31 @@ static bool micInit() {
 
 #define SPEAKER_VOLUME 85
 
+static es8311_handle_t speakerHandle = nullptr;
+static int speakerVolume = SPEAKER_VOLUME;
+static int screenBrightness = 200;
+
+static void setSpeakerVolume(int v) {
+  if (v < 0) v = 0;
+  if (v > 100) v = 100;
+  if (!speakerHandle || v == speakerVolume) return;
+  if (es8311_voice_volume_set(speakerHandle, v, NULL) == ESP_OK)
+    speakerVolume = v;
+}
+
+static void setScreenBrightness(int b) {
+  if (b < 10) b = 10;
+  if (b > 255) b = 255;
+  if (b == screenBrightness) return;
+  gfx->setBrightness((uint8_t)b);
+  screenBrightness = b;
+}
+
 static bool speakerInit() {
   pinMode(PIN_PA, OUTPUT);
   digitalWrite(PIN_PA, HIGH);
-  es8311_handle_t es = es8311_create(0, ES8311_ADDRRES_0);
-  if (!es) {
+  speakerHandle = es8311_create(0, ES8311_ADDRRES_0);
+  if (!speakerHandle) {
     Serial.println("[spk] es8311 create failed");
     return false;
   }
@@ -526,12 +548,13 @@ static bool speakerInit() {
   };
   // microphone_config is misnamed upstream: it also powers up the DAC
   // (SYSTEM_REG12) and bypasses its EQ. Without it the speaker is mute.
-  if (es8311_init(es, &clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) !=
-          ESP_OK ||
-      es8311_sample_frequency_config(es, clk.mclk_frequency,
+  if (es8311_init(speakerHandle, &clk, ES8311_RESOLUTION_16,
+                  ES8311_RESOLUTION_16) != ESP_OK ||
+      es8311_sample_frequency_config(speakerHandle, clk.mclk_frequency,
                                      clk.sample_frequency) != ESP_OK ||
-      es8311_microphone_config(es, false) != ESP_OK ||
-      es8311_voice_volume_set(es, SPEAKER_VOLUME, NULL) != ESP_OK) {
+      es8311_microphone_config(speakerHandle, false) != ESP_OK ||
+      es8311_voice_volume_set(speakerHandle, SPEAKER_VOLUME, NULL) !=
+          ESP_OK) {
     Serial.println("[spk] es8311 init failed");
     return false;
   }
@@ -1156,6 +1179,7 @@ static const char *const PREFETCH_KEYS[] = {
 #define PREFETCH_KEY_COUNT (sizeof(PREFETCH_KEYS) / sizeof(PREFETCH_KEYS[0]))
 static bool voiceCacheReady = false;
 static uint32_t lastVoiceAttempt = 0;
+static uint32_t lastHeartbeat = 0;
 
 static void fetchVoiceManifest() {
   lastVoiceAttempt = millis();
@@ -1216,6 +1240,93 @@ static void fetchVoiceManifest() {
   Serial.printf("[voice] cache %s (%d lines)\n",
                 complete ? "ready" : "incomplete, will retry",
                 voiceCacheCount);
+}
+
+// Telemetry out, live knobs back. Connect failure is silent so a
+// flaky AP doesn't spam the console every minute.
+static void sendHeartbeat() {
+  lastHeartbeat = millis();
+  IPAddress ip = resolveServer();
+  if (ip == IPAddress()) return;
+  WiFiClient client;
+  client.setTimeout(HTTP_CONNECT_TIMEOUT_MS / 1000);
+  if (!client.connect(ip, DRAWBOX_PORT)) {
+    forgetServerIp();
+    return;
+  }
+  char payload[256];
+  int n = snprintf(
+      payload, sizeof(payload),
+      "{\"version\":\"%s\",\"uptime_s\":%lu,\"rssi\":%d,\"heap\":%u,"
+      "\"psram\":%u,\"cache_lines\":%d,\"cache_ready\":%s}",
+      FIRMWARE_VERSION, (unsigned long)(millis() / 1000), WiFi.RSSI(),
+      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
+      voiceCacheCount, voiceCacheReady ? "true" : "false");
+  if (n < 0 || n >= (int)sizeof(payload)) {
+    client.stop();
+    Serial.println("[hb] failed");
+    return;
+  }
+  client.printf("POST /api/device/heartbeat HTTP/1.1\r\n"
+                "Host: %s:%d\r\n"
+                "Authorization: Bearer %s\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: %d\r\n"
+                "Connection: close\r\n\r\n%s",
+                DRAWBOX_HOST, DRAWBOX_PORT, DRAWBOX_TOKEN, n, payload);
+
+  uint32_t deadline = millis() + 5000;
+  while (millis() < deadline && !client.available()) {
+    if (!client.connected()) {
+      client.stop();
+      Serial.println("[hb] failed");
+      return;
+    }
+    lv_timer_handler();
+    delay(10);
+  }
+  String statusLine = client.readStringUntil('\n');
+  if (!statusLine.startsWith("HTTP/") || statusLine.length() > 256) {
+    client.stop();
+    Serial.println("[hb] failed");
+    return;
+  }
+  int status = statusLine.substring(9, 12).toInt();
+  while (millis() < deadline) {
+    String line = client.readStringUntil('\n');
+    if (line.length() > 1024) {
+      client.stop();
+      Serial.println("[hb] failed");
+      return;
+    }
+    line.trim();
+    if (!line.length()) break;
+  }
+  String body;
+  while ((client.connected() || client.available()) && millis() < deadline) {
+    if (client.available()) {
+      body += (char)client.read();
+      if (body.length() > 2048) break;
+    } else {
+      delay(10);
+    }
+  }
+  client.stop();
+  if (status != 200) {
+    Serial.println("[hb] failed");
+    return;
+  }
+  String volStr = jsonField(body, "volume");
+  if (volStr.length()) {
+    int v = volStr.toInt();
+    if (v >= 0) setSpeakerVolume(v);
+  }
+  int bri = jsonField(body, "brightness").toInt();
+  if (bri > 0) setScreenBrightness(bri);
+  int rec = jsonField(body, "record_seconds").toInt();
+  if (rec > 0) recordSeconds = min(max(rec, 3), MAX_RECORD_SECONDS);
+  Serial.printf("[hb] ok vol=%d bri=%d rec=%d\n", speakerVolume,
+                screenBrightness, recordSeconds);
 }
 
 // ── THE ONE FLOW ─────────────────────────────────
@@ -1294,11 +1405,13 @@ static void dumpScreenshot() {
 
 static void printStatus() {
   Serial.printf("[status] state=%s wifi=%d ip=%s rssi=%d heap=%u psram=%u "
-                "record_s=%d lastwav=%u\n",
+                "record_s=%d lastwav=%u ver=" FIRMWARE_VERSION
+                " vol=%d bri=%d\n",
                 stateName(state), WiFi.status(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI(),
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
-                recordSeconds, (unsigned)wavLen);
+                recordSeconds, (unsigned)wavLen, speakerVolume,
+                screenBrightness);
 }
 
 static void handleSerial() {
@@ -1422,6 +1535,7 @@ void loop() {
         MDNS.begin("drawbox-button");
         fetchRecordSeconds();
         fetchVoiceManifest();
+        sendHeartbeat();
         setState(AppState::IDLE);
         playLine("ready");
       } else if (millis() - lastWifiAttempt > 20000) {
@@ -1437,9 +1551,10 @@ void loop() {
         forgetServerIp();
         setState(AppState::WIFI_CONNECTING);
         lastWifiAttempt = millis();
-      } else if (!voiceCacheReady &&
-                 millis() - lastVoiceAttempt > 30000) {
-        fetchVoiceManifest();
+      } else {
+        if (!voiceCacheReady && millis() - lastVoiceAttempt > 30000)
+          fetchVoiceManifest();
+        if (millis() - lastHeartbeat > 60000) sendHeartbeat();
       }
       break;
 
