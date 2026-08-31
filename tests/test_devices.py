@@ -84,3 +84,53 @@ def test_device_for_token_returns_entry_or_none(drawbox_dir):
     assert entry["token_hash"]
     assert drawbox_core.device_for_token("") is None
     assert drawbox_core.device_for_token("garbage") is None
+
+
+def test_devices_survives_online_device_listed_before_offline(client, drawbox_dir):
+    # Regression: a per-device local shadowed the loaded status map, so an
+    # online device followed by a never-seen one crashed the endpoint.
+    client.post("/api/device/heartbeat", json={"version": "t", "rssi": -60})
+    code = drawbox_core.open_pairing_window()
+    assert drawbox_core.redeem_pairing_code(code, "second box")
+    body = client.get("/api/devices").get_json()
+    assert [d["online"] for d in body] == [True, False]
+    assert body[1]["status"] is None
+
+
+def test_devices_survives_online_device_listed_before_offline(client, drawbox_dir):
+    # Regression: a per-device local shadowed the loaded status map, so an
+    # online device followed by a never-seen one crashed the endpoint.
+    client.post("/api/device/heartbeat", json={"version": "t", "rssi": -60})
+    code = drawbox_core.open_pairing_window()
+    assert drawbox_core.redeem_pairing_code(code, "second box")
+    body = client.get("/api/devices").get_json()
+    assert [d["online"] for d in body] == [True, False]
+    assert body[1]["status"] is None
+
+
+def test_devices_survives_online_device_listed_before_offline(client, drawbox_dir):
+    # Regression: a per-device local shadowed the loaded status map, so an
+    # online device followed by a never-seen one crashed the endpoint.
+    client.post("/api/device/heartbeat", json={"version": "t", "rssi": -60})
+    code = drawbox_core.open_pairing_window()
+    assert drawbox_core.redeem_pairing_code(code, "second box")
+    body = client.get("/api/devices").get_json()
+    assert [d["online"] for d in body] == [True, False]
+    assert body[1]["status"] is None
+
+
+def test_devices_marks_the_calling_device_as_self(client, drawbox_dir):
+    code = drawbox_core.open_pairing_window()
+    assert drawbox_core.redeem_pairing_code(code, "other box")
+    body = client.get("/api/devices").get_json()
+    assert [d["self"] for d in body] == [True, False]
+
+
+def test_revoke_drops_heartbeat_record(client, drawbox_dir):
+    client.post("/api/device/heartbeat", json={"version": "t"})
+    import drawbox_web
+    devices = client.get("/api/devices").get_json()
+    dev_id = devices[0]["id"]
+    assert dev_id in drawbox_web._load_device_status()
+    client.delete(f"/api/pair/devices/{dev_id}")
+    assert dev_id not in drawbox_web._load_device_status()

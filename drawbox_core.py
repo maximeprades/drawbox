@@ -36,6 +36,7 @@ SCRIPTS_FILE = DRAWBOX_DIR / "voice_scripts.json"
 CACHE_DIR = DRAWBOX_DIR / "voice_cache"
 PAIRING_FILE = DRAWBOX_DIR / "pairing.json"
 PAIRED_DEVICES_FILE = DRAWBOX_DIR / "paired_devices.json"
+DEVICE_STATUS_FILE = DRAWBOX_DIR / "device_status.json"
 LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────

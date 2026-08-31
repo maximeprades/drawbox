@@ -1199,15 +1199,18 @@ function renderDevices() {
     const on = !!dev.online;
     const seen = fmtLastSeen(dev.last_seen_s);
     const bits = deviceStatusBits(dev.status);
+    const self = !!dev.self;
     return '<div class="setting-row">' +
       '<div class="setting-info">' +
         '<div class="setting-name">' +
           '<span class="dot ' + (on ? 'dot-green' : 'dot-red') + '"></span>' + esc(dev.name) + ' ' +
           '<span class="badge ' + (on ? 'badge-success' : 'badge-destructive') + '">' +
             (on ? 'Online' : 'Offline') + '</span>' +
+          (self ? ' <span class="badge badge-default">this browser</span>' : '') +
         '</div>' +
         '<div class="setting-desc">' + esc(seen) + (bits ? ' \u00b7 ' + bits : '') + '</div>' +
       '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="revokeDevice(\'' + esc(dev.id) + '\', \'' + esc(dev.name) + '\', ' + self + ')">Delete</button>' +
     '</div>';
   }).join('');
   list.innerHTML = html;
@@ -1970,24 +1973,29 @@ async function loadPairedDevices() {
       const info = byId[dev.id] || {};
       const on = !!info.online;
       const seen = fmtLastSeen(info.last_seen_s);
+      const self = !!info.self;
       return `<div class="setting-row">
         <div class="setting-info">
-          <div class="setting-name"><span class="dot ${on ? 'dot-green' : 'dot-red'}"></span>${esc(dev.name)}</div>
+          <div class="setting-name"><span class="dot ${on ? 'dot-green' : 'dot-red'}"></span>${esc(dev.name)}${self ? ' <span class="badge badge-default">this browser</span>' : ''}</div>
           <div class="setting-desc">${esc(seen)} · Paired ${esc(dev.created || 'a while ago')}</div>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="revokeDevice('${esc(dev.id)}')">Revoke</button>
+        <button class="btn btn-outline btn-sm" onclick="revokeDevice('${esc(dev.id)}', '${esc(dev.name)}', ${self})">Delete</button>
       </div>`;
     }).join('');
   } catch(e) {}
 }
 
-async function revokeDevice(id) {
-  if (!await askConfirm('Revoke dashboard access for this device?', {okText: 'Revoke', danger: true})) return;
+async function revokeDevice(id, name, isSelf) {
+  const label = name ? `“${name}”` : 'this device';
+  const msg = isSelf
+    ? `Delete ${label}? This is the device THIS browser is paired as — you will be signed out and need to pair again.`
+    : `Delete ${label}? It loses dashboard access until paired again.`;
+  if (!await askConfirm(msg, {okText: 'Delete', danger: true})) return;
   try {
     const r = await fetch('/api/pair/devices/' + encodeURIComponent(id), {method: 'DELETE'});
     const d = await r.json();
-    if (d.ok) { toast('Device revoked'); loadPairedDevices(); }
-    else toast(d.error || 'Could not revoke', false);
+    if (d.ok) { toast('Device deleted'); loadPairedDevices(); refreshDevices(); }
+    else toast(d.error || 'Could not delete', false);
   } catch(e) { toast('Error: ' + e.message, false); }
 }
 

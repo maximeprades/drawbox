@@ -71,6 +71,7 @@ def drawbox_dir(tmp_path, monkeypatch):
         "CACHE_DIR": dx / "voice_cache",
         "PAIRING_FILE": dx / "pairing.json",
         "PAIRED_DEVICES_FILE": dx / "paired_devices.json",
+        "DEVICE_STATUS_FILE": dx / "device_status.json",
         "LAST_IMAGE_FILE": dx / "last_generated.png",
     }
     for name, value in overrides.items():
@@ -86,7 +87,8 @@ def drawbox_dir(tmp_path, monkeypatch):
         # Cross-test state: pairing throttle and status cache would leak
         # 429s / stale payloads between tests otherwise.
         drawbox_web._PAIR_ATTEMPTS.clear()
-        drawbox_web._DEVICE_STATUS.clear()
+        # Device status lives in a file under the per-test DRAWBOX_DIR,
+        # so it isolates itself; only in-process state needs clearing.
         drawbox_web._STATUS_CACHE.update(ts=0.0, payload=None)
 
     yield dx

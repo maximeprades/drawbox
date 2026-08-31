@@ -1347,6 +1347,9 @@ static void handlePress() {
   }
   setState(AppState::THINKING);
   playLine("thinking");
+  // Generation can outlast the 150 s online window; beat once here so
+  // a busy box never reads as offline in the dashboard.
+  sendHeartbeat();
   sendToDrawBox();
   setState(AppState::RESULT);
   if (resultOk) playLine("printing");

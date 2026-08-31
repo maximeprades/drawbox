@@ -249,15 +249,28 @@ def api_paired_devices():
 def api_revoke_device(device_id):
     if not revoke_paired_device(device_id):
         return jsonify(ok=False, error="Unknown device"), 404
+    status = _load_device_status()
+    if status.pop(device_id, None) is not None:
+        _write_secure_json(drawbox_core.DEVICE_STATUS_FILE, status)
     return jsonify(ok=True)
 
 
 # ── DEVICE HEARTBEAT ─────────────────────────────
-# The ESP32 box posts here every 60 s. Stored in memory; a 150 s
-# silence is offline. The response carries the knobs the box should
-# apply (volume, brightness, record window).
-_DEVICE_STATUS = {}
+# The ESP32 box posts here every 60 s. Stored on disk, not in memory:
+# gunicorn runs two workers, and a per-process dict made online status
+# flip depending on which worker answered. A concurrent heartbeat from
+# a second box can lose one read-modify-write; the next beat heals it.
+# 150 s of silence is offline. The response carries the knobs the box
+# should apply (volume, brightness, record window).
 _DEVICE_ONLINE_S = 150
+
+
+def _load_device_status():
+    try:
+        data = json.loads(drawbox_core.DEVICE_STATUS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _optional_clamped_int(value, lo, hi):
@@ -289,7 +302,9 @@ def api_device_heartbeat():
         "ip": _peer_ip(),
         "ts": _time.time(),
     }
-    _DEVICE_STATUS[device.get("id", "")] = rec
+    status = _load_device_status()
+    status[device.get("id", "")] = rec
+    _write_secure_json(drawbox_core.DEVICE_STATUS_FILE, status)
     settings = load_settings()
     return jsonify(ok=True,
                    volume=settings["esp32_volume"],
@@ -300,9 +315,11 @@ def api_device_heartbeat():
 @app.route("/api/devices")
 def api_devices():
     now = _time.time()
+    all_status = _load_device_status()
+    caller = device_for_token(_request_token()) or {}
     out = []
     for d in list_paired_devices():
-        rec = _DEVICE_STATUS.get(d.get("id"))
+        rec = all_status.get(d.get("id"))
         if rec:
             age = now - rec["ts"]
             status = {k: v for k, v in rec.items() if k != "ts"}
@@ -316,6 +333,9 @@ def api_devices():
             "id": d.get("id", ""),
             "name": d.get("name", ""),
             "created": d.get("created", ""),
+            # The UI warns before a device revokes itself out of the
+            # dashboard it is currently using.
+            "self": d.get("id") == caller.get("id"),
             "online": online,
             "last_seen_s": last_seen_s,
             "status": status,
