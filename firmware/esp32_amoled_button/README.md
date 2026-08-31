@@ -6,9 +6,15 @@ A one-button DrawBox remote for the Waveshare **ESP32-S3-Touch-AMOLED-2.16**
 and POSTs it to the Pi dashboard's `/api/voice/generate`; Whisper, the
 safety filter, image generation, and printing all stay on the Pi.
 
-The screen walks through the same states the arcade-button box speaks:
-idle button → "I'm listening!" with a progress ring → "Drawing..." →
-result (with the transcript it heard) → back to idle.
+The screen is a big emoji buddy rendered with LVGL 8.4: it blinks and
+glances around while idle, goes wide-eyed with its mouth moving to your
+voice while listening (progress ring, rippling sound waves), naps under
+a spinner while the Pi draws, and shows a joyful or deadpan face with
+the transcript for the result. The face itself is pre-rendered on the
+host by `gen_face_assets.py` (Pillow, 3x supersampled) into anti-aliased
+bitmap frames baked into flash — nothing hand-drawn at runtime, so there
+are no vector artifacts. `build.sh` regenerates `face_assets.h` when the
+generator changes; the header is gitignored (4+ MB of hex).
 
 ## Setup
 
@@ -32,12 +38,15 @@ curl -X POST http://drawbox.local:5000/api/pair \
 ./build.sh flash /dev/cu.usbmodemXXXX
 ```
 
-`build.sh` fetches the display/touch/sensor libraries from Waveshare's own
-board repo, pinned to a known commit, into the gitignored `.libs/`. The
-ES7210 mic driver is vendored here (Espressif MIT), with one behavioral
-change from the vendor example: gain goes to MIC1/MIC2 — the board's real
-microphones per the schematic — not the MIC3/4 echo-cancellation loopback
-the example boosts. With the example's gains the recordings are silence.
+`build.sh` fetches the display/touch/sensor/LVGL libraries from
+Waveshare's own board repo, pinned to a known commit, into the gitignored
+`.libs/`, then overlays our `lv_conf.h` (vendor config plus
+`LV_USE_SNAPSHOT` for the screenshot hook). Asset generation needs
+`python3` with Pillow. The ES7210 mic driver is vendored here (Espressif
+MIT), with one behavioral change from the vendor example: gain goes to
+MIC1/MIC2 — the board's real microphones per the schematic — not the
+MIC3/4 echo-cancellation loopback the example boosts. With the example's
+gains the recordings are silence.
 
 ## Serial test hooks
 
@@ -45,6 +54,7 @@ The native USB port doubles as a console at 115200:
 
 - `t` — simulate a button press (full record → upload → result cycle)
 - `d` — dump the last recording as base64 WAV between marker lines
+- `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
 - `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size)
 
 A full remote test from the Mac, no hands needed:
