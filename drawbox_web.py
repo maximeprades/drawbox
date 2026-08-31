@@ -191,6 +191,15 @@ _PAIR_ATTEMPTS = {}
 _PAIR_HOURLY_LIMIT = 10
 
 
+def _pair_peer_ip():
+    """The TCP peer, not request.remote_addr: ProxyFix honors a client
+    supplied X-Forwarded-For, which would hand every spoofed header a
+    fresh budget. Behind the tunnel this collapses to one shared budget,
+    which is fine — pairing is a rare, LAN-side ceremony."""
+    orig = request.environ.get("werkzeug.proxy_fix.orig") or {}
+    return orig.get("REMOTE_ADDR") or request.remote_addr or ""
+
+
 def _pair_throttled(ip):
     now = _time.time()
     times = [t for t in _PAIR_ATTEMPTS.get(ip, []) if now - t < 3600]
@@ -203,7 +212,7 @@ def _pair_throttled(ip):
 
 @app.route("/api/pair", methods=["POST"])
 def api_pair():
-    if _pair_throttled(request.remote_addr or ""):
+    if _pair_throttled(_pair_peer_ip()):
         return jsonify(ok=False,
                        error="Too many attempts — wait a moment."), 429
     data = _request_dict()
@@ -322,7 +331,10 @@ def api_status():
 
     payload = dict(service_running=running, temperature=temp,
                    uptime=up, rpi_connect=rpi)
-    _STATUS_CACHE.update(ts=now, payload=payload)
+    # Stamped after the probes: a hung systemctl eats its 5s timeout
+    # while gathering, and a before-the-probes stamp would already be
+    # expired by the time it lands.
+    _STATUS_CACHE.update(ts=_time.time(), payload=payload)
     return jsonify(**payload)
 
 def _voice_line(key):
@@ -621,15 +633,16 @@ def api_logs():
         if not _LOG_STREAM_SLOTS.acquire(blocking=False):
             yield ": too many log streams open\n\n"
             return
-        # Cap the backfill at 1000 lines so the live view stays responsive on
-        # a chatty Pi. Full 24h is available via /api/logs/download.
-        proc = subprocess.Popen(
-            ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
-             "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
-        fd = proc.stdout.fileno()
+        proc = None
         try:
+            # Cap the backfill at 1000 lines so the live view stays
+            # responsive on a chatty Pi. Full 24h via /api/logs/download.
+            proc = subprocess.Popen(
+                ["journalctl", "-u", "drawbox", "-u", "drawbox-web",
+                 "--since", "24 hours ago", "-n", "1000", "-f", "--no-pager"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            fd = proc.stdout.fileno()
             # journalctl -f never ends, and a vanished client is only
             # noticed when a write fails. On a quiet journal that pinned
             # worker threads forever and saturated gunicorn (2026-08-30
@@ -652,11 +665,12 @@ def api_logs():
                     yield "data: %s\n\n" % line.decode("utf-8", "replace").rstrip()
         finally:
             _LOG_STREAM_SLOTS.release()
-            proc.kill()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+            if proc is not None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
     return Response(
         stream(), mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

@@ -219,3 +219,18 @@ def test_status_is_cached_and_survives_hung_systemctl(client, drawbox_dir, monke
     forks_before = len(calls)
     assert anon.get("/api/status").status_code == 200
     assert len(calls) == forks_before
+
+
+def test_pair_throttle_ignores_spoofed_forwarded_for(client, drawbox_dir):
+    import drawbox_web
+    anon = drawbox_web.app.test_client()
+    code = drawbox_core.open_pairing_window()
+
+    # Forging a fresh X-Forwarded-For per request must not mint fresh
+    # budgets: the throttle keys on the TCP peer, not the header.
+    for i in range(drawbox_web._PAIR_HOURLY_LIMIT):
+        anon.post("/api/pair", json={"code": _wrong_code(code), "name": "x"},
+                  headers={"X-Forwarded-For": f"10.0.0.{i}"})
+    r = anon.post("/api/pair", json={"code": code, "name": "x"},
+                  headers={"X-Forwarded-For": "10.0.0.99"})
+    assert r.status_code == 429
