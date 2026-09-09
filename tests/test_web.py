@@ -901,10 +901,10 @@ def test_dashboard_uses_in_page_confirm_instead_of_native_dialogs(client):
 
 
 def test_dashboard_keys_match_the_registry(client):
-    """One gateway key for images/STT, plus the two optional voice keys.
+    """One gateway key covers images, speech, and transcription.
 
-    The direct image-provider keys retired by the gateway migration must not
-    resurface.
+    Direct provider keys (OpenAI, Replicate, Gemini, ElevenLabs, xAI)
+    must not resurface in the dashboard.
     """
     html = client.get("/").get_data(as_text=True)
     assert 'id="keyGateway"' in html
