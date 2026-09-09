@@ -89,6 +89,81 @@ def test_record_audio_tries_next_device_after_open_failure(monkeypatch, tmp_path
     assert path is not None
 
 
+def test_record_audio_stops_early_after_speech_ends(monkeypatch):
+    """VAD: speech then 1.6s of quiet must end a 10s window early.
+
+    Time is derived from captured samples, so the fake stream finishes
+    instantly even though the requested window is 10 seconds.
+    """
+    devices = [
+        {"name": "USB PnP Sound Device: Audio (hw:3,0)", "max_input_channels": 1},
+    ]
+    written = {}
+
+    monkeypatch.setattr(drawbox.sd, "query_devices", lambda device=None: devices if device is None else devices[device])
+    monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
+    monkeypatch.setattr(drawbox.time, "sleep", lambda _seconds: None)
+
+    loud = np.full((int(0.3 * drawbox.SAMPLE_RATE), 1), 0.5, dtype=np.float32)
+    quiet = np.full((int(1.6 * drawbox.SAMPLE_RATE), 1),
+                    drawbox.QUIET_PEAK / 3, dtype=np.float32)
+
+    class TalkThenQuietStream:
+        def __init__(self, samplerate, channels, callback, device):
+            self.callback = callback
+
+        def __enter__(self):
+            self.callback(loud, len(loud), None, None)
+            self.callback(quiet, len(quiet), None, None)
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(drawbox.sd, "InputStream", TalkThenQuietStream)
+    monkeypatch.setattr(
+        drawbox.sf, "write",
+        lambda path, audio, sample_rate: written.setdefault("seconds", len(audio) / sample_rate))
+
+    assert drawbox.record_audio(seconds=10) is not None
+    # The take is the 1.9s delivered, not the 10s window.
+    assert written["seconds"] < 2.0
+
+
+def test_record_audio_rejects_room_tone(monkeypatch):
+    """A quiet take must not reach Whisper (it hallucinates words from
+    near-silence — the ESP32 box once printed invented Japanese), and it
+    must not trigger device fallback (each retry costs a full window)."""
+    devices = [
+        {"name": "USB PnP Sound Device: Audio (hw:3,0)", "max_input_channels": 1},
+        {"name": "Built-in Mic", "max_input_channels": 1},
+    ]
+    attempts = []
+
+    monkeypatch.setattr(drawbox.sd, "query_devices", lambda device=None: devices if device is None else devices[device])
+    monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
+    monkeypatch.setattr(drawbox.time, "sleep", lambda _seconds: None)
+
+    class QuietInputStream:
+        def __init__(self, samplerate, channels, callback, device):
+            self.callback = callback
+            attempts.append(device)
+
+        def __enter__(self):
+            audio = np.full((drawbox.SAMPLE_RATE, 1), drawbox.QUIET_PEAK / 3,
+                            dtype=np.float32)
+            self.callback(audio, len(audio), None, None)
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(drawbox.sd, "InputStream", QuietInputStream)
+
+    assert drawbox.record_audio(seconds=1) is None
+    assert attempts == [0]
+
+
 def test_record_audio_returns_none_when_all_devices_fail(monkeypatch):
     devices = [
         {"name": "USB PnP Sound Device: Audio (hw:3,0)", "max_input_channels": 1},
@@ -234,7 +309,7 @@ def test_play_falls_back_to_live_tts_for_uncached_key(monkeypatch):
     assert played_live == ["fallback line"]
 
 
-def test_transcribe_posts_wav_and_unlinks_recording(monkeypatch, tmp_path):
+def test_transcribe_posts_wav_and_unlinks_recording(drawbox_dir, monkeypatch, tmp_path):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     clip = tmp_path / "clip.wav"
     clip.write_bytes(b"RIFF-fake-wav")
@@ -271,7 +346,7 @@ def test_transcribe_posts_wav_and_unlinks_recording(monkeypatch, tmp_path):
     assert not clip.exists()
 
 
-def test_transcribe_unlinks_recording_when_gateway_fails(monkeypatch, tmp_path):
+def test_transcribe_unlinks_recording_when_gateway_fails(drawbox_dir, monkeypatch, tmp_path):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     clip = tmp_path / "clip.wav"
     clip.write_bytes(b"RIFF-fake-wav")

@@ -11,7 +11,6 @@ Press → listen → transcribe → safety-check → generate → print → done
 Hold for 5 seconds to reboot.
 """
 
-import base64
 import logging
 import os
 import random
@@ -30,13 +29,11 @@ from openai import APIStatusError, RateLimitError
 
 import drawbox_core
 from drawbox_core import (
-    API_KEYS_FILE, CACHE_DIR, DEFAULT_JOKES, DEFAULT_VOICE_LINES, IMAGE_MODEL,
+    API_KEYS_FILE, CACHE_DIR, DEFAULT_JOKES, DEFAULT_VOICE_LINES,
     SAFETY_MODE_FILE, SETTINGS_FILE, apply_api_keys, generate_image,
-    contains_poop, has_please, is_pairing_command, is_safe, load_settings,
-    load_scripts, log_print_event, mask_key, open_pairing_window,
-    parse_admin_poop_command, please_mode_enabled, poop_mode_enabled,
-    print_image, print_pairing_code, safety_mode_enabled,
-    set_poop_mode_enabled,
+    has_please, intercept_transcript, load_settings, load_scripts,
+    log_print_event, mask_key, please_mode_enabled, print_image,
+    safety_mode_enabled,
 )
 
 log = logging.getLogger("drawbox")
@@ -45,9 +42,20 @@ log = logging.getLogger("drawbox")
 BUTTON_PIN = 17
 SAMPLE_RATE = 44100              # CHANGEEK USB mic only supports 44.1kHz
 USB_MIC_NAME_HINTS = ("USB", "PnP", "CHANGEEK")  # matched against sd.query_devices() names
-RECORD_SECONDS = 10
+RECORD_SECONDS = 10              # fallback only; the dashboard's record_seconds setting wins
 REBOOT_HOLD_SEC = 5              # hold button this long to trigger reboot
 MIN_RECORDING_SEC = 0.5          # anything shorter is silence/accidental press
+# Below this peak (float32 samples, full scale 1.0) the take is room tone.
+# Whisper hallucinates words from near-silence — the ESP32 box grew the same
+# gate (QUIET_PEAK 550/32768) after Whisper invented Japanese from an empty
+# room and the box printed it. Speech at arm's length peaks well above 0.05.
+QUIET_PEAK = 0.017
+# A chunk this loud means the kid started talking; once speech has started,
+# this much quiet ends the take early so nobody stares at a listening box.
+# 1.5 s (not the ~600 ms of adult voice products) because kids pause
+# mid-thought ("draw me a... umm... dinosaur").
+SPEECH_START_PEAK = 2 * QUIET_PEAK
+SILENCE_STOP_SEC = 1.5
 
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
 VOICE_PROVIDER = "gateway"
@@ -302,6 +310,26 @@ class VoiceFeedback:
         else:
             threading.Thread(target=self._play_live, args=(text,), daemon=True).start()
 
+    def speak_once(self, text, fallback_key=None):
+        """Speak ``text`` without touching the disk cache.
+
+        Unlike play_dynamic, a synthesis failure falls back to a cached
+        script line — never espeak's robot voice. Used for the ack, where
+        the canned "thinking" line beats a jarring fallback.
+        """
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+        try:
+            if self._synthesize(text, tmp_path):
+                self._play_file(tmp_path)
+            elif fallback_key:
+                self.play(fallback_key)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     def _play_file(self, path):
         try:
             if self._silence_path and self._silence_path.exists():
@@ -403,9 +431,41 @@ def _input_device_label(device):
         return f"input device {device}"
 
 
+def _wait_for_take(frames, seconds):
+    """Poll ``frames`` until the take is over; returns when done.
+
+    Time is derived from captured samples, not the wall clock, so the fake
+    streams in tests finish instantly. The take ends at the hard cap
+    (``seconds``) or — once a chunk crossed SPEECH_START_PEAK — after
+    SILENCE_STOP_SEC of audio stayed below it. A wall-clock backstop covers
+    a stream that silently stops delivering.
+    """
+    deadline = time.time() + seconds + 5
+    processed = total = last_loud = 0
+    speech_started = False
+    while time.time() < deadline:
+        snapshot = len(frames)
+        while processed < snapshot:
+            chunk = frames[processed]
+            total += len(chunk)
+            if len(chunk) and float(np.abs(chunk).max()) >= SPEECH_START_PEAK:
+                speech_started = True
+                last_loud = total
+            processed += 1
+        if total >= seconds * SAMPLE_RATE:
+            return
+        if speech_started and \
+                total - last_loud >= SILENCE_STOP_SEC * SAMPLE_RATE:
+            log.info("speech ended (%.1fs quiet after %.1fs); stopping early",
+                     SILENCE_STOP_SEC, total / SAMPLE_RATE)
+            return
+        time.sleep(0.05)
+
+
 def record_audio(seconds=RECORD_SECONDS):
-    """Record for ``seconds`` seconds and return a WAV path, or None if silent."""
-    log.info("recording for %ds", seconds)
+    """Record up to ``seconds`` seconds (stopping early once the kid stops
+    talking) and return a WAV path, or None if silent."""
+    log.info("recording for up to %ds", seconds)
 
     last_error = None
     for device in _candidate_input_devices():
@@ -422,7 +482,7 @@ def record_audio(seconds=RECORD_SECONDS):
             log.info("trying %s", device_label)
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                 callback=cb, device=device):
-                time.sleep(seconds)
+                _wait_for_take(frames, seconds)
         except Exception as e:
             last_error = e
             log.warning("could not record from %s: %s", device_label, e)
@@ -440,6 +500,14 @@ def record_audio(seconds=RECORD_SECONDS):
             log.warning("recording from %s too short: %.1fs",
                         device_label, duration)
             continue
+        peak = float(np.abs(audio).max())
+        if peak < QUIET_PEAK:
+            # A real capture with nobody talking. Don't fall through to the
+            # next device (each try costs a full recording window), and
+            # don't hand Whisper silence to hallucinate from.
+            log.warning("recording from %s too quiet: peak=%.4f",
+                        device_label, peak)
+            return None
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         sf.write(path, audio, SAMPLE_RATE)
@@ -455,29 +523,18 @@ def record_audio(seconds=RECORD_SECONDS):
 
 # ── TRANSCRIBE ──────────────────────────────────
 def transcribe(path):
-    log.info("transcribing with whisper-1")
-    t0 = time.time()
+    """Transcribe the WAV at ``path`` (always deleting it) via the shared
+    core dispatcher, so the button box and the ESP32 box use the same STT
+    provider setting."""
     try:
-        if not drawbox_core.AI_GATEWAY_API_KEY:
-            raise RuntimeError("AI_GATEWAY_API_KEY not set")
         with open(path, "rb") as f:
-            audio_b64 = base64.b64encode(f.read()).decode()
-        reply = drawbox_core.gateway_v4_post(
-            drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL,
-            # mediaType must match the bytes; record_audio writes WAV.
-            {"audio": audio_b64, "mediaType": "audio/wav"},
-            {
-                "ai-transcription-model-specification-version": "4",
-                "ai-model-id": drawbox_core.GATEWAY_STT_MODEL,
-            },
-        )
+            data = f.read()
+        return drawbox_core.transcribe_audio(data, media_type="audio/wav")
     finally:
         try:
             os.unlink(path)
         except OSError:
             pass
-    log.info("transcribed in %.1fs: %r", time.time() - t0, reply["text"])
-    return reply["text"]
 
 
 # ── MAIN ────────────────────────────────────────
@@ -498,7 +555,7 @@ def _is_busy():
 
 def _print_config():
     log.info("DrawBox configuration:")
-    log.info("  image_model = %s", IMAGE_MODEL)
+    log.info("  image_model = %s", load_settings()["image_model"])
     log.info("  voice       = %s", VOICE_PROVIDER)
     log.info("  ai_gateway  = %s", mask_key(drawbox_core.AI_GATEWAY_API_KEY) or "missing")
     log.info("  elevenlabs  = %s", mask_key(drawbox_core.ELEVENLABS_API_KEY) or "missing")
@@ -544,7 +601,10 @@ def main():
             if _is_busy():
                 voice.play("busy", block=False)
                 continue
-            _handle_press(voice)
+            if load_settings()["conversation_mode"]:
+                _run_conversation(voice)
+            else:
+                _handle_press(voice)
             time.sleep(0.5)
     except KeyboardInterrupt:
         log.info("shutting down")
@@ -565,12 +625,39 @@ def _handle_long_press(btn, voice):
     return False
 
 
+def _run_conversation(voice):
+    """One live agent session (conversation_mode on). Never raises.
+
+    Falls back to the one-shot flow only when no session ever started —
+    missing websockets package, missing XAI key, xAI unreachable, config
+    rejected. A session that ran and then died mid-chat does NOT cascade
+    into "I'm listening!" (run_session already spoke the error line).
+    """
+    _set_busy(True)
+    started = False
+    try:
+        try:
+            import drawbox_realtime
+        except ImportError as e:
+            log.warning("conversation mode unavailable (%s); "
+                        "install the websockets package", e)
+        else:
+            started = drawbox_realtime.run_session(voice)
+    finally:
+        _set_busy(False)
+    if not started:
+        _handle_press(voice)
+
+
 def _handle_press(voice):
     """Run the listen → generate → print pipeline once. Never raises."""
     _set_busy(True)
     try:
+        # Read once per press so dashboard edits apply to the very next
+        # drawing — same behavior as the web and ESP32 paths.
+        settings = load_settings()
         voice.play("listening")
-        path = record_audio()
+        path = record_audio(settings["record_seconds"])
         if not path:
             voice.play("too_short")
             return
@@ -580,41 +667,16 @@ def _handle_press(voice):
             voice.play("too_short")
             return
 
-        admin_poop_action = parse_admin_poop_command(text)
-        if admin_poop_action:
-            enabled = admin_poop_action == "enable"
-            set_poop_mode_enabled(enabled)
-            log.info("poop mode %s via voice command", "enabled" if enabled else "disabled")
-            voice.play("poop_mode_enabled" if enabled else "poop_mode_disabled")
-            return
-
-        if is_pairing_command(text):
-            code = open_pairing_window()
-            log.info("pairing window opened via voice command")
-            printed = False
-            try:
-                print_pairing_code(code)
-                printed = True
-            except Exception as e:
-                log.warning("could not print pairing code: %s", e)
-            spoken_code = " ".join(code)
-            if printed:
-                message = ("Pairing mode! I printed the code for you. It is "
-                           + spoken_code + ". Type it within two minutes.")
+        # Shared with the web/ESP32 flows and conversation mode: exact-match
+        # admin commands (poop toggle, pairing — side effects already ran),
+        # then the blocklist.
+        hit = intercept_transcript(text)
+        if hit:
+            log.info("intercepted (%s): %r", hit["action"], text)
+            if hit["voice_key"]:
+                voice.play(hit["voice_key"])
             else:
-                message = ("Pairing mode! The code is " + spoken_code
-                           + ". Type it within two minutes.")
-            voice.play_dynamic(message)
-            return
-
-        if not poop_mode_enabled() and contains_poop(text):
-            log.info("poop blocked: %r", text)
-            voice.play("poop_blocked")
-            return
-
-        if safety_mode_enabled() and not is_safe(text):
-            log.info("blocked: %r", text)
-            voice.play("blocked")
+                voice.play_dynamic(hit["say"])
             return
 
         if please_mode_enabled() and not has_please(text):
@@ -622,11 +684,18 @@ def _handle_press(voice):
             voice.play("say_please")
             return
 
-        voice.play("thinking")
-        img, duration = _generate_with_jokes(text, voice)
+        # Generation starts BEFORE any speaking: the ack's LLM + TTS round
+        # trips (and the jokes) hide inside generation time.
+        model = settings["image_model"]
+        th, holder = _start_generation(text, model)
+        _play_ack(voice, text, settings)
+        voice.play_jokes_until_done(th)
+        if holder["error"]:
+            raise holder["error"]
+        img, duration = holder["result"], time.time() - holder["t0"]
         voice.play("printing")
         print_image(img)
-        log_print_event(text, IMAGE_MODEL, duration)
+        log_print_event(text, model, duration)
         voice.play("done")
     except Exception:
         log.exception("error in press handler")
@@ -636,23 +705,39 @@ def _handle_press(voice):
         _set_busy(False)
 
 
-def _generate_with_jokes(text, voice):
-    """Run image generation in a background thread and tell jokes meanwhile."""
-    result, error = [None], [None]
+def _start_generation(text, model):
+    """Kick image generation in a daemon thread; ack and jokes play on top."""
+    holder = {"result": None, "error": None, "t0": time.time()}
 
     def worker():
         try:
-            result[0] = generate_image(text)
+            holder["result"] = generate_image(text, model=model)
         except Exception as e:
-            error[0] = e
+            holder["error"] = e
 
-    t0 = time.time()
     th = threading.Thread(target=worker, daemon=True)
     th.start()
-    voice.play_jokes_until_done(th)
-    if error[0]:
-        raise error[0]
-    return result[0], time.time() - t0
+    return th, holder
+
+
+def _play_ack(voice, transcript, settings):
+    """Speak a personalized ack, or the canned "thinking" line.
+
+    Runs only after the safety gates passed ``transcript``. Any failure —
+    setting off, no key, model hiccup, TTS down — lands on the canned line,
+    so the kid always hears something.
+    """
+    if not settings.get("natural_ack", True):
+        voice.play("thinking")
+        return
+    try:
+        ack = drawbox_core.generate_ack_text(transcript)
+    except Exception as e:
+        log.warning("ack generation failed: %s", e)
+        voice.play("thinking")
+        return
+    log.info("ack: %s", ack)
+    voice.speak_once(ack, fallback_key="thinking")
 
 
 if __name__ == "__main__":

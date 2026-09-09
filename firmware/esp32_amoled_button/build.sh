@@ -32,6 +32,13 @@ git -C "$CACHE" -c advice.detachedHead=false checkout --quiet "$LIBS_SHA"
 # serial screenshot hook.
 cp "$DIR/lv_conf.h" "$CACHE/examples/arduino/libraries/lv_conf.h"
 
+# Conversation-mode spike ('w' serial hook) needs a websocket client.
+# Best-effort: the sketch builds without it (__has_include guard).
+if ! arduino-cli lib list 2>/dev/null | grep -q "ArduinoWebsockets"; then
+    arduino-cli lib install "ArduinoWebsockets@0.5.4" || \
+        echo "ArduinoWebsockets install failed — spike hook will be a no-op" >&2
+fi
+
 # The face bitmaps are generated, not committed (4+ MB of hex).
 if [ ! -f "$DIR/face_assets.h" ] || [ "$DIR/gen_face_assets.py" -nt "$DIR/face_assets.h" ]; then
     echo "generating face assets..."

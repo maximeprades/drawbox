@@ -63,6 +63,27 @@ def test_generate_gpt_image_uses_gateway_slug(drawbox_dir, monkeypatch):
     assert path.endswith(".png")
 
 
+def test_generate_image_defaults_to_dashboard_model(drawbox_dir, monkeypatch):
+    """No explicit model → the dashboard's image_model setting wins.
+
+    The button daemon calls generate_image without a model; before this
+    contract, it silently used the env default and ignored the dashboard.
+    """
+    png = _png_bytes()
+    seen = {}
+
+    def fake_generate(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(
+            b64_json=base64.b64encode(png).decode(), url=None,
+        )])
+
+    _gateway_client(monkeypatch, images_generate=fake_generate)
+    drawbox_core.save_settings({"image_model": "gpt-image"})
+    drawbox_core.generate_image("a rocket")
+    assert seen["model"] == "openai/gpt-image-2"
+
+
 def test_generate_image_remembers_the_last_page(drawbox_dir, monkeypatch):
     png = _png_bytes()
 

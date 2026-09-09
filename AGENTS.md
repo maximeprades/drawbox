@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## PENDING HARDWARE WORK (temporary — delete this section when done)
+
+The natural-conversation branch shipped with the owner away from the
+hardware. If the Pi (`drawbox.local`) answers pings or an ESP32 shows up
+on USB (`/dev/cu.usbmodem*`), STOP and read `HARDWARE-TODO.md` first —
+it is the ordered runbook for deploying, flashing v1.6.0, running the
+conversation-mode heap spike (serial `w`), and the Gemini benchmark.
+Delete that file and this section once it has all been executed.
+
 ## The two boxes rule
 
 DrawBox has TWO kid-facing devices, and every user-facing feature must ship
@@ -14,11 +23,17 @@ across both:
 Before calling a feature done, walk this checklist:
 
 - Behavior or pipeline changes belong in `drawbox_core.py` or the shared
-  web helpers so both boxes inherit them. Never fork logic per device.
+ web helpers so both boxes inherit them. Never fork logic per device.
+- Conversation mode (opt-in `conversation_mode` setting) runs live Grok
+ Voice Agent sessions: the shared session config, the gated draw tool, and
+ the admin/blocklist transcript interceptor all live in `drawbox_core.py`.
+ The Pi client is `drawbox_realtime.py`; the ESP32 client is gated on the
+ heap spike (serial `w`).
 - Spoken personality (script lines, jokes, TTS voice) lives in the dashboard
-  scripts + `/api/voice/lines`; the ESP32 fetches it at boot. Text changes
-  need zero firmware work — but NEW line keys the box should speak need a
-  firmware prefetch/playback hookup.
+ scripts + `/api/voice/lines`; the ESP32 fetches it at boot and refreshes
+ within a minute of edits (the heartbeat reply carries a voice cache hash).
+ Text changes need zero firmware work — but NEW line keys the box should
+ speak need a firmware prefetch/playback hookup.
 - New `/api/voice/generate` outcomes must carry a `voice_key` the box can play.
 - Printer/rendering changes go in `drawbox_escpos.py` (shared by both paths).
 - If the ESP32 needs new behavior, update the firmware, reflash over USB from
@@ -59,8 +74,11 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
 - The active image model is set in the dashboard Settings page (`image_model`):
   three presets plus the full gateway image catalog by id.
 - Voice is a three-way setting (`voice_provider`): `gateway` (default, OpenAI
-  voices through the AI Gateway key), `elevenlabs` (`ELEVENLABS_API_KEY`), or
-  `grok` (`XAI_API_KEY` via the xAI Voice API).
+ voices through the AI Gateway key), `elevenlabs` (`ELEVENLABS_API_KEY`), or
+ `grok` (`XAI_API_KEY` via the xAI Voice API).
+- Transcription is a two-way setting (`stt_provider`): `gateway` (Whisper,
+ default) or `grok` (xAI STT, `XAI_API_KEY`). Conversation mode
+ (`conversation_mode`, default off) also needs the xAI key.
 
 ### Notes
 - This project uses the system Python on purpose. There is no virtualenv (see

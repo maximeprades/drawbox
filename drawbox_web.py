@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import select
 import shutil
 import subprocess
@@ -28,12 +29,12 @@ from drawbox_core import (
     PLEASE_MODE_FILE, PRINT_LOG_FILE,
     OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
     SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
-    _write_secure_json, apply_api_keys, contains_poop, default_scripts,
+    _write_secure_json, apply_api_keys, content_block, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
-    device_for_token, generate_image, has_please, is_safe,
+    device_for_token, generate_image, has_please,
     is_valid_device_token, list_paired_devices, load_scripts,
     load_settings, log_print_event,
-    mask_key, please_mode_enabled, poop_blocked_message, poop_mode_enabled,
+    mask_key, please_mode_enabled, poop_mode_enabled,
     print_image, redeem_pairing_code, revoke_paired_device,
     safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
     transcribe_audio,
@@ -261,7 +262,8 @@ def api_revoke_device(device_id):
 # flip depending on which worker answered. A concurrent heartbeat from
 # a second box can lose one read-modify-write; the next beat heals it.
 # 150 s of silence is offline. The response carries the knobs the box
-# should apply (volume, brightness, record window).
+# should apply (volume, brightness, record window) plus the voice
+# cache_hash, so a box notices script/voice edits within one beat.
 _DEVICE_ONLINE_S = 150
 
 
@@ -306,10 +308,13 @@ def api_device_heartbeat():
     status[device.get("id", "")] = rec
     _write_secure_json(drawbox_core.DEVICE_STATUS_FILE, status)
     settings = load_settings()
+    provider, voice_id, stability, style = _active_tts()
     return jsonify(ok=True,
                    volume=settings["esp32_volume"],
                    brightness=settings["esp32_brightness"],
-                   record_seconds=settings["record_seconds"])
+                   record_seconds=settings["record_seconds"],
+                   cache_hash=_voice_cache_hash(load_scripts(), provider,
+                                                voice_id, stability, style))
 
 
 @app.route("/api/devices")
@@ -437,16 +442,17 @@ def _voice_line(key):
 
 
 def _rejection_error(desc, blocked_message):
-    """Run the poop → safety → please gates.
+    """Run the content gates (via the shared ``content_block``), then please.
 
-    Returns ``(voice_key, message)`` or None. The check order matches the
-    button daemon's flow. ``blocked_message`` differs per caller: the
-    dashboard explains, the voice box uses the spoken script line.
+    Returns ``(voice_key, message)`` or None. ``blocked_message`` differs
+    per caller: the dashboard explains, the voice box uses the spoken
+    script line — so a plain blocklist hit keeps the caller's message.
     """
-    if not poop_mode_enabled() and contains_poop(desc):
-        return "poop_blocked", poop_blocked_message()
-    if safety_mode_enabled() and not is_safe(desc):
-        return "blocked", blocked_message
+    hit = content_block(desc)
+    if hit:
+        message = blocked_message if hit["voice_key"] == "blocked" \
+            else hit["say"]
+        return hit["voice_key"], message
     if please_mode_enabled() and not has_please(desc):
         return "say_please", _voice_line("say_please")
     return None
@@ -527,13 +533,64 @@ def api_generate():
     return jsonify(**_generate_and_print(desc, printer_type=printer_type))
 
 
+# ── VOICE JOB (two-phase ESP32 flow) ─────────────
+# With the X-DrawBox-Ack header, /api/voice/generate answers as soon as the
+# transcript clears the gates — carrying a personalized ack clip key — and
+# generation+print continue in a background thread. The box plays the ack,
+# then long-polls /api/voice/result. Single-slot job state lives on disk
+# (like device_status.json) because gunicorn runs two workers and the
+# result poll may land on the other one.
+
+
+def _voice_job_path():
+    return drawbox_core.DRAWBOX_DIR / "voice_job.json"
+
+
+def _read_voice_job():
+    try:
+        job = json.loads(_voice_job_path().read_text())
+        return job if isinstance(job, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _run_voice_job(job_id, desc):
+    out = _generate_and_print(desc, source="esp32", include_image=False)
+    if out.get("ok"):
+        result = {"ok": True, "transcript": desc,
+                  "message": _voice_line("printing"), "voice_key": "printing"}
+    else:
+        code = out.get("code", "generate_failed")
+        key = "busy" if code == "busy" else "error"
+        result = {"ok": False, "transcript": desc, "error": _voice_line(key),
+                  "code": code, "voice_key": key}
+    # Compare-and-swap: a job that outlived the staleness window (nothing
+    # bounds this thread — gunicorn's timeout doesn't apply to it) may have
+    # been taken over; a late unconditional write would clobber the new
+    # box's running slot and strand its result poll.
+    current = _read_voice_job()
+    if current and current.get("id") != job_id:
+        log.warning("voice job %s finished after takeover; result dropped",
+                    job_id)
+        return
+    _write_secure_json(_voice_job_path(),
+                       {"id": job_id, "status": "done", "ts": _time.time(),
+                        "result": result})
+
+
 @app.route("/api/voice/generate", methods=["POST"])
 def api_voice_generate():
-    """One-shot request from the ESP32 voice box: raw audio in, print out.
+    """Request from the ESP32 voice box: raw audio in, print out.
 
     Body is the recorded audio itself (Content-Type: audio/wav), not JSON.
     Mirrors the button daemon's listen → transcribe → gate → generate →
     print flow, with the same spoken script lines as display messages.
+
+    Legacy (no X-DrawBox-Ack header): blocks until printing starts and
+    returns the final outcome — old firmware keeps working. Ack mode
+    (X-DrawBox-Ack: 1, firmware >= 1.6.0): returns right after the gates
+    with an ``ack_key`` clip to speak; the final outcome comes from
+    /api/voice/result.
     """
     if (request.content_length or 0) > VOICE_AUDIO_MAX_BYTES:
         return jsonify(ok=False, error="Audio too large.",
@@ -555,11 +612,28 @@ def api_voice_generate():
         return jsonify(ok=False, transcript=transcript,
                        error=_voice_line("too_short"), code="too_short",
                        voice_key="too_short")
+    # Spoken admin commands work from this box too (closing the old drift
+    # where "authorize" at the ESP32 did nothing). "blocked" hits fall
+    # through to _rejection_error, which owns the legacy response shape.
+    hit = drawbox_core.intercept_transcript(transcript)
+    if hit and hit["action"] != "blocked":
+        ack_key = None
+        try:
+            _, ack_key = _ensure_line_wav(hit["say"])
+        except Exception:
+            log.exception("intercept clip synthesis failed")
+        return jsonify(ok=False, transcript=transcript, error=hit["say"],
+                       code="intercepted", action=hit["action"],
+                       voice_key=hit["voice_key"] or "", ack_key=ack_key)
     rejected = _rejection_error(transcript, _voice_line("blocked"))
     if rejected:
         voice_key, error = rejected
         return jsonify(ok=False, transcript=transcript, error=error,
                        code="rejected", voice_key=voice_key)
+
+    if request.headers.get("X-DrawBox-Ack") == "1":
+        return _start_voice_job(transcript[:500])
+
     out = _generate_and_print(transcript[:500], source="esp32",
                               include_image=False)
     if not out.get("ok"):
@@ -572,6 +646,97 @@ def api_voice_generate():
                        voice_key=voice_key)
     return jsonify(ok=True, transcript=transcript,
                    message=_voice_line("printing"), voice_key="printing")
+
+
+# A running job older than this is presumed dead (worker crash mid-job);
+# generation itself is bounded well under it by the gunicorn timeout.
+_VOICE_JOB_STALE_S = 180
+
+
+def _start_voice_job(transcript):
+    """Phase 1 of the ack flow: synthesize the ack, kick generation, return.
+
+    Busy is decided from the on-disk job slot, not just the per-process
+    lock: gunicorn runs two workers, and a second box hitting the other
+    worker would otherwise clobber the single job file mid-generation and
+    strand the first box's result poll on no_job (Bugbot, PR #39). The
+    job thread's non-blocking lock acquire remains the in-process guard.
+    """
+    job = _read_voice_job()
+    if job and job.get("status") == "running" and \
+            _time.time() - job.get("ts", 0) < _VOICE_JOB_STALE_S:
+        return jsonify(ok=False, transcript=transcript,
+                       error=_voice_line("busy"), code="busy",
+                       voice_key="busy")
+    if _gen_lock.locked():
+        return jsonify(ok=False, transcript=transcript,
+                       error=_voice_line("busy"), code="busy",
+                       voice_key="busy")
+    # Claim the slot BEFORE ack synthesis: the LLM + TTS round trips take
+    # seconds, plenty for a second box to pass the busy checks above and
+    # clobber this job (Bugbot round 2). The remaining check-to-claim race
+    # is sub-millisecond — fine for a household of two boxes.
+    job_id = secrets.token_hex(8)
+    _write_secure_json(_voice_job_path(),
+                       {"id": job_id, "status": "running", "ts": _time.time()})
+    ack_key = None
+    if load_settings()["natural_ack"]:
+        try:
+            ack_text = drawbox_core.generate_ack_text(transcript)
+            _, ack_key = _ensure_line_wav(ack_text)
+            log.info("ack for %r: %s", transcript[:60], ack_text)
+        except Exception:
+            # Box falls back to its cached "thinking" line — never fatal.
+            log.exception("ack synthesis failed")
+    threading.Thread(target=_run_voice_job, args=(job_id, transcript),
+                     daemon=True).start()
+    return jsonify(ok=True, transcript=transcript, ack_key=ack_key,
+                   job=job_id)
+
+
+@app.route("/api/voice/result")
+def api_voice_result():
+    """Long-poll the single-slot voice job until it finishes.
+
+    The firmware passes ``id`` from phase 1 so a stale result from an
+    earlier job can't be mistaken for this one, and ``timeout`` (seconds,
+    capped) mostly so tests don't wait 90 s.
+    """
+    job_id = request.args.get("id", "")
+    # 110 s, not 90: the firmware's read deadline is 120 s (matching the
+    # legacy blocking flow) — a 90 s cutoff told kids "error" while a
+    # 90-120 s generation still printed.
+    try:
+        timeout = min(110.0, max(0.0, float(request.args.get("timeout", 110))))
+    except (TypeError, ValueError):
+        timeout = 110.0
+    deadline = _time.time() + timeout
+    while True:
+        job = _read_voice_job()
+        if not job or (job_id and job.get("id") != job_id):
+            return jsonify(ok=False, error="No drawing in progress",
+                           code="no_job", voice_key="error"), 404
+        if job.get("status") == "done":
+            return jsonify(**(job.get("result") or {}))
+        if _time.time() >= deadline:
+            return jsonify(ok=False, error=_voice_line("error"),
+                           code="timeout", voice_key="error"), 504
+        _time.sleep(0.25)
+
+
+_CLIP_KEY_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+@app.route("/api/voice/clip")
+def api_voice_clip():
+    """Serve one synthesized 16 kHz WAV by cache key (the phase-1 ack_key)."""
+    key = request.args.get("k", "")
+    if not _CLIP_KEY_RE.match(key):
+        return jsonify(ok=False, error="Unknown clip"), 404
+    wav_path = drawbox_core.CACHE_DIR / f"{key}.16k.wav"
+    if not wav_path.exists():
+        return jsonify(ok=False, error="Unknown clip"), 404
+    return send_file(wav_path, mimetype="audio/wav", max_age=0)
 
 
 def _variant_count(text):
@@ -667,6 +832,22 @@ def api_voice_line():
     else:
         return jsonify(ok=False, error="Unknown line"), 404
 
+    try:
+        wav_path, _ = _ensure_line_wav(text)
+    except Exception:
+        log.exception("voice line synthesis failed")
+        return jsonify(ok=False, error="Synthesis failed"), 503
+    return send_file(wav_path, mimetype="audio/wav", max_age=0)
+
+
+def _ensure_line_wav(text):
+    """Synthesize ``text`` with the active TTS into the shared voice cache;
+    returns (wav_path, cache_key). Raises on synthesis/transcode failure.
+
+    Serves both the script-line route and the per-request ack clips. Ack
+    clips are unique per transcript so they accumulate (~50 KB each); the
+    software-update deploy already wipes the cache, which is enough.
+    """
     provider, voice_id, stability, style = _active_tts()
     cache_key = drawbox_core.tts_cache_key(
         text, provider, voice_id, stability, style)
@@ -681,12 +862,11 @@ def api_voice_line():
                 text, provider, voice_id, stability, style)
             _write_bytes_atomic(mp3_path, data)
         except Exception:
-            log.exception("voice line synthesis failed")
             try:
                 mp3_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            return jsonify(ok=False, error="Synthesis failed"), 503
+            raise
 
     if not wav_path.exists():
         try:
@@ -696,14 +876,13 @@ def api_voice_line():
                 check=True, capture_output=True, timeout=30,
             )
         except Exception:
-            log.exception("voice line ffmpeg failed")
             try:
                 wav_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            return jsonify(ok=False, error="Synthesis failed"), 503
+            raise
 
-    return send_file(wav_path, mimetype="audio/wav", max_age=0)
+    return wav_path, cache_key
 
 @app.route("/api/last-image")
 def api_last_image():
@@ -803,6 +982,16 @@ def api_settings():
             settings["image_model"] = data["image_model"]
         if data.get("voice_provider") in VOICE_PROVIDERS:
             settings["voice_provider"] = data["voice_provider"]
+        if data.get("stt_provider") in drawbox_core.STT_PROVIDERS:
+            settings["stt_provider"] = data["stt_provider"]
+        if "natural_ack" in data:
+            if data["natural_ack"] is not True and data["natural_ack"] is not False:
+                raise ValueError("natural_ack must be true or false")
+            settings["natural_ack"] = data["natural_ack"]
+        if "conversation_mode" in data:
+            if data["conversation_mode"] is not True and data["conversation_mode"] is not False:
+                raise ValueError("conversation_mode must be true or false")
+            settings["conversation_mode"] = data["conversation_mode"]
         if isinstance(data.get("tts_voice_id"), str) and data["tts_voice_id"].strip():
             settings["tts_voice_id"] = resolve_tts_voice(data["tts_voice_id"])
         if isinstance(data.get("elevenlabs_voice_id"), str) and data["elevenlabs_voice_id"].strip():
@@ -1335,6 +1524,104 @@ def api_reboot():
         return jsonify(ok=True, message="Rebooting...")
     except Exception as e:
         return jsonify(ok=False, message=str(e))
+
+# ── REALTIME AGENT (conversation mode) ───────────
+# The ESP32 box's server-side half of a Grok Voice Agent session: it
+# fetches an ephemeral token + the shared session config here, forwards
+# the agent's draw_coloring_page calls to /api/agent/draw, and checks
+# every transcript against /api/agent/intercept. The Pi daemon calls the
+# same core functions directly — one behavior, two boxes.
+
+
+def _mint_client_secret():
+    import urllib.request
+
+    req = urllib.request.Request(
+        drawbox_core.XAI_CLIENT_SECRETS_URL, data=b"{}",
+        headers={
+            "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}",
+            "Content-Type": "application/json",
+        })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+@app.route("/api/realtime/token", methods=["POST"])
+def api_realtime_token():
+    """Ephemeral xAI client secret + session config for a paired box.
+
+    The real XAI key never leaves the Pi; the box connects to xAI with a
+    short-lived secret minted here.
+    """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
+    drawbox_core.apply_api_keys()
+    if not drawbox_core.XAI_API_KEY:
+        return jsonify(ok=False, error="XAI_API_KEY not set",
+                       code="no_key"), 503
+    try:
+        secret = _mint_client_secret()
+    except Exception:
+        log.exception("client secret mint failed")
+        return jsonify(ok=False, error="Could not reach xAI",
+                       code="mint_failed"), 502
+    return jsonify(ok=True, token=secret.get("value"),
+                   expires_at=secret.get("expires_at"),
+                   url=drawbox_core.XAI_REALTIME_URL,
+                   session=drawbox_core.realtime_session_config(),
+                   max_session_s=drawbox_core.AGENT_SESSION_MAX_S)
+
+
+@app.route("/api/agent/draw", methods=["POST"])
+def api_agent_draw():
+    """Execute the agent's draw_coloring_page tool call (gated, async).
+
+    403 when conversation mode is off, like the token endpoint — this
+    path intentionally skips the please gate (etiquette lives in the
+    conversation), so it must not be reachable outside the mode.
+    """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
+    data = _request_dict()
+    if data is None:
+        return jsonify(ok=False, error="Invalid JSON body"), 400
+    desc = data.get("description")
+    if not isinstance(desc, str) or not desc.strip():
+        return jsonify(ok=False,
+                       message="Ask the child what they would like drawn first.")
+    return jsonify(**drawbox_core.execute_draw_tool(desc))
+
+
+@app.route("/api/agent/intercept", methods=["POST"])
+def api_agent_intercept():
+    """Run a session transcript through the deterministic interceptor.
+
+    Returns ``action: null`` to let the conversation proceed. On a hit the
+    admin side effects have already run server-side; ``ack_key`` (when
+    synthesis worked) lets the box speak the exact line via /api/voice/clip.
+    """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
+    data = _request_dict()
+    if data is None:
+        return jsonify(ok=False, error="Invalid JSON body"), 400
+    transcript = data.get("transcript")
+    if not isinstance(transcript, str) or not transcript.strip():
+        return jsonify(action=None)
+    hit = drawbox_core.intercept_transcript(transcript)
+    if not hit:
+        return jsonify(action=None)
+    ack_key = None
+    try:
+        _, ack_key = _ensure_line_wav(hit["say"])
+    except Exception:
+        log.exception("intercept clip synthesis failed")
+    return jsonify(action=hit["action"], say=hit["say"],
+                   voice_key=hit["voice_key"], ack_key=ack_key)
+
 
 # ── ANALYTICS ────────────────────────────────────
 

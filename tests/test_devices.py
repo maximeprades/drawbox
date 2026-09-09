@@ -31,6 +31,17 @@ def test_heartbeat_returns_current_settings(client):
     assert body["volume"] == 33
     assert body["brightness"] == 44
     assert body["record_seconds"] == 12
+    # Same digest the /api/voice/lines manifest advertises, so the box can
+    # spot stale cached audio from any heartbeat.
+    lines = client.get("/api/voice/lines").get_json()
+    assert body["cache_hash"] == lines["cache_hash"]
+
+
+def test_heartbeat_cache_hash_tracks_script_edits(client):
+    first = client.post("/api/device/heartbeat", json={}).get_json()["cache_hash"]
+    client.post("/api/scripts", json={"voice_lines": {"ready": "Howdy, partner!"}})
+    second = client.post("/api/device/heartbeat", json={}).get_json()["cache_hash"]
+    assert first != second
 
 
 def test_devices_lists_online_and_never_seen(client, drawbox_dir):

@@ -608,6 +608,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
             <optgroup label="Presets">
               <option value="flux-schnell">FLUX Schnell — fastest</option>
               <option value="nano-banana">Nano Banana 2</option>
+              <option value="nano-banana-fast">Nano Banana 2 Lite — fastest Gemini</option>
               <option value="gpt-image">GPT Image — slowest</option>
             </optgroup>
             <optgroup label="Vercel AI Gateway catalog">
@@ -704,8 +705,25 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">Record Duration (seconds)</label>
+          <label class="form-label">Speech-to-Text</label>
+          <select class="select" id="cfgSttProvider" style="max-width:300px">
+            <option value="gateway">AI Gateway (Whisper)</option>
+            <option value="grok">Grok STT (xAI)</option>
+          </select>
+          <div class="form-hint">Grok STT strips the "um"s automatically and needs the xAI API key below.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Reply Style</label>
+          <select class="select" id="cfgNaturalAck" style="max-width:300px">
+            <option value="1">Natural — AI acknowledges each request</option>
+            <option value="0">Classic — scripted "thinking" lines</option>
+          </select>
+          <div class="form-hint">Natural mode speaks a personalized line ("Ooh, a purple dinosaur!") while the page draws.</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Listening Window (seconds)</label>
           <input class="input" type="number" id="cfgRecSec" min="3" max="30" style="max-width:120px" />
+          <div class="form-hint">Recording stops early once the kid stops talking; this is the ceiling.</div>
         </div>
       </div>
     </div>
@@ -720,6 +738,20 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Screen brightness: <span id="cfgEsp32BriVal">200</span></label>
           <input type="range" id="cfgEsp32Bri" min="10" max="255" step="1" value="200" style="width:100%;max-width:300px" oninput="$('cfgEsp32BriVal').textContent=this.value" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Conversation Mode (beta)</div></div>
+      <div class="card-content">
+        <div class="form-group">
+          <label class="form-label">Live conversation with the boxes</label>
+          <select class="select" id="cfgConversationMode" style="max-width:300px">
+            <option value="0">Off — classic one-shot flow (default)</option>
+            <option value="1">On — Grok Voice Agent, back-and-forth chat</option>
+          </select>
+          <div class="form-hint">The box talks WITH the kid (Grok voice, ~$0.05/min while chatting) and calls the drawing pipeline itself. Drawings still pass the safety filter. Needs the xAI API key. Edit the agent's personality on the Scripts page.</div>
         </div>
       </div>
     </div>
@@ -804,6 +836,13 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
       <div class="card-header"><div class="card-title">Jokes</div><div class="card-desc">Told while the image generates (one per line)</div></div>
       <div class="card-content">
         <textarea class="textarea" id="jokesEditor" rows="12" style="font-size:13px"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Agent Personality</div><div class="card-desc">System prompt for Conversation Mode — how the live agent behaves when chatting with kids. Keep the safety and admin-command rules unless you know what you are doing.</div></div>
+      <div class="card-content">
+        <textarea class="textarea" id="agentInstructionsEditor" rows="10" style="font-size:13px"></textarea>
       </div>
     </div>
 
@@ -1420,6 +1459,9 @@ async function loadSettings() {
     $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
     $('cfgGrokVoice').value = d.grok_voice_id || 'eve';
     updateVoiceProviderFields();
+    $('cfgSttProvider').value = d.stt_provider || 'gateway';
+    $('cfgNaturalAck').value = d.natural_ack === false ? '0' : '1';
+    $('cfgConversationMode').value = d.conversation_mode === true ? '1' : '0';
     $('cfgRecSec').value = d.record_seconds || 10;
     $('cfgEsp32Vol').value = d.esp32_volume != null ? d.esp32_volume : 85;
     $('cfgEsp32VolVal').textContent = d.esp32_volume != null ? d.esp32_volume : 85;
@@ -1467,6 +1509,9 @@ async function saveSettings() {
     tts_stability: parseFloat($('cfgStability').value),
     tts_style: parseFloat($('cfgStyle').value),
     grok_voice_id: $('cfgGrokVoice').value.trim(),
+    stt_provider: $('cfgSttProvider').value,
+    natural_ack: $('cfgNaturalAck').value === '1',
+    conversation_mode: $('cfgConversationMode').value === '1',
     record_seconds: parseInt($('cfgRecSec').value) || 10,
     esp32_volume: parseInt($('cfgEsp32Vol').value),
     esp32_brightness: parseInt($('cfgEsp32Bri').value),
@@ -1624,6 +1669,7 @@ async function loadScripts() {
         '</div>';
     });
     $('jokesEditor').value = (d.jokes || []).join('\n');
+    $('agentInstructionsEditor').value = d.agent_instructions || (d.defaults && d.defaults.agent_instructions) || '';
     $('scriptsRestartNotice').style.display = 'none';
   } catch(e) { toast('Failed to load scripts: ' + e.message, false); }
 }
@@ -1635,11 +1681,12 @@ async function saveScripts() {
     voice_lines[key] = el.value;
   });
   const jokes = $('jokesEditor').value.split('\n').map(j => j.trim()).filter(j => j);
+  const agent_instructions = $('agentInstructionsEditor').value.trim();
   try {
     const r = await fetch('/api/scripts', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({voice_lines, jokes})
+      body: JSON.stringify({voice_lines, jokes, agent_instructions})
     });
     const d = await r.json();
     if (d.ok) {

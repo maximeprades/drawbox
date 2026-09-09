@@ -28,7 +28,18 @@ Kid presses button → "I'm listening!"
     → "All done! Press the button when you want another one!"
 ```
 
-While the image generates, DrawBox tells the kid jokes to keep them entertained.
+Recording stops on its own about 1.5 seconds after the kid stops talking —
+nobody stares at a listening box. While the image generates, DrawBox speaks a
+personalized acknowledgment ("Ooh, a happy dinosaur with flowers! Drawing it
+now!") and tells jokes to keep them entertained.
+
+### Conversation Mode (beta)
+
+Flip one setting and the boxes hold a real back-and-forth conversation
+(Grok Voice Agent): the box chats, asks follow-ups, and prints when it has
+heard enough. Drawings still pass the safety filter, spoken admin commands
+stay deterministic, and the classic one-shot flow remains the fallback.
+Costs ~$0.05/min of chat (xAI); off by default.
 
 ### Special Interactions
 
@@ -151,7 +162,7 @@ The dashboard (`drawbox_web.py`) runs on the Pi at `http://drawbox.local:5000` a
 - **Overview** — service status, temperature, uptime, usage analytics, popular prompts
 - **Generate & Print** — type a description, generate and print from any browser
 - **Live Logs** — streaming service logs via SSE (`journalctl -u drawbox -f`)
-- **Settings** — coloring prompt, image model, TTS voice, record duration, API keys
+- **Settings** — coloring prompt, image model, voice + speech-to-text providers, reply style, conversation mode, listening window, API keys
 - **Scripts** — customize every voice line and joke DrawBox tells
 - **"Please" Mode** — require kids to say "please" to get a drawing
 - **Safety Filter** — toggle the word blocklist on/off

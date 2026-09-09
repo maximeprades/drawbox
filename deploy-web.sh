@@ -41,7 +41,14 @@ python3 -c "import gunicorn" 2>/dev/null || {
     echo "   Installing gunicorn..."
     sudo pip3 install --break-system-packages gunicorn
 }
-echo "   ✅ Flask + gunicorn ready"
+# Version check, not import check: Bookworm's apt ships python3-websockets
+# 10.4, which imports fine but lacks the >=14 asyncio client the realtime
+# session needs (connect(additional_headers=...)).
+python3 -c "import websockets, sys; sys.exit(0 if int(websockets.version.version.split('.')[0]) >= 14 else 1)" 2>/dev/null || {
+    echo "   Installing websockets >= 14 (conversation mode)..."
+    sudo pip3 install --break-system-packages "websockets>=14"
+}
+echo "   ✅ Flask + gunicorn + websockets ready"
 
 # Clone repo for software updates (skip if already exists)
 if [ ! -d ~/drawbox-repo ]; then
