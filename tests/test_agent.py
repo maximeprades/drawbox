@@ -62,12 +62,12 @@ def test_draw_tool_generates_and_prints_in_background(drawbox_dir, monkeypatch):
     monkeypatch.setattr(drawbox_core, "generate_image", fake_generate)
     monkeypatch.setattr(drawbox_core, "print_image",
                         lambda p, printer_type=None: calls.setdefault("printed", p))
-    drawbox_core.save_settings({"image_model": "gpt-image"})
+    drawbox_core.save_settings({"image_model": "openai/gpt-image-2"})
 
     out = drawbox_core.execute_draw_tool("  a happy dragon  ")
     assert out["ok"] is True
     assert _wait_for(lambda: "printed" in calls)
-    assert calls["gen"] == ("a happy dragon", "gpt-image")
+    assert calls["gen"] == ("a happy dragon", "openai/gpt-image-2")
     assert calls["printed"] == "page.png"
 
 
@@ -163,7 +163,7 @@ def test_realtime_token_requires_conversation_mode(client):
 
 def test_realtime_token_mints_ephemeral_secret(client, monkeypatch):
     drawbox_core.save_settings({"conversation_mode": True})
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -175,17 +175,19 @@ def test_realtime_token_mints_ephemeral_secret(client, monkeypatch):
     body = client.post("/api/realtime/token").get_json()
     assert body["ok"] is True
     assert body["token"] == "eph-123"
-    assert body["url"].startswith("wss://api.x.ai/v1/realtime")
+    assert "realtime-model" in body["url"]
+    assert "xai/grok-voice" in body["url"]
     assert body["session"]["tools"][0]["name"] == "draw_coloring_page"
     assert body["max_session_s"] == drawbox_core.AGENT_SESSION_MAX_S
     req = captured["req"]
-    assert req.full_url == drawbox_core.XAI_CLIENT_SECRETS_URL
-    assert req.get_header("Authorization") == "Bearer xai-test"
+    assert req.full_url == drawbox_core.GATEWAY_CLIENT_SECRETS_URL
+    assert req.get_header("Authorization") == "Bearer vck-test"
+    assert json.loads(req.data)["model"] == drawbox_core.GATEWAY_REALTIME_MODEL
 
 
-def test_realtime_token_without_xai_key_is_503(client, monkeypatch):
+def test_realtime_token_without_gateway_key_is_503(client, monkeypatch):
     drawbox_core.save_settings({"conversation_mode": True})
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     r = client.post("/api/realtime/token")
     assert r.status_code == 503
     assert r.get_json()["code"] == "no_key"

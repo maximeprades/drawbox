@@ -253,8 +253,11 @@ async def _run_session_async(voice, state):
     import websockets
 
     drawbox_core.apply_api_keys()
-    if not drawbox_core.XAI_API_KEY:
-        raise RuntimeError("XAI_API_KEY not set")
+    secret = drawbox_core.mint_realtime_client_secret()
+    token = secret.get("value") or secret.get("token")
+    url = secret.get("url") or drawbox_core.GATEWAY_REALTIME_URL
+    if not token:
+        raise RuntimeError("AI Gateway realtime mint returned no token")
 
     config = drawbox_core.realtime_session_config()
     loop = asyncio.get_running_loop()
@@ -268,9 +271,8 @@ async def _run_session_async(voice, state):
 
     speaker = _Speaker(sd)
     async with websockets.connect(
-            drawbox_core.XAI_REALTIME_URL,
-            additional_headers={
-                "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}"},
+            url,
+            additional_headers={"Authorization": f"Bearer {token}"},
     ) as ws:
         async def send(payload):
             await ws.send(json.dumps(payload))

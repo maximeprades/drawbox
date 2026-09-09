@@ -78,8 +78,14 @@ def test_settings_rejects_invalid_model(client):
 
 
 def test_settings_accepts_valid_model(client):
-    client.post("/api/settings", json={"image_model": "flux-schnell"})
-    assert client.get("/api/settings").get_json()["image_model"] == "flux-schnell"
+    client.post("/api/settings", json={"image_model": "bfl/flux-2-pro"})
+    assert client.get("/api/settings").get_json()["image_model"] == "bfl/flux-2-pro"
+
+
+def test_settings_rewrites_legacy_image_alias(client):
+    client.post("/api/settings", json={"image_model": "nano-banana"})
+    assert client.get("/api/settings").get_json()["image_model"] == \
+        "google/gemini-3.1-flash-image-preview"
 
 
 def test_settings_accepts_gateway_model(client):
@@ -903,8 +909,8 @@ def test_dashboard_keys_match_the_registry(client):
     html = client.get("/").get_data(as_text=True)
     assert 'id="keyGateway"' in html
     assert "AI Gateway API Key" in html
-    assert 'id="keyElevenlabs"' in html
-    assert 'id="keyXai"' in html
+    assert 'id="keyElevenlabs"' not in html
+    assert 'id="keyXai"' not in html
     assert 'id="keyOpenai"' not in html
     assert 'id="keyReplicate"' not in html
     assert 'id="keyGemini"' not in html
@@ -920,14 +926,34 @@ def test_dashboard_setting_toggles_use_the_whole_row(client):
             html,
         )
     assert 'id="pleaseToggle" onclick=' not in html
+    # Hover must not change margin/padding (that painted a floating bar).
+    assert "button.setting-row:hover" in html
+    assert re.search(
+        r"button\.setting-row:hover\s*\{[^}]*box-shadow:",
+        html,
+    )
+    assert not re.search(
+        r"button\.setting-row:hover\s*\{[^}]*margin:\s*0\s+-24px",
+        html,
+    )
+
+
+def test_dashboard_can_rename_paired_devices(client):
+    html = client.get("/").get_data(as_text=True)
+    assert "function renameDevice(" in html
+    assert "function askPrompt(" in html
+    assert "method: 'PATCH'" in html
 
 
 def test_dashboard_exposes_gateway_and_voice_provider_controls(client):
     html = client.get("/").get_data(as_text=True)
     assert 'id="cfgVoiceProvider"' in html
-    assert 'id="keyXai"' in html
-    assert 'id="keyElevenlabs"' in html
+    assert 'id="keyXai"' not in html
+    assert 'id="keyElevenlabs"' not in html
+    assert 'value="elevenlabs"' not in html
     assert 'value="spacexai/grok-imagine-image"' in html
+    assert 'value="flux-schnell"' not in html
+    assert 'value="nano-banana"' not in html
 
 
 def test_dashboard_generate_page_has_printer_dropdown(client):

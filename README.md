@@ -50,13 +50,10 @@ Costs ~$0.05/min of chat (xAI); off by default.
 
 ## Image Models
 
-DrawBox supports three image generation backends. Switch models from the web dashboard without restarting:
-
-| Model | Env Value | Speed | Cost | Notes |
-|-------|-----------|-------|------|-------|
-| **Nano Banana 2** | `nano-banana` | ~5s | Free (quota) | Default. Google Gemini 2.5 Flash Image. |
-| **FLUX Schnell** | `flux-schnell` | ~3s | ~$0.003 | Via Replicate. Fastest. |
-| **GPT Image** | `gpt-image` | ~15s | ~$0.02 | OpenAI gpt-image-1. Best quality, slowest. |
+DrawBox generates images through Vercel AI Gateway. Pick any catalog model
+from the dashboard Settings page (`image_model`). The default is
+`google/gemini-3.1-flash-image-preview`. Old aliases (`nano-banana`,
+`gpt-image`) still resolve to the matching catalog id.
 
 ## Parts
 
@@ -193,12 +190,8 @@ All voice lines and jokes can be customized from the dashboard's Scripts page.
 
 ## Cost
 
-Each coloring page costs about **$0.02** (with FLUX Schnell):
-- ~$0.003 image generation (FLUX Schnell via Replicate)
-- ~$0.01 voice (OpenAI TTS)
-- ~$0.006 transcription (Whisper)
-
-$5 gets you ~250 pages. Nano Banana 2 (Gemini) is free within Google's quota. Set spending limits at [platform.openai.com](https://platform.openai.com) and [replicate.com](https://replicate.com).
+Each coloring page is billed through Vercel AI Gateway (image + TTS + STT).
+Set a spend limit on the Gateway dashboard.
 
 ## Safety
 

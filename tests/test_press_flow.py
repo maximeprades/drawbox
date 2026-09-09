@@ -39,7 +39,8 @@ def _patch_pipeline(monkeypatch, seen):
 
 
 def test_handle_press_uses_dashboard_model_and_record_seconds(drawbox_dir, monkeypatch):
-    drawbox_core.save_settings({"image_model": "gpt-image", "record_seconds": 5,
+    drawbox_core.save_settings({"image_model": "openai/gpt-image-2",
+                                "record_seconds": 5,
                                 "natural_ack": False})
     seen = {}
     events = []
@@ -48,8 +49,8 @@ def test_handle_press_uses_dashboard_model_and_record_seconds(drawbox_dir, monke
     drawbox._handle_press(_fake_voice(events))
 
     assert seen["record_seconds"] == 5
-    assert seen["model"] == "gpt-image"
-    assert seen["logged_model"] == "gpt-image"
+    assert seen["model"] == "openai/gpt-image-2"
+    assert seen["logged_model"] == "openai/gpt-image-2"
     assert seen["printed"] == "page.png"
     assert "thinking" in events  # natural_ack off → canned line
     assert events[-1] == "done"

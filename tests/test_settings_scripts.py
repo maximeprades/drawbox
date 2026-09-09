@@ -30,8 +30,7 @@ def test_load_settings_resolves_unknown_voice_and_drops_dead_keys(drawbox_dir):
         "whisper_language": "en",
     }))
     s = drawbox_core.load_settings()
-    # Gateway voice ids are clamped to a known OpenAI voice; the historical
-    # ElevenLabs id lives in elevenlabs_voice_id now.
+    # Gateway voice ids are clamped to a known OpenAI voice.
     assert s["tts_voice_id"] == "alloy"
     assert s["record_seconds"] == 12
     assert "whisper_language" not in s
@@ -45,11 +44,17 @@ def test_load_settings_clamps_unknown_voice_provider(drawbox_dir):
 def test_load_settings_clamps_stale_image_model(drawbox_dir, monkeypatch):
     # A model removed from the gateway catalog must not brick the button.
     drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "dall-e-1"}))
-    monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "flux-schnell")
-    assert drawbox_core.load_settings()["image_model"] == "flux-schnell"
-    # And a garbage env default falls through to the safe preset.
+    monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "google/gemini-3-pro-image")
+    assert drawbox_core.load_settings()["image_model"] == "google/gemini-3-pro-image"
+    # A historical preset alias rewrites to its catalog id.
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "nano-banana"}))
+    assert drawbox_core.load_settings()["image_model"] == \
+        "google/gemini-3.1-flash-image-preview"
+    # And a garbage env default falls through to the catalog default.
     monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "also-removed")
-    assert drawbox_core.load_settings()["image_model"] == "nano-banana"
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "dall-e-1"}))
+    assert drawbox_core.load_settings()["image_model"] == \
+        drawbox_core.DEFAULT_IMAGE_MODEL
 
 
 def test_load_settings_clamps_record_seconds(drawbox_dir):

@@ -1,4 +1,4 @@
-"""API key precedence: file > env > empty."""
+"""API key precedence: file > env > empty. Only the Gateway key is live."""
 
 import json
 
@@ -6,20 +6,15 @@ import drawbox_core
 
 
 def test_keys_default_to_empty(drawbox_dir, monkeypatch):
-    for v in ("AI_GATEWAY_API_KEY", "ELEVENLABS_API_KEY", "XAI_API_KEY"):
-        monkeypatch.delenv(v, raising=False)
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     keys = drawbox_core._load_api_keys()
-    assert keys == {"ai_gateway": "", "elevenlabs": "", "xai": ""}
+    assert keys == {"ai_gateway": ""}
 
 
 def test_keys_from_env(drawbox_dir, monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-env")
-    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-env")
-    monkeypatch.setenv("XAI_API_KEY", "xai-env")
     keys = drawbox_core._load_api_keys()
     assert keys["ai_gateway"] == "vck-env"
-    assert keys["elevenlabs"] == "el-env"
-    assert keys["xai"] == "xai-env"
 
 
 def test_keys_file_overrides_env(drawbox_dir, monkeypatch):
@@ -51,18 +46,18 @@ def test_corrupted_keys_file_falls_back_to_env(drawbox_dir, monkeypatch):
 
 
 def test_old_provider_keys_are_ignored(drawbox_dir, monkeypatch):
-    for v in ("AI_GATEWAY_API_KEY", "ELEVENLABS_API_KEY", "XAI_API_KEY"):
-        monkeypatch.delenv(v, raising=False)
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     drawbox_core.API_KEYS_FILE.write_text(json.dumps({
         "openai": "sk-old",
         "replicate": "r8-old",
         "gemini": "AIza-old",
         "elevenlabs": "el-old",
+        "xai": "xai-old",
     }))
     keys = drawbox_core._load_api_keys()
-    # Retired direct-image keys stay dead; elevenlabs lives on for the
-    # elevenlabs voice provider.
-    assert keys == {"ai_gateway": "", "elevenlabs": "el-old", "xai": ""}
+    # Retired direct-provider keys stay dead, including the old
+    # ElevenLabs / xAI slots.
+    assert keys == {"ai_gateway": ""}
 
 
 def test_resolve_tts_voice():

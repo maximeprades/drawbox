@@ -1,4 +1,4 @@
-"""STT provider dispatch: gateway Whisper (default) vs xAI Grok STT."""
+"""STT provider dispatch: gateway Whisper (default) vs Grok STT via Gateway."""
 
 import json
 import urllib.request
@@ -23,7 +23,7 @@ class _FakeJsonResponse:
 
 
 def test_transcribe_audio_dispatches_to_grok(drawbox_dir, monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     drawbox_core.save_settings({"stt_provider": "grok"})
     captured = {}
 
@@ -37,23 +37,17 @@ def test_transcribe_audio_dispatches_to_grok(drawbox_dir, monkeypatch):
     assert drawbox_core.transcribe_audio(b"RIFF-fake-wav") == "draw a cat"
 
     req = captured["req"]
-    assert req.full_url == drawbox_core.GROK_STT_URL
-    assert req.get_header("Authorization") == "Bearer xai-test"
-    ctype = req.get_header("Content-type")
-    assert ctype.startswith("multipart/form-data; boundary=")
-    boundary = ctype.split("boundary=", 1)[1]
-    assert f"--{boundary}".encode() in req.data
-    assert b'name="file"' in req.data
-    assert b'filename="audio.wav"' in req.data
-    assert b"RIFF-fake-wav" in req.data
-    # The file part must be terminated by the closing boundary.
-    assert req.data.endswith(f"\r\n--{boundary}--\r\n".encode())
+    assert req.full_url == drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL
+    assert req.get_header("Authorization") == "Bearer vck-test"
+    assert req.get_header("Ai-model-id") == "xai/grok-stt"
+    body = json.loads(req.data)
+    assert body["mediaType"] == "audio/wav"
 
 
-def test_grok_stt_requires_xai_key(drawbox_dir, monkeypatch):
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+def test_grok_stt_requires_gateway_key(drawbox_dir, monkeypatch):
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     drawbox_core.save_settings({"stt_provider": "grok"})
-    with pytest.raises(RuntimeError, match="XAI_API_KEY"):
+    with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
         drawbox_core.transcribe_audio(b"RIFF-fake-wav")
 
 
@@ -69,6 +63,7 @@ def test_transcribe_audio_defaults_to_gateway(drawbox_dir, monkeypatch):
 
     assert drawbox_core.transcribe_audio(b"RIFF-fake-wav") == "a boat"
     assert captured["req"].full_url == drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL
+    assert captured["req"].get_header("Ai-model-id") == "openai/whisper-1"
 
 
 def test_load_settings_clamps_unknown_stt_provider(drawbox_dir):

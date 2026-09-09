@@ -13,15 +13,11 @@ def test_tts_cache_key_matches_daemon_historical_hashes():
     Plaintext formulas (must stay byte-identical):
       gateway    md5("{voice_id}:{text}")
                = md5("alloy:hello kids")
-      elevenlabs md5("{voice_id}:{stability}:{style}:{text}")
-               = md5("voice123:0.5:0.0:hello kids")
       grok       md5("grok:{voice_id}:{text}")
                = md5("grok:eve:hello kids")
     """
     text = "hello kids"
     assert drawbox_core.tts_cache_key(text, "gateway", "alloy") == "6cad69b2bf31"
-    assert drawbox_core.tts_cache_key(
-        text, "elevenlabs", "voice123", 0.5, 0.0) == "155610e07050"
     assert drawbox_core.tts_cache_key(text, "grok", "eve") == "e807ca23e09e"
 
 

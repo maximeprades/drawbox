@@ -281,7 +281,10 @@ body {
   cursor: pointer; transition: background 0.1s;
 }
 .wifi-network:last-child { border-bottom: none; }
-.wifi-network:hover { background: var(--accent); margin: 0 -24px; padding: 10px 24px; }
+.wifi-network:hover {
+  background: var(--accent);
+  box-shadow: -24px 0 0 var(--accent), 24px 0 0 var(--accent);
+}
 .wifi-ssid { font-size: 14px; font-weight: 500; flex: 1; }
 .wifi-meta { font-size: 12px; color: var(--muted-foreground); }
 
@@ -307,7 +310,10 @@ button.setting-row {
   border: none; border-bottom: 1px solid var(--border); border-radius: 0;
 }
 button.setting-row:last-child { border-bottom: none; }
-button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-left: 24px; padding-right: 24px; }
+button.setting-row:hover {
+  background: var(--accent);
+  box-shadow: -24px 0 0 var(--accent), 24px 0 0 var(--accent);
+}
 
 /* ── MOBILE HEADER ─────────────────── */
 .mobile-header {
@@ -488,7 +494,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
         <div class="card-title">Devices</div>
-        <div class="card-desc">Raspberry Pi and paired boxes</div>
+        <div class="card-desc">This server and paired devices</div>
       </div>
       <div class="card-content" id="devicesList">
         <div style="color:var(--muted-foreground);font-size:13px">Loading...</div>
@@ -605,16 +611,9 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
         <div class="form-group">
           <label class="form-label">Image Model</label>
           <select class="select" id="cfgModel">
-            <optgroup label="Presets">
-              <option value="flux-schnell">FLUX Schnell — fastest</option>
-              <option value="nano-banana">Nano Banana 2</option>
-              <option value="nano-banana-fast">Nano Banana 2 Lite — fastest Gemini</option>
-              <option value="gpt-image">GPT Image — slowest</option>
-            </optgroup>
-            <optgroup label="Vercel AI Gateway catalog">
-              {% for m in gateway_models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-            </optgroup>
+            {% for m in gateway_models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
           </select>
+          <div class="form-hint">Vercel AI Gateway image models</div>
         </div>
       </div>
     </div>
@@ -664,10 +663,9 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <label class="form-label">Voice Provider</label>
           <select class="select" id="cfgVoiceProvider" style="max-width:300px" onchange="updateVoiceProviderFields()">
             <option value="gateway">AI Gateway (OpenAI voices)</option>
-            <option value="elevenlabs">ElevenLabs</option>
-            <option value="grok">Grok (xAI)</option>
+            <option value="grok">Grok (xAI via AI Gateway)</option>
           </select>
-          <div class="form-hint">ElevenLabs and Grok need their own API keys below.</div>
+          <div class="form-hint">Both providers use the Vercel AI Gateway key.</div>
         </div>
         <div class="form-group" id="gatewayFields">
           <div class="form-group">
@@ -678,23 +676,6 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
               {% endfor %}
             </select>
             <div class="form-hint">OpenAI TTS voices via Vercel AI Gateway</div>
-          </div>
-        </div>
-        <div class="form-group" id="elevenlabsFields" style="display:none">
-          <div class="form-group">
-            <label class="form-label">ElevenLabs Voice ID</label>
-            <input class="input" type="text" id="cfgElevenVoice" placeholder="xNtG3W2oqJs0cJZuTyBc" style="max-width:300px;font-family:monospace" />
-            <div class="form-hint">Find voice IDs at elevenlabs.io/voices</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Stability: <span id="cfgStabilityVal">0.5</span></label>
-            <input type="range" id="cfgStability" min="0" max="1" step="0.05" value="0.5" style="width:100%;max-width:300px" oninput="$('cfgStabilityVal').textContent=this.value" />
-            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>More expressive</span><span>More stable</span></div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Style Exaggeration: <span id="cfgStyleVal">0.0</span></label>
-            <input type="range" id="cfgStyle" min="0" max="1" step="0.05" value="0.0" style="width:100%;max-width:300px" oninput="$('cfgStyleVal').textContent=this.value" />
-            <div style="display:flex;justify-content:space-between;max-width:300px;font-size:0.75rem;color:#888"><span>None</span><span>Maximum</span></div>
           </div>
         </div>
         <div class="form-group" id="grokFields" style="display:none">
@@ -708,9 +689,9 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
           <label class="form-label">Speech-to-Text</label>
           <select class="select" id="cfgSttProvider" style="max-width:300px">
             <option value="gateway">AI Gateway (Whisper)</option>
-            <option value="grok">Grok STT (xAI)</option>
+            <option value="grok">Grok STT (xAI via AI Gateway)</option>
           </select>
-          <div class="form-hint">Grok STT strips the "um"s automatically and needs the xAI API key below.</div>
+          <div class="form-hint">Grok STT strips the "um"s automatically. Both options use the AI Gateway key.</div>
         </div>
         <div class="form-group">
           <label class="form-label">Reply Style</label>
@@ -751,7 +732,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
             <option value="0">Off — classic one-shot flow (default)</option>
             <option value="1">On — Grok Voice Agent, back-and-forth chat</option>
           </select>
-          <div class="form-hint">The box talks WITH the kid (Grok voice, ~$0.05/min while chatting) and calls the drawing pipeline itself. Drawings still pass the safety filter. Needs the xAI API key. Edit the agent's personality on the Scripts page.</div>
+          <div class="form-hint">The box talks WITH the kid (Grok voice via AI Gateway, ~$0.05/min while chatting) and calls the drawing pipeline itself. Drawings still pass the safety filter. Needs the AI Gateway key. Edit the agent's personality on the Scripts page.</div>
         </div>
       </div>
     </div>
@@ -794,23 +775,13 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
     <div class="card">
       <div class="card-header"><div class="card-title">API Keys</div></div>
       <div class="card-content">
-        <div class="form-hint" style="margin-bottom:12px">One Vercel AI Gateway key covers images, gateway speech, and transcription. ElevenLabs and xAI keys are only needed for those voice providers. Stored on the Pi in ~/.drawbox/api_keys.json. Leave a field empty to keep the current key.</div>
+        <div class="form-hint" style="margin-bottom:12px">One Vercel AI Gateway key covers images, speech, transcription, and conversation mode. Stored on the Pi in ~/.drawbox/api_keys.json. Leave the field empty to keep the current key.</div>
         <div class="form-group">
           <label class="form-label">AI Gateway API Key</label>
           <input class="input" type="password" id="keyGateway" placeholder="vck_..." autocomplete="off" />
           <div class="form-hint" id="keyGatewayHint"></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">ElevenLabs API Key</label>
-          <input class="input" type="password" id="keyElevenlabs" placeholder="sk_..." autocomplete="off" />
-          <div class="form-hint" id="keyElevenlabsHint"></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">xAI API Key</label>
-          <input class="input" type="password" id="keyXai" placeholder="xai-..." autocomplete="off" />
-          <div class="form-hint" id="keyXaiHint"></div>
-        </div>
-        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
+        <button class="btn btn-primary" onclick="saveApiKeys()">Save API Key</button>
       </div>
     </div>
 
@@ -1013,6 +984,7 @@ button.setting-row:hover { background: var(--accent); margin: 0 -24px; padding-l
     </div>
     <div class="card-content">
       <p class="confirm-message" id="confirmMessage"></p>
+      <input class="input" id="confirmInput" style="display:none;margin:0 0 16px" />
       <div class="btn-row">
         <button class="btn btn-outline" id="confirmCancel" type="button">Cancel</button>
         <button class="btn btn-primary" id="confirmOk" type="button">Continue</button>
@@ -1099,30 +1071,46 @@ function toast(msg, ok=true) {
 // In-page confirm. window.confirm() returns false immediately in the Mac
 // app's WKWebView, so every "are you sure?" button looked broken.
 function askConfirm(message, {okText = 'Continue', danger = false, title = 'Are you sure?'} = {}) {
+  return _askDialog({message, okText, danger, title, prompt: false});
+}
+
+function askPrompt(message, {okText = 'Save', title = 'Rename', value = ''} = {}) {
+  return _askDialog({message, okText, danger: false, title, prompt: true, value});
+}
+
+function _askDialog({message, okText, danger, title, prompt, value = ''}) {
   return new Promise((resolve) => {
     const overlay = $('confirmOverlay');
     const okBtn = $('confirmOk');
     const cancelBtn = $('confirmCancel');
+    const input = $('confirmInput');
     $('confirmTitle').textContent = title;
     $('confirmMessage').textContent = message;
     okBtn.textContent = okText;
     okBtn.className = 'btn ' + (danger ? 'btn-destructive' : 'btn-primary');
+    input.style.display = prompt ? '' : 'none';
+    input.value = prompt ? value : '';
     overlay.classList.add('show');
-    okBtn.focus();
+    (prompt ? input : okBtn).focus();
+    if (prompt) input.select();
 
     let settled = false;
     const cleanup = (ok) => {
       if (settled) return;
       settled = true;
+      const typed = input.value;
       overlay.classList.remove('show');
+      input.style.display = 'none';
       okBtn.onclick = null;
       cancelBtn.onclick = null;
       overlay.onclick = null;
       overlay.removeEventListener('keydown', onKey);
-      resolve(ok);
+      if (!ok) resolve(prompt ? null : false);
+      else resolve(prompt ? typed : true);
     };
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      if (prompt && e.key === 'Enter') { e.preventDefault(); cleanup(true); }
     };
     okBtn.onclick = () => cleanup(true);
     cancelBtn.onclick = () => cleanup(false);
@@ -1228,6 +1216,7 @@ function renderDevices() {
       '<div class="setting-info">' +
         '<div class="setting-name">' +
           '<span class="dot ' + (piOn ? 'dot-green' : 'dot-red') + '"></span>Raspberry Pi ' +
+          '<span class="badge badge-default">server</span> ' +
           '<span class="badge ' + (piOn ? 'badge-success' : 'badge-destructive') + '">' +
             (piOn ? 'Online' : 'Offline') + '</span>' +
         '</div>' +
@@ -1249,7 +1238,10 @@ function renderDevices() {
         '</div>' +
         '<div class="setting-desc">' + esc(seen) + (bits ? ' \u00b7 ' + bits : '') + '</div>' +
       '</div>' +
-      '<button class="btn btn-outline btn-sm" onclick="revokeDevice(\'' + esc(dev.id) + '\', \'' + esc(dev.name) + '\', ' + self + ')">Delete</button>' +
+      '<div class="btn-row">' +
+        '<button class="btn btn-outline btn-sm" onclick="renameDevice(\'' + esc(dev.id) + '\', \'' + esc(dev.name) + '\')">Rename</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="revokeDevice(\'' + esc(dev.id) + '\', \'' + esc(dev.name) + '\', ' + self + ')">Delete</button>' +
+      '</div>' +
     '</div>';
   }).join('');
   list.innerHTML = html;
@@ -1438,7 +1430,6 @@ function clearLog() { $('logArea').textContent = ''; }
 function updateVoiceProviderFields() {
   const provider = $('cfgVoiceProvider').value;
   $('gatewayFields').style.display = provider === 'gateway' ? 'block' : 'none';
-  $('elevenlabsFields').style.display = provider === 'elevenlabs' ? 'block' : 'none';
   $('grokFields').style.display = provider === 'grok' ? 'block' : 'none';
 }
 
@@ -1448,15 +1439,10 @@ async function loadSettings() {
     const r = await fetch('/api/settings');
     const d = await r.json();
     $('cfgPrompt').value = d.coloring_prompt || '';
-    $('cfgModel').value = d.image_model || 'nano-banana';
+    $('cfgModel').value = d.image_model || $('cfgModel').options[0].value;
     $('cfgVoiceProvider').value = d.voice_provider || 'gateway';
     const voice = d.tts_voice_id || 'alloy';
     $('cfgVoiceId').value = TTS_VOICES.indexOf(voice) >= 0 ? voice : 'alloy';
-    $('cfgElevenVoice').value = d.elevenlabs_voice_id || 'xNtG3W2oqJs0cJZuTyBc';
-    $('cfgStability').value = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStabilityVal').textContent = d.tts_stability != null ? d.tts_stability : 0.5;
-    $('cfgStyle').value = d.tts_style != null ? d.tts_style : 0.0;
-    $('cfgStyleVal').textContent = d.tts_style != null ? d.tts_style : 0.0;
     $('cfgGrokVoice').value = d.grok_voice_id || 'eve';
     updateVoiceProviderFields();
     $('cfgSttProvider').value = d.stt_provider || 'gateway';
@@ -1505,9 +1491,6 @@ async function saveSettings() {
     image_model: $('cfgModel').value,
     voice_provider: $('cfgVoiceProvider').value,
     tts_voice_id: $('cfgVoiceId').value.trim(),
-    elevenlabs_voice_id: $('cfgElevenVoice').value.trim(),
-    tts_stability: parseFloat($('cfgStability').value),
-    tts_style: parseFloat($('cfgStyle').value),
     grok_voice_id: $('cfgGrokVoice').value.trim(),
     stt_provider: $('cfgSttProvider').value,
     natural_ack: $('cfgNaturalAck').value === '1',
@@ -1539,19 +1522,13 @@ async function loadApiKeys() {
     const r = await fetch('/api/keys');
     const d = await r.json();
     $('keyGatewayHint').textContent = d.ai_gateway ? 'Current: ' + d.ai_gateway : 'Not set';
-    $('keyElevenlabsHint').textContent = d.elevenlabs ? 'Current: ' + d.elevenlabs : 'Not set';
-    $('keyXaiHint').textContent = d.xai ? 'Current: ' + d.xai : 'Not set';
     $('keyGateway').value = '';
-    $('keyElevenlabs').value = '';
-    $('keyXai').value = '';
   } catch(e) {}
 }
 
 async function saveApiKeys() {
   const data = {};
   if ($('keyGateway').value.trim()) data.ai_gateway = $('keyGateway').value.trim();
-  if ($('keyElevenlabs').value.trim()) data.elevenlabs = $('keyElevenlabs').value.trim();
-  if ($('keyXai').value.trim()) data.xai = $('keyXai').value.trim();
   if (!Object.keys(data).length) { toast('No keys entered', false); return; }
   try {
     const r = await fetch('/api/keys', {
@@ -2048,10 +2025,34 @@ async function loadPairedDevices() {
           <div class="setting-name"><span class="dot ${on ? 'dot-green' : 'dot-red'}"></span>${esc(dev.name)}${self ? ' <span class="badge badge-default">this browser</span>' : ''}</div>
           <div class="setting-desc">${esc(seen)} · Paired ${esc(dev.created || 'a while ago')}</div>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="revokeDevice('${esc(dev.id)}', '${esc(dev.name)}', ${self})">Delete</button>
+        <div class="btn-row">
+          <button class="btn btn-outline btn-sm" onclick="renameDevice('${esc(dev.id)}', '${esc(dev.name)}')">Rename</button>
+          <button class="btn btn-outline btn-sm" onclick="revokeDevice('${esc(dev.id)}', '${esc(dev.name)}', ${self})">Delete</button>
+        </div>
       </div>`;
     }).join('');
   } catch(e) {}
+}
+
+async function renameDevice(id, name) {
+  const next = await askPrompt('Name this device', {
+    title: 'Rename device',
+    okText: 'Save',
+    value: name || '',
+  });
+  if (next == null) return;
+  const trimmed = String(next).trim();
+  if (!trimmed) { toast('Name required', false); return; }
+  try {
+    const r = await fetch('/api/pair/devices/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: trimmed}),
+    });
+    const d = await r.json();
+    if (d.ok) { toast('Device renamed'); loadPairedDevices(); refreshDevices(); }
+    else toast(d.error || 'Could not rename', false);
+  } catch(e) { toast('Error: ' + e.message, false); }
 }
 
 async function revokeDevice(id, name, isSelf) {

@@ -41,7 +41,8 @@ DEVICE_STATUS_FILE = DRAWBOX_DIR / "device_status.json"
 LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "nano-banana")
+DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
 PRINTER_NAME = "drawbox-printer"
 
 # ── API KEYS ──────────────────────────────────────
@@ -52,17 +53,13 @@ AI_GATEWAY_SPEECH_URL = "https://ai-gateway.vercel.sh/v4/ai/speech-model"
 AI_GATEWAY_TRANSCRIPTION_URL = "https://ai-gateway.vercel.sh/v4/ai/transcription-model"
 AI_GATEWAY_PROTOCOL_VERSION = "0.0.1"
 AI_GATEWAY_API_KEY = ""
-ELEVENLABS_API_KEY = ""
-XAI_API_KEY = ""
 client = None  # OpenAI-compatible client pointed at AI Gateway
 
-# ai_gateway covers images, gateway TTS, and STT; elevenlabs and xai are only
-# needed when the matching voice_provider is selected.
-API_KEY_NAMES = ("ai_gateway", "elevenlabs", "xai")
+# One Vercel AI Gateway key covers images, speech, transcription, and
+# conversation-mode realtime. Direct ElevenLabs / xAI keys are retired.
+API_KEY_NAMES = ("ai_gateway",)
 _API_KEY_ENV_VARS = {
     "ai_gateway": "AI_GATEWAY_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "xai": "XAI_API_KEY",
 }
 
 # Image-output models from the AI Gateway catalog (GET {base}/v1/models,
@@ -110,10 +107,6 @@ GATEWAY_IMAGE_CATALOG = {
 _CHAT_ROUTE_KWARGS = {"extra_body": {"modalities": ["text", "image"]}}
 _IMAGES_ROUTE_KWARGS = {"n": 1, "response_format": "b64_json"}
 
-# Dashboard alias → (api, gateway slug, extra SDK kwargs).
-# "chat" is Gemini image-preview; "images" is the OpenAI images API.
-# The curated presets come first and keep their tuned kwargs; every catalog
-# model is also selectable directly by its gateway id.
 # Ask Google image models for native 3:4 — it fills the Letter print area
 # (1125x1500) instead of a square the postprocessor has to letterbox.
 # Harmless if the gateway drops the option (output stays the model default);
@@ -125,44 +118,32 @@ _GOOGLE_IMAGE_KWARGS = {
     },
 }
 
-IMAGE_ROUTES = {
-    "nano-banana": (
-        "chat",
-        "google/gemini-3.1-flash-image-preview",
-        _GOOGLE_IMAGE_KWARGS,
-    ),
-    # Nano Banana 2 Lite — Google's fastest image model (~4 s, 1K only).
-    "nano-banana-fast": (
-        "chat",
-        "google/gemini-3.1-flash-lite-image",
-        _GOOGLE_IMAGE_KWARGS,
-    ),
-    "flux-schnell": (
-        "images",
-        "bfl/flux-schnell",
-        {
-            "n": 1,
-            "response_format": "b64_json",
-            "extra_body": {
-                "providerOptions": {"blackForestLabs": {"outputFormat": "png"}},
-            },
-        },
-    ),
-    "gpt-image": (
-        "images",
-        "openai/gpt-image-2",
-        {"n": 1, "size": "1024x1536", "response_format": "b64_json"},
-    ),
+# Historical dashboard aliases → current gateway catalog ids. load_settings
+# and generate_image rewrite these so a saved "nano-banana" keeps drawing.
+IMAGE_MODEL_ALIASES = {
+    "nano-banana": "google/gemini-3.1-flash-image-preview",
+    "nano-banana-fast": "google/gemini-3.1-flash-lite-image",
+    "gpt-image": "openai/gpt-image-2",
 }
-IMAGE_ROUTES.update(
-    (slug, (api, slug,
-            _CHAT_ROUTE_KWARGS if api == "chat" else _IMAGES_ROUTE_KWARGS))
+
+
+def _image_route_kwargs(slug, api):
+    if api == "chat" and slug.startswith("google/"):
+        return _GOOGLE_IMAGE_KWARGS
+    if api == "chat":
+        return _CHAT_ROUTE_KWARGS
+    return _IMAGES_ROUTE_KWARGS
+
+
+IMAGE_ROUTES = {
+    slug: (api, slug, _image_route_kwargs(slug, api))
     for slug, api in GATEWAY_IMAGE_CATALOG.items()
-)
-SUPPORTED_MODELS = tuple(IMAGE_ROUTES)
+}
+SUPPORTED_MODELS = tuple(GATEWAY_IMAGE_CATALOG)
 GATEWAY_TTS_MODEL = "openai/tts-1"
 GATEWAY_STT_MODEL = "openai/whisper-1"
-GROK_STT_URL = "https://api.x.ai/v1/stt"
+GATEWAY_GROK_TTS_MODEL = "xai/grok-tts"
+GATEWAY_GROK_STT_MODEL = "xai/grok-stt"
 # Fast text model for the one-line spoken acknowledgment ("Ooh, a purple
 # dinosaur!"). Latency matters more than brains here.
 ACK_MODEL = "google/gemini-3.1-flash-lite"
@@ -170,8 +151,23 @@ OPENAI_TTS_VOICES = frozenset({
     "alloy", "ash", "ballad", "coral", "echo",
     "fable", "nova", "onyx", "sage", "shimmer",
 })
-VOICE_PROVIDERS = ("gateway", "elevenlabs", "grok")
+VOICE_PROVIDERS = ("gateway", "grok")
 STT_PROVIDERS = ("gateway", "grok")
+
+
+def resolve_image_model(model):
+    """Map a saved or env model id onto a live gateway catalog slug."""
+    mapped = IMAGE_MODEL_ALIASES.get(model, model)
+    if mapped in GATEWAY_IMAGE_CATALOG:
+        return mapped
+    fallback = IMAGE_MODEL_ALIASES.get(IMAGE_MODEL, IMAGE_MODEL)
+    if fallback in GATEWAY_IMAGE_CATALOG:
+        return fallback
+    return DEFAULT_IMAGE_MODEL
+
+
+def is_known_image_model(model):
+    return model in GATEWAY_IMAGE_CATALOG or model in IMAGE_MODEL_ALIASES
 
 
 def _load_api_keys():
@@ -189,12 +185,10 @@ def _load_api_keys():
 
 
 def apply_api_keys():
-    """Refresh keys from disk/env and rebuild the Gateway client."""
-    global AI_GATEWAY_API_KEY, ELEVENLABS_API_KEY, XAI_API_KEY, client
+    """Refresh the Gateway key from disk/env and rebuild the client."""
+    global AI_GATEWAY_API_KEY, client
     keys = _load_api_keys()
     AI_GATEWAY_API_KEY = keys["ai_gateway"]
-    ELEVENLABS_API_KEY = keys["elevenlabs"]
-    XAI_API_KEY = keys["xai"]
     client = OpenAI(
         api_key=AI_GATEWAY_API_KEY,
         base_url=AI_GATEWAY_BASE_URL,
@@ -385,16 +379,23 @@ def redeem_pairing_code(code, device_name):
     devices = list_paired_devices()
     devices.append({
         "id": secrets.token_hex(6),
-        # Control chars stripped: the name is echoed into the journal, and
-        # a newline would let a paired client forge log lines.
-        "name": re.sub(r"[\x00-\x1f\x7f]", "",
-                       (device_name or "")).strip()[:64] or "New device",
+        "name": sanitize_device_name(device_name),
         "token_hash": _hash_secret(token),
         "created": datetime.now().isoformat(timespec="seconds"),
     })
     _write_secure_json(PAIRED_DEVICES_FILE, devices)
     log.info("paired new device: %s", devices[-1]["name"])
     return token
+
+
+def sanitize_device_name(device_name):
+    """Strip control chars and cap length. Empty input becomes 'New device'.
+
+    The name is echoed into the journal; a newline would let a paired
+    client forge log lines.
+    """
+    return re.sub(r"[\x00-\x1f\x7f]", "",
+                  (device_name or "")).strip()[:64] or "New device"
 
 
 def list_paired_devices():
@@ -431,6 +432,22 @@ def revoke_paired_device(device_id):
         return False
     _write_secure_json(PAIRED_DEVICES_FILE, kept)
     return True
+
+
+def rename_paired_device(device_id, device_name):
+    """Rename a paired device. Returns the new name, or None if unknown."""
+    name = sanitize_device_name(device_name)
+    devices = list_paired_devices()
+    found = False
+    for device in devices:
+        if device.get("id") == device_id:
+            device["name"] = name
+            found = True
+            break
+    if not found:
+        return None
+    _write_secure_json(PAIRED_DEVICES_FILE, devices)
+    return name
 
 
 # ── DEFAULT SCRIPTS ───────────────────────────────
@@ -651,11 +668,9 @@ def load_settings():
         out["stt_provider"] = "gateway"
     out["natural_ack"] = bool(out.get("natural_ack", True))
     out["conversation_mode"] = bool(out.get("conversation_mode", False))
-    # A saved model can go stale when the gateway catalog changes; a kid's
-    # button press must degrade to a working model, not a ValueError.
-    if out.get("image_model") not in IMAGE_ROUTES:
-        out["image_model"] = IMAGE_MODEL if IMAGE_MODEL in IMAGE_ROUTES \
-            else "nano-banana"
+    # A saved alias or a catalog id that later disappears must degrade
+    # to a working model, not a ValueError on the next button press.
+    out["image_model"] = resolve_image_model(out.get("image_model"))
     # Same 3-30 s range the dashboard enforces on save; a hand-edited file
     # must not make the button box record for an hour.
     try:
@@ -727,62 +742,31 @@ def gateway_v4_post(url, payload, model_headers):
 def transcribe_audio(data, media_type="audio/wav"):
     """Transcribe raw audio bytes with the configured STT provider.
 
-    Dispatches on the ``stt_provider`` setting: ``gateway`` (Whisper via the
-    AI Gateway, the historical default) or ``grok`` (xAI STT). ``media_type``
+    Dispatches on the ``stt_provider`` setting: ``gateway`` (Whisper) or
+    ``grok`` (xAI STT). Both go through the AI Gateway. ``media_type``
     must match the actual bytes (both boxes record WAV). Raises on a missing
     key or a provider failure; callers own the user-facing message.
     """
     apply_api_keys()  # keys may have been updated via the dashboard
     provider = load_settings()["stt_provider"]
     t0 = time.time()
-    if provider == "grok":
-        text = _grok_transcribe(data, media_type)
-    else:
-        if not AI_GATEWAY_API_KEY:
-            raise RuntimeError(
-                "AI_GATEWAY_API_KEY not set. "
-                "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
-        reply = gateway_v4_post(
-            AI_GATEWAY_TRANSCRIPTION_URL,
-            {"audio": base64.b64encode(data).decode(), "mediaType": media_type},
-            {
-                "ai-transcription-model-specification-version": "4",
-                "ai-model-id": GATEWAY_STT_MODEL,
-            },
-        )
-        text = reply.get("text") or ""
+    if not AI_GATEWAY_API_KEY:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+    model = GATEWAY_GROK_STT_MODEL if provider == "grok" else GATEWAY_STT_MODEL
+    reply = gateway_v4_post(
+        AI_GATEWAY_TRANSCRIPTION_URL,
+        {"audio": base64.b64encode(data).decode(), "mediaType": media_type},
+        {
+            "ai-transcription-model-specification-version": "4",
+            "ai-model-id": model,
+        },
+    )
+    text = reply.get("text") or ""
     log.info("transcribed %dKB via %s in %.1fs: %r",
              len(data) // 1024, provider, time.time() - t0, text[:120])
     return text
-
-
-def _grok_transcribe(data, media_type="audio/wav"):
-    """Transcribe audio bytes with xAI STT (multipart upload).
-
-    Container formats (WAV included) are auto-detected server-side, filler
-    words ("um", "uh") are stripped by default, and leaving ``language``
-    unset keeps auto-detection — this is a bilingual EN/FR household.
-    """
-    import urllib.request
-
-    if not XAI_API_KEY:
-        raise RuntimeError(
-            "XAI_API_KEY not set. "
-            "Add it via the web dashboard or the XAI_API_KEY env var.")
-    boundary = "drawbox" + secrets.token_hex(16)
-    ext = media_type.split("/")[-1] or "wav"
-    body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="audio.{ext}"\r\n'
-        f"Content-Type: {media_type}\r\n\r\n"
-    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
-    req = urllib.request.Request(GROK_STT_URL, data=body, headers={
-        "Authorization": f"Bearer {XAI_API_KEY}",
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-    })
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        reply = json.loads(resp.read())
-    return reply.get("text") or ""
 
 
 # ── TTS SYNTHESIS ─────────────────────────────────
@@ -797,13 +781,10 @@ def tts_cache_key(text, provider, voice_id, stability=0.5, style=0.0):
 
     Byte-identical keys are load-bearing: the web server must reuse the
     daemon's on-disk mp3 cache. Formulas:
-      elevenlabs → "{voice_id}:{stability}:{style}:{text}"
       grok       → "grok:{voice_id}:{text}"
       gateway    → "{voice_id}:{text}"
     """
-    if provider == "elevenlabs":
-        material = f"{voice_id}:{stability}:{style}:{text}"
-    elif provider == "grok":
+    if provider == "grok":
         material = f"grok:{voice_id}:{text}"
     else:
         material = f"{voice_id}:{text}"
@@ -818,62 +799,22 @@ def synthesize_speech(text, provider, voice_id, stability=0.5, style=0.0,
     caching via ``tts_cache_key`` on the raw text. Request shapes stay
     byte-identical to the daemon's historical TTS posts.
     """
-    import urllib.request
-
     apply_api_keys()  # keys may have been updated via the dashboard
     prefixed = TTS_WAKE_PREFIX + text
-    if provider == "elevenlabs":
-        if not ELEVENLABS_API_KEY:
-            raise RuntimeError(
-                "ELEVENLABS_API_KEY not set. "
-                "Add it via the web dashboard or the ELEVENLABS_API_KEY env var.")
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        payload = {
-            "text": prefixed,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": stability,
-                "similarity_boost": similarity_boost,
-                "style": style,
-                "use_speaker_boost": True,
-            },
-        }
-        headers = {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        }
-    elif provider == "grok":
-        if not XAI_API_KEY:
-            raise RuntimeError(
-                "XAI_API_KEY not set. "
-                "Add it via the web dashboard or the XAI_API_KEY env var.")
-        url = "https://api.x.ai/v1/tts"
-        payload = {"text": prefixed, "voice_id": voice_id, "language": "en"}
-        headers = {
-            "Authorization": "Bearer " + XAI_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        }
-    else:
-        if not AI_GATEWAY_API_KEY:
-            raise RuntimeError(
-                "AI_GATEWAY_API_KEY not set. "
-                "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
-        reply = gateway_v4_post(
-            AI_GATEWAY_SPEECH_URL,
-            {"text": prefixed, "voice": voice_id, "outputFormat": "mp3"},
-            {
-                "ai-speech-model-specification-version": "4",
-                "ai-model-id": GATEWAY_TTS_MODEL,
-            },
-        )
-        return base64.b64decode(reply["audio"])
-
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+    if not AI_GATEWAY_API_KEY:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+    model = GATEWAY_GROK_TTS_MODEL if provider == "grok" else GATEWAY_TTS_MODEL
+    reply = gateway_v4_post(
+        AI_GATEWAY_SPEECH_URL,
+        {"text": prefixed, "voice": voice_id, "outputFormat": "mp3"},
+        {
+            "ai-speech-model-specification-version": "4",
+            "ai-model-id": model,
+        },
+    )
+    return base64.b64decode(reply["audio"])
 
 
 # ── ACKNOWLEDGMENT LINE ───────────────────────────
@@ -935,6 +876,8 @@ def generate_image(desc, model=None):
 
     if model is None:
         model = load_settings()["image_model"]
+    elif is_known_image_model(model):
+        model = resolve_image_model(model)
     route = IMAGE_ROUTES.get(model)
     if route is None:
         raise ValueError(f"unsupported model: {model}")
@@ -1180,8 +1123,48 @@ def print_image(path, printer_type=None):
 # execute_draw_tool. The agent never gets authority over pairing or
 # settings: intercept_transcript handles admin commands deterministically.
 
-XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
-XAI_CLIENT_SECRETS_URL = "https://api.x.ai/v1/realtime/client_secrets"
+GATEWAY_REALTIME_MODEL = "xai/grok-voice-think-fast-2.0"
+GATEWAY_CLIENT_SECRETS_URL = (
+    "https://ai-gateway.vercel.sh/v1/realtime/client-secrets"
+)
+GATEWAY_REALTIME_URL = (
+    "wss://ai-gateway.vercel.sh/v1/realtime-model"
+    f"?ai-model-id={GATEWAY_REALTIME_MODEL}"
+)
+
+
+def mint_realtime_client_secret():
+    """Exchange the Gateway key for a short-lived realtime client secret.
+
+    The long-lived ``AI_GATEWAY_API_KEY`` stays on the Pi; boxes connect
+    with the minted token. Response shape matches the Gateway SDK
+    (``value`` / ``token``, optional ``url`` and ``expires_at``).
+    """
+    import urllib.request
+
+    apply_api_keys()
+    if not AI_GATEWAY_API_KEY:
+        raise RuntimeError(
+            "AI_GATEWAY_API_KEY not set. "
+            "Add it via the web dashboard or the AI_GATEWAY_API_KEY env var.")
+    req = urllib.request.Request(
+        GATEWAY_CLIENT_SECRETS_URL,
+        data=json.dumps({
+            "model": GATEWAY_REALTIME_MODEL,
+            "expiresIn": 600,
+        }).encode(),
+        headers={
+            "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read())
+    if not isinstance(body, dict):
+        raise RuntimeError("Gateway realtime mint returned a non-object")
+    return body
+
+
 # Server-VAD hangover before the agent takes its turn. Longer than the
 # ~600 ms of adult voice products: kids pause mid-thought.
 AGENT_SILENCE_MS = 900

@@ -10,7 +10,7 @@ numbers (step 6).
 
 Context: the changes are VAD early-stop (both boxes), personalized
 acknowledgments via a two-phase ESP32 flow (firmware v1.6.0), an xAI STT
-option (`stt_provider`), Gemini speed presets (`nano-banana-fast`,
+option (`stt_provider`), Gemini catalog models (`google/gemini-3.1-flash-lite-image`,
 3:4 `imageConfig`), and opt-in Conversation Mode (Grok Voice Agent;
 Pi client `drawbox_realtime.py`; ESP32 client NOT built yet — gated on
 the heap spike). Full design: `ARCHITECTURE.md`, and the PR description.
@@ -80,17 +80,17 @@ to the live UI and prints heap at each stage.
 
 ## 6. Gemini speed benchmark + imageConfig verification
 
-1. Settings → Image Model → "Nano Banana 2 Lite" (`nano-banana-fast`);
+1. Settings → Image Model → `google/gemini-3.1-flash-lite-image`;
    generate 3 pages by voice or dashboard.
 2. Compare per-model `duration_s` in `/api/analytics` against
-   `nano-banana`. Report both averages.
+   `google/gemini-3.1-flash-image-preview`. Report both averages.
 3. Check the aspect ratio: `curl -s http://drawbox.local:5000/api/last-image -H "Authorization: Bearer <token>" | file -` or fetch
    `~/.drawbox/last_generated.png` — content region 3:4-ish means the
    gateway honors `imageConfig`; square means it ignored it (then remove
    the `providerOptions.google` block from `_GOOGLE_IMAGE_KWARGS` in
    `drawbox_core.py` to keep the code honest, and say so in the report).
 4. Owner judges line quality; if Lite looks good, they may want it as the
-   default preset.
+   default catalog model.
 
 ## 7. Conversation mode live test (Pi box)
 
