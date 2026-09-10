@@ -61,13 +61,17 @@ Serial (115200): `s` must report `ver=1.6.0`.
 ## 4. STT swap check (optional but quick)
 
 Settings → Speech-to-Text → "Grok STT", generate by voice once, confirm a
-sane transcript in the journal, and that "um"s are stripped. Needs the
-xAI key in Settings → API Keys. Switch back if the owner prefers Whisper.
+sane transcript in the journal, and that "um"s are stripped. Uses the one
+AI Gateway key (model `spacexai/grok-stt`). Switch back if the owner
+prefers Whisper.
 
 ## 5. THE SPIKE — go/no-go for the on-box conversation client
 
-Serial `w` (WiFi must be up). It opens a TLS websocket to api.x.ai next
-to the live UI and prints heap at each stage.
+Serial `w` (WiFi must be up). It opens a TLS websocket to the AI Gateway
+realtime route (`wss://ai-gateway.vercel.sh/v4/ai/realtime-model`) next to
+the live UI and prints heap at each stage. The probe sends a bogus token,
+so a 401 "Invalid client secret" after "wss connected" is the expected
+end; the heap numbers are what matter.
 
 - **GO**: `minfree` stays above ~20 KB through "wss connected" and
   "after traffic" → Phase 4 (full ESP32 conversation client, firmware
@@ -94,7 +98,7 @@ to the live UI and prints heap at each stage.
 
 ## 7. Conversation mode live test (Pi box)
 
-Requires the xAI key in Settings → API Keys.
+Requires the AI Gateway key in Settings → API Keys (the only key).
 
 1. Settings → Conversation Mode → On. Press the button and talk to it.
 2. Verify: agent replies in Grok's voice; asking for a drawing triggers a
@@ -102,13 +106,21 @@ Requires the xAI key in Settings → API Keys.
    intercepted deterministically (pairing card prints, canned line
    plays); a blocked word from the kid gets the canned redirect; the
    session ends after ~45 s of silence or 5 min.
-3. **If xAI rejects the session config** (journal: "conversation session
-   failed"), the field shape in `drawbox_core.realtime_session_config()`
-   is the single place to fix — compare against docs.x.ai's realtime
-   session.update schema. This is the one piece built against docs
-   without a live round-trip.
+3. **If the Gateway rejects the session config** (journal: "conversation
+   session failed" / "realtime error event"), the field shape in
+   `drawbox_core.realtime_session_config()` is the single place to fix —
+   compare against the AI SDK `RealtimeModelV4SessionConfig` type
+   (`packages/provider/src/realtime-model/v4/` in vercel/ai). The route,
+   model id, token TTL, and subprotocol auth were verified live against
+   the Gateway with a bogus token (401 "Invalid client secret"); the
+   session config and event flow are the pieces built against the spec
+   without a live round-trip. Empty `inputAudioTranscription` /
+   `outputAudioTranscription` objects are the first suspects if the
+   Gateway complains — try a provider model name (e.g. `grok-transcribe`)
+   or drop them.
 4. Leave conversation mode OFF when done unless the owner says otherwise
-   (it costs ~$0.05/min while chatting).
+   (Gateway passes through xAI's rate: $0.08/min of audio plus $0.004 per
+   text input message; audio appends and tool outputs are not billed).
 
 ## 8. Cleanup
 

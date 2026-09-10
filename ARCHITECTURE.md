@@ -55,9 +55,9 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | Language | Python 3 | System Python, no virtualenv |
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
 | AI - Image | Vercel AI Gateway | catalog id from `GATEWAY_IMAGE_CATALOG` |
-| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1` or `xai/grok-stt`) | Selected by the `stt_provider` setting |
-| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1` or `xai/grok-tts`) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
-| AI - Conversation | Vercel AI Gateway realtime (`xai/grok-voice-think-fast-2.0`) | Opt-in `conversation_mode`; live speech-to-speech with a gated draw tool |
+| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1` or `spacexai/grok-stt`) | Selected by the `stt_provider` setting |
+| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1` or `spacexai/grok-tts`) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
+| AI - Conversation | Vercel AI Gateway realtime (`spacexai/grok-voice-think-fast-2.0`) | Opt-in `conversation_mode`; normalized AI SDK realtime events over `wss://ai-gateway.vercel.sh/v4/ai/realtime-model` |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |
@@ -257,11 +257,21 @@ Voice Agent session (`drawbox_realtime.py` on the Pi; ESP32 support is
 gated on the Phase-2 heap spike — serial hook `w`). The session config —
 voice, editable `agent_instructions`, server VAD, the `draw_coloring_page`
 tool — is built once in `drawbox_core.realtime_session_config()` so both
-boxes share one personality. Safety is layered: the agent's tool calls run
+boxes share one personality. The wire protocol is the AI SDK's normalized
+realtime event set (`session-update`, `input-audio-append`, `audio-delta`,
+`input-transcription-completed`, `function-call-arguments-done`, ...); the
+Gateway translates to xAI server-side. Auth is a short-lived `vcst_`
+client secret minted by `mint_realtime_client_secret()` (TTL 300 s) and
+carried in the `Sec-WebSocket-Protocol` handshake as `ai-gateway-auth.<token>`
+(`gateway_realtime_protocols()`), never as an `Authorization` header —
+`POST /api/realtime/token` hands the ESP32 the URL, token, and protocol
+list ready-made. Safety is layered: the agent's tool calls run
 the full gates (`execute_draw_tool`), and every input/output transcript
 passes the deterministic `intercept_transcript` (exact-match admin
 commands, then the blocklist) with response-kill on a hit; two strikes end
-the session. Sessions cost ~$0.05/min (xAI), cap at 5 minutes client-side,
+the session. Sessions cost $0.08/min of audio (xAI's rate, passed through
+by the Gateway; the Gateway itself also caps sessions at 25 min and idles
+them out at 5), cap at 5 minutes client-side,
 and any failure falls back to the one-shot flow. See the firmware README
 for setup, build, and the serial test hooks.
 

@@ -57,9 +57,11 @@ The native USB port doubles as a console at 115200:
 - `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
 - `b` — speaker loopback self-test (plays a tone, reports the mic peak)
 - `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size, version, volume, brightness)
-- `w` — conversation-mode heap spike: opens a TLS websocket to xAI next to
-  the live UI and prints heap at each step (the go/no-go for the on-box
-  realtime agent; see `realtime_spike.h`)
+- `w` — conversation-mode heap spike: opens a TLS websocket to the Vercel
+  AI Gateway realtime route next to the live UI and prints heap at each
+  step (the go/no-go for the on-box realtime agent; see `realtime_spike.h`).
+  A 401 "Invalid client secret" after "wss connected" is the expected
+  answer to the probe's bogus token.
 
 A full remote test from the Mac, no hands needed:
 

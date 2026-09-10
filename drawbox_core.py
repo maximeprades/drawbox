@@ -1125,22 +1125,42 @@ def print_image(path, printer_type=None):
 # execute_draw_tool. The agent never gets authority over pairing or
 # settings: intercept_transcript handles admin commands deterministically.
 
-GATEWAY_REALTIME_MODEL = "xai/grok-voice-think-fast-2.0"
+GATEWAY_REALTIME_MODEL = "spacexai/grok-voice-think-fast-2.0"
 GATEWAY_CLIENT_SECRETS_URL = (
     "https://ai-gateway.vercel.sh/v1/realtime/client-secrets"
 )
+# The WS route hangs off the v4 protocol base (same as speech/transcription),
+# NOT /v1 — that path 404s. The model id rides the query string: a browser
+# WebSocket cannot set the `ai-model-id` header the HTTP routes use.
 GATEWAY_REALTIME_URL = (
-    "wss://ai-gateway.vercel.sh/v1/realtime-model"
+    "wss://ai-gateway.vercel.sh/v4/ai/realtime-model"
     f"?ai-model-id={GATEWAY_REALTIME_MODEL}"
 )
+# The mint route rejects anything above 300 s. The token only has to
+# outlive the connect; the session itself runs on AGENT_SESSION_MAX_S.
+GATEWAY_REALTIME_TOKEN_TTL_S = 300
+# Same story for auth: the minted `vcst_` token travels in the
+# Sec-WebSocket-Protocol handshake, not an Authorization header. The
+# marker subprotocol lets the Gateway echo one back on the 101. Mirrors
+# @ai-sdk/gateway's getGatewayRealtimeProtocols().
+GATEWAY_REALTIME_SUBPROTOCOL = "ai-gateway-realtime.v1"
+GATEWAY_AUTH_SUBPROTOCOL_PREFIX = "ai-gateway-auth."
+
+
+def gateway_realtime_protocols(token):
+    """WebSocket subprotocols that carry ``token`` to the Gateway."""
+    if not token or not isinstance(token, str):
+        raise ValueError("realtime token required")
+    return [GATEWAY_REALTIME_SUBPROTOCOL,
+            f"{GATEWAY_AUTH_SUBPROTOCOL_PREFIX}{token}"]
 
 
 def mint_realtime_client_secret():
     """Exchange the Gateway key for a short-lived realtime client secret.
 
     The long-lived ``AI_GATEWAY_API_KEY`` stays on the Pi; boxes connect
-    with the minted token. Response shape matches the Gateway SDK
-    (``value`` / ``token``, optional ``url`` and ``expires_at``).
+    with the minted token. The mint route answers ``{token, expiresAt}``
+    (epoch seconds); older field names are tolerated by the callers.
     """
     import urllib.request
 
@@ -1153,7 +1173,7 @@ def mint_realtime_client_secret():
         GATEWAY_CLIENT_SECRETS_URL,
         data=json.dumps({
             "model": GATEWAY_REALTIME_MODEL,
-            "expiresIn": 600,
+            "expiresIn": GATEWAY_REALTIME_TOKEN_TTL_S,
         }).encode(),
         headers={
             "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
@@ -1190,26 +1210,36 @@ AGENT_DRAW_TOOL = {
 }
 
 
-def realtime_session_config():
-    """The session.update payload both boxes apply on connect.
+# pcm16 mono at this rate, both directions. Stated explicitly so the
+# Gateway's per-provider default can never silently disagree with the
+# resampler on the Pi (drawbox_realtime.AGENT_AUDIO_RATE).
+AGENT_AUDIO_FORMAT = {"type": "audio/pcm", "rate": 24000}
 
-    Field shape follows the OpenAI Realtime protocol that xAI clones
-    (voice, instructions, turn_detection, tools); input transcription is
-    enabled so our clients can run the blocklist and admin commands on
-    what the kid actually said.
+
+def realtime_session_config():
+    """The ``session-update`` config both boxes send on connect.
+
+    Field shape is the AI SDK's normalized realtime session config
+    (RealtimeModelV4SessionConfig); the Gateway maps it onto xAI's
+    session.update server-side. Input transcription is on so our clients
+    can run the blocklist and admin commands on what the kid actually
+    said. Output transcription is on so the moderation kill can read
+    what the agent is about to say.
     """
     settings = load_settings()
     voice = settings.get("grok_voice_id") or DEFAULT_SETTINGS["grok_voice_id"]
     return {
         "voice": voice,
         "instructions": load_scripts()["agent_instructions"],
-        "turn_detection": {
-            "type": "server_vad",
-            "silence_duration_ms": AGENT_SILENCE_MS,
+        "inputAudioFormat": dict(AGENT_AUDIO_FORMAT),
+        "outputAudioFormat": dict(AGENT_AUDIO_FORMAT),
+        "inputAudioTranscription": {},
+        "outputAudioTranscription": {},
+        "turnDetection": {
+            "type": "server-vad",
+            "silenceDurationMs": AGENT_SILENCE_MS,
         },
         "tools": [AGENT_DRAW_TOOL],
-        "tool_choice": "auto",
-        "audio": {"input": {"transcription": {"model": "grok-transcribe"}}},
     }
 
 

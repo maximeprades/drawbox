@@ -1573,12 +1573,19 @@ def api_realtime_token():
         log.exception("client secret mint failed")
         return jsonify(ok=False, error="Could not reach AI Gateway",
                        code="mint_failed"), 502
-    token = secret.get("value") or secret.get("token")
-    expires = secret.get("expires_at") or secret.get("expiresAt")
+    token = secret.get("token") or secret.get("value")
+    if not token:
+        log.error("client secret mint returned no token: %s", secret)
+        return jsonify(ok=False, error="AI Gateway returned no token",
+                       code="mint_failed"), 502
+    expires = secret.get("expiresAt") or secret.get("expires_at")
     url = secret.get("url") or drawbox_core.GATEWAY_REALTIME_URL
+    # `protocols` is the Sec-WebSocket-Protocol list the box must offer;
+    # the Gateway reads the bearer token from there, not from a header.
     return jsonify(ok=True, token=token,
                    expires_at=expires,
                    url=url,
+                   protocols=drawbox_core.gateway_realtime_protocols(token),
                    session=drawbox_core.realtime_session_config(),
                    max_session_s=drawbox_core.AGENT_SESSION_MAX_S)
 

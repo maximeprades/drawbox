@@ -75,10 +75,12 @@ Only two things run here: the Flask web dashboard and the `pytest` suite.
   Vercel AI Gateway catalog ids only (legacy aliases like `nano-banana`
   rewrite to the matching catalog id).
 - Voice is a two-way setting (`voice_provider`): `gateway` (default, OpenAI
-  voices) or `grok` (`xai/grok-tts`). Both use `AI_GATEWAY_API_KEY`.
+  voices) or `grok` (`spacexai/grok-tts`). Both use `AI_GATEWAY_API_KEY`.
 - Transcription is a two-way setting (`stt_provider`): `gateway` (Whisper,
-  default) or `grok` (`xai/grok-stt`). Conversation mode
+  default) or `grok` (`spacexai/grok-stt`). Conversation mode
   (`conversation_mode`, default off) mints a Gateway realtime token.
+- The Gateway lists every xAI model under the `spacexai/` creator. `xai/...`
+  is not a catalog id there.
 
 ### Notes
 - This project uses the system Python on purpose. There is no virtualenv (see
