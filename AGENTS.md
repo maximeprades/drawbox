@@ -5,8 +5,9 @@
 The natural-conversation branch shipped with the owner away from the
 hardware. If the Pi (`drawbox.local`) answers pings or an ESP32 shows up
 on USB (`/dev/cu.usbmodem*`), STOP and read `HARDWARE-TODO.md` first —
-it is the ordered runbook for deploying, flashing v1.6.0, running the
-conversation-mode heap spike (serial `w`), and the Gemini benchmark.
+it is the ordered runbook for deploying, flashing v2.0.0, running the
+conversation-mode heap spike (serial `w`), the live conversation tests on
+both boxes, and the Gemini benchmark.
 Delete that file and this section once it has all been executed.
 
 ## The two boxes rule
@@ -27,8 +28,11 @@ Before calling a feature done, walk this checklist:
 - Conversation mode (opt-in `conversation_mode` setting) runs live Grok
  Voice Agent sessions: the shared session config, the gated draw tool, and
  the admin/blocklist transcript interceptor all live in `drawbox_core.py`.
- The Pi client is `drawbox_realtime.py`; the ESP32 client is gated on the
- heap spike (serial `w`).
+ The Pi client is `drawbox_realtime.py`; the ESP32 client is
+ `firmware/esp32_amoled_button/realtime_client.h` (it reaches the same
+ core code over `/api/agent/intercept`, `/api/agent/moderate`,
+ `/api/agent/draw`). A policy change goes in core AND in the ESP32
+ event handler if the box needs to react to it locally.
 - Spoken personality (script lines, jokes, TTS voice) lives in the dashboard
  scripts + `/api/voice/lines`; the ESP32 fetches it at boot and refreshes
  within a minute of edits (the heartbeat reply carries a voice cache hash).

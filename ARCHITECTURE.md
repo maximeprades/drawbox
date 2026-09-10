@@ -253,11 +253,11 @@ remain only as a fallback when a line is missing.
 ### Conversation mode (opt-in)
 
 With the `conversation_mode` setting on, a press/tap starts a live Grok
-Voice Agent session (`drawbox_realtime.py` on the Pi; ESP32 support is
-gated on the Phase-2 heap spike — serial hook `w`). The session config —
-voice, editable `agent_instructions`, server VAD, the `draw_coloring_page`
-tool — is built once in `drawbox_core.realtime_session_config()` so both
-boxes share one personality. The wire protocol is the AI SDK's normalized
+Voice Agent session (`drawbox_realtime.py` on the Pi,
+`firmware/esp32_amoled_button/realtime_client.h` on the ESP32). The session
+config — voice, editable `agent_instructions`, server VAD, the
+`draw_coloring_page` tool — is built once in
+`drawbox_core.realtime_session_config()` so both boxes share one personality. The wire protocol is the AI SDK's normalized
 realtime event set (`session-update`, `input-audio-append`, `audio-delta`,
 `input-transcription-completed`, `function-call-arguments-done`, ...); the
 Gateway translates to xAI server-side. Auth is a short-lived `vcst_`
@@ -265,11 +265,19 @@ client secret minted by `mint_realtime_client_secret()` (TTL 300 s) and
 carried in the `Sec-WebSocket-Protocol` handshake as `ai-gateway-auth.<token>`
 (`gateway_realtime_protocols()`), never as an `Authorization` header —
 `POST /api/realtime/token` hands the ESP32 the URL, token, and protocol
-list ready-made. Safety is layered: the agent's tool calls run
-the full gates (`execute_draw_tool`), and every input/output transcript
-passes the deterministic `intercept_transcript` (exact-match admin
-commands, then the blocklist) with response-kill on a hit; two strikes end
-the session. Sessions cost $0.08/min of audio (xAI's rate, passed through
+list ready-made (plus `protocol_header`, the list pre-joined). Safety is
+layered: the agent's tool calls run the full gates (`execute_draw_tool`),
+and every input/output transcript passes the deterministic
+`intercept_transcript` (exact-match admin commands, then the blocklist)
+with response-kill on a hit; two strikes end the session. The Pi calls
+those core functions directly; the ESP32 reaches the same code over
+`POST /api/agent/intercept` (kid transcripts), `POST /api/agent/moderate`
+(the agent's words — blocklist only, never the admin commands) and
+`POST /api/agent/draw`, and learns whether the mode is on from the
+`conversation_mode` flag in every heartbeat reply. The box has no echo
+cancellation, so it mutes its mics while the agent's audio plays (no
+barge-in); the Pi, with separate USB mic and speaker, streams
+continuously. Sessions cost $0.08/min of audio (xAI's rate, passed through
 by the Gateway; the Gateway itself also caps sessions at 25 min and idles
 them out at 5), cap at 5 minutes client-side,
 and any failure falls back to the one-shot flow. See the firmware README

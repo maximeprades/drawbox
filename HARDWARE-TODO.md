@@ -12,8 +12,9 @@ Context: the changes are VAD early-stop (both boxes), personalized
 acknowledgments via a two-phase ESP32 flow (firmware v1.6.0), an xAI STT
 option (`stt_provider`), Gemini catalog models (`google/gemini-3.1-flash-lite-image`,
 3:4 `imageConfig`), and opt-in Conversation Mode (Grok Voice Agent;
-Pi client `drawbox_realtime.py`; ESP32 client NOT built yet — gated on
-the heap spike). Full design: `ARCHITECTURE.md`, and the PR description.
+Pi client `drawbox_realtime.py`; ESP32 client `realtime_client.h` in
+firmware v2.0.0 — compiled, never run on the device). Full design:
+`ARCHITECTURE.md`, and the PR descriptions.
 
 ## 0. Preconditions
 
@@ -40,13 +41,14 @@ Mode (beta)"; generate one page from the dashboard. Note: the deploy
 clears the voice cache — the daemon re-synthesizes lines on first start,
 so give it a minute before judging silence.
 
-## 2. Flash the ESP32 (v1.6.0)
+## 2. Flash the ESP32 (v2.0.0)
 
 ```bash
 ./firmware/esp32_amoled_button/build.sh flash /dev/cu.usbmodemXXXX
 ```
 
-Serial (115200): `s` must report `ver=1.6.0`.
+Serial (115200): `s` must report `ver=2.0.0 ... conv=0` (conversation
+mode off on the server for now).
 
 ## 3. Verify the one-shot flow end to end (both boxes)
 
@@ -65,21 +67,24 @@ sane transcript in the journal, and that "um"s are stripped. Uses the one
 AI Gateway key (model `spacexai/grok-stt`). Switch back if the owner
 prefers Whisper.
 
-## 5. THE SPIKE — go/no-go for the on-box conversation client
+## 5. THE SPIKE — heap headroom for the on-box conversation client
 
 Serial `w` (WiFi must be up). It opens a TLS websocket to the AI Gateway
 realtime route (`wss://ai-gateway.vercel.sh/v4/ai/realtime-model`) next to
 the live UI and prints heap at each stage. The probe sends a bogus token,
 so a 401 "Invalid client secret" after "wss connected" is the expected
-end; the heap numbers are what matter.
+end; the heap numbers are what matter. TLS is verified against the
+pinned Let's Encrypt roots (`gateway_ca.h`); "wss refused" right away
+with no heap dip means the certificate chain changed — check
+`openssl s_client -connect ai-gateway.vercel.sh:443` from the Mac.
 
 - **GO**: `minfree` stays above ~20 KB through "wss connected" and
-  "after traffic" → Phase 4 (full ESP32 conversation client, firmware
-  v2.0.0) is buildable as designed. Tell the owner; that build is a
-  separate session of work.
-- **NO-GO**: minfree dips below ~20 KB or the box resets → the plan's
-  fallback is a Pi-proxied audio bridge (box streams plain TCP to the Pi,
-  the Pi holds the TLS session). Do not start building either variant
+  "after traffic" → the client in `realtime_client.h` has the room it
+  was designed for; go to step 7b.
+- **NO-GO**: minfree dips below ~20 KB or the box resets → the client
+  will fail its connect and fall back to the one-shot flow every time.
+  The plan's fallback is a Pi-proxied audio bridge (box streams plain
+  TCP to the Pi, the Pi holds the TLS session). Do not start building it
   without the owner's call — just report the numbers.
 
 ## 6. Gemini speed benchmark + imageConfig verification
@@ -121,6 +126,30 @@ Requires the AI Gateway key in Settings → API Keys (the only key).
 4. Leave conversation mode OFF when done unless the owner says otherwise
    (Gateway passes through xAI's rate: $0.08/min of audio plus $0.004 per
    text input message; audio appends and tool outputs are not billed).
+
+## 7b. Conversation mode live test (ESP32 box) — only after 7 passes
+
+The firmware client was compiled but never ran against the Gateway, so
+expect to iterate here with the serial console open.
+
+1. Conversation Mode still On. Wait one heartbeat (`s` shows `conv=1`).
+2. Tap (or serial `t`). Expected serial: `[rt] session: agent 24000 Hz`,
+   `[rt] wss connected`, `[rt] session configured`; screen says
+   "Let's chat!" / "hold to stop". Talk; the agent answers through the
+   speaker with the mouth moving. Say a drawing request: `[rt] draw ->
+   200 {...}` and a page prints. Say "authorize": `[rt] intercepted
+   (authorize)` and the pairing clip plays. Long press ends the session
+   (serial `x` does too).
+3. Watch heap in `s` mid-session; below ~15 KB free means the audio
+   scratch or the TLS record buffers are starving — shrink
+   `RT_MIC_CHUNK_SAMPLES` or lower `RT_RING_SECONDS` before anything else.
+4. Failure map: `wss connect failed` → certificate/heap (step 5);
+   `error event` before `session configured` → same config fix as step
+   7.3 (the box parrots the server's config, so fix it on the Pi only);
+   choppy playback → the loop is starving the DMA, log the time between
+   `[rt]` lines; the agent hearing itself → raise `RT_ECHO_GUARD_MS`.
+5. The one-shot fallback must still work when the mode is off: toggle it
+   off, wait a heartbeat, tap — "I'm listening!" flow as before.
 
 ## 8. Cleanup
 

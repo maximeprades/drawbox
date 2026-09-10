@@ -6,6 +6,11 @@ A one-button DrawBox remote for the Waveshare **ESP32-S3-Touch-AMOLED-2.16**
 and POSTs it to the Pi dashboard's `/api/voice/generate`; Whisper, the
 safety filter, image generation, and printing all stay on the Pi.
 
+With the dashboard's **conversation mode** on, a tap opens a live Grok
+Voice Agent session instead (see [Conversation mode](#conversation-mode)):
+the box streams the mics to the Vercel AI Gateway, plays the agent's
+voice back, and the agent decides when you are done talking.
+
 The screen is a big emoji buddy rendered with LVGL 8.4: it blinks and
 glances around while idle, goes wide-eyed with its mouth moving to your
 voice while listening (progress ring, rippling sound waves), naps under
@@ -52,16 +57,18 @@ gains the recordings are silence.
 
 The native USB port doubles as a console at 115200:
 
-- `t` — simulate a button press (full record → upload → result cycle)
+- `t` — simulate a button press (full record → upload → result cycle, or
+  a conversation session when the mode is on)
 - `d` — dump the last recording as base64 WAV between marker lines
 - `p` — dump a screenshot of the live UI as base64 RGB565 (little-endian)
 - `b` — speaker loopback self-test (plays a tone, reports the mic peak)
-- `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size, version, volume, brightness)
+- `s` — one-line status (state, WiFi, IP, heap, PSRAM, last WAV size,
+  version, volume, brightness, conversation mode); also works mid-session
+- `x` — end the running conversation session (same as the long press)
 - `w` — conversation-mode heap spike: opens a TLS websocket to the Vercel
   AI Gateway realtime route next to the live UI and prints heap at each
-  step (the go/no-go for the on-box realtime agent; see `realtime_spike.h`).
-  A 401 "Invalid client secret" after "wss connected" is the expected
-  answer to the probe's bogus token.
+  step (see `realtime_spike.h`). A 401 "Invalid client secret" after
+  "wss connected" is the expected answer to the probe's bogus token.
 
 A full remote test from the Mac, no hands needed:
 
@@ -92,6 +99,48 @@ contain it. Upstream quirk worth knowing: the DAC power-up hides inside
 `es8311_microphone_config`, so that call is required even though we
 never use the ES8311's own mic path.
 
+## Conversation mode
+
+`realtime_client.h` is the ESP32 half of DrawBox conversation mode — the
+same live Grok Voice Agent session the Pi runs in `drawbox_realtime.py`,
+with the same policy, so both boxes behave alike:
+
+1. Each heartbeat reply carries `conversation_mode`. When it is on, a tap
+   POSTs `/api/realtime/token` and gets back the Gateway WSS URL, a
+   ready-made `Sec-WebSocket-Protocol` header holding a 5-minute client
+   secret, and the shared session config (instructions, voice, the
+   `draw_coloring_page` tool, server VAD). The long-lived Gateway key
+   never reaches the box.
+2. The box opens the socket (TLS pinned to the Let's Encrypt roots in
+   `gateway_ca.h`), sends `session-update`, and streams the mics as
+   `input-audio-append` events: 16 kHz capture, louder mic slot kept,
+   resampled to the agent's 24 kHz, base64, one event per 60 ms.
+3. `audio-delta` events come back as 24 kHz PCM, get resampled to 16 kHz
+   and queued in a PSRAM ring that the loop drains into the I2S DMA
+   without blocking. The mouth moves with the agent's voice; the eyes go
+   wide while the kid talks (`speech-started`).
+4. Every `input-transcription-completed` goes to `POST /api/agent/intercept`
+   (admin commands and blocklist, on the Pi). The agent's streamed
+   transcript goes to `POST /api/agent/moderate` at most once a second
+   and once more at `response-done`. A hit cancels the response, drops
+   the queued audio, speaks the server's line (dynamic clip by `ack_key`,
+   else the cached `voice_key`), and counts a strike; two strikes end the
+   session.
+5. `function-call-arguments-done` for `draw_coloring_page` is forwarded
+   to `POST /api/agent/draw` (the gated pipeline; generation runs on the
+   Pi) and the reply goes back as a `function-call-output` item followed
+   by `response-create`.
+6. The session ends after 45 s without kid speech, at the server's
+   `max_session_s` cap, on two strikes, on a long press ("hold to stop"),
+   or when the socket drops (the box then speaks the error line). If no
+   session ever got configured — mode just switched off, Pi unreachable,
+   Gateway refused, config rejected — the tap falls back to the one-shot
+   record → upload flow, exactly like the Pi.
+
+No barge-in: speaker and mics share one small box with no echo
+cancellation, so mic frames are dropped while the agent's audio plays
+(and for 700 ms after — the TX DMA holds ~380 ms). Talk when it stops.
+
 ## Behavior notes
 
 - Recording stops early ~1.5 s after the kid stops talking (peak-based
@@ -105,7 +154,9 @@ never use the ES8311's own mic path.
   are parsed exactly like the legacy blocking flow.
 - Every 60 s the box POSTs a heartbeat to `/api/device/heartbeat`
   (`version`, WiFi RSSI, heap, PSRAM, voice-cache state). The dashboard
-  Devices panel shows that status.
+  Devices panel shows that status. The reply carries the live knobs
+  (volume, brightness, `record_seconds`, `conversation_mode`, voice cache
+  hash); a conversation session keeps beating every minute too.
 - Speaker volume and screen brightness follow Settings → ESP32 Box. Each
   heartbeat applies the live values.
 - Both mics are captured; the louder channel is kept, so covering one mic

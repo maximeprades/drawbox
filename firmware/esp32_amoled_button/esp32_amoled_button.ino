@@ -35,7 +35,7 @@
 #include "realtime_spike.h"
 #include "wifi_credentials.h"
 
-#define FIRMWARE_VERSION "1.6.0"
+#define FIRMWARE_VERSION "2.0.0"
 
 // ── AUDIO ────────────────────────────────────────
 #define SAMPLE_RATE_HZ 16000
@@ -70,7 +70,9 @@
 #define ERR_COLOR lv_color_make(250, 160, 60)
 #define WAVE_COLOR lv_color_make(90, 200, 255)
 
-enum class AppState { WIFI_CONNECTING, IDLE, LISTENING, THINKING, RESULT };
+enum class AppState {
+  WIFI_CONNECTING, IDLE, LISTENING, THINKING, RESULT, CONVERSING
+};
 
 struct Note {
   float freq;  // Hz; 0 = rest
@@ -100,6 +102,7 @@ static const char *stateName(AppState s) {
     case AppState::LISTENING: return "LISTENING";
     case AppState::THINKING: return "THINKING";
     case AppState::RESULT: return "RESULT";
+    case AppState::CONVERSING: return "CONVERSING";
   }
   return "?";
 }
@@ -121,6 +124,13 @@ static String resultVoiceKey;
 static String resultAckKey;
 static volatile bool pressRequested = false;
 static volatile bool dismissRequested = false;
+// Conversation mode (dashboard setting, read from each heartbeat): a tap
+// opens a live agent session instead of the one-shot record → upload.
+static bool conversationMode = false;
+static volatile bool conversationStopRequested = false;
+// LVGL fires CLICKED on release even after LONG_PRESSED; without this the
+// finger lifting off a "hold to stop" would start the next session.
+static volatile bool swallowNextTap = false;
 
 static VoiceLine voiceCache[VOICE_CACHE_CAP];
 static int voiceCacheCount = 0;
@@ -246,11 +256,22 @@ static lv_obj_t *makeLabel(const lv_font_t *font, lv_color_t color,
 
 static void onTap(lv_event_t *) {
   Serial.println("[touch] tap");
+  if (swallowNextTap) {
+    swallowNextTap = false;
+    return;
+  }
   if (state == AppState::IDLE) {
     pressRequested = true;
   } else if (state == AppState::RESULT) {
     dismissRequested = true;
   }
+}
+
+static void onLongPress(lv_event_t *) {
+  if (state != AppState::CONVERSING) return;
+  Serial.println("[touch] long press, ending conversation");
+  conversationStopRequested = true;
+  swallowNextTap = true;
 }
 
 static void blinkTimerCb(lv_timer_t *t) {
@@ -285,6 +306,7 @@ static void buildUi() {
   lv_obj_set_style_bg_color(scr, BG_COLOR, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(scr, onTap, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(scr, onLongPress, LV_EVENT_LONG_PRESSED, NULL);
 
   // Progress/result ring and the thinking spinner sit behind the face.
   arcRing = lv_arc_create(scr);
@@ -389,6 +411,14 @@ static void applyState() {
       lv_label_set_text(lblBig, "Drawing...");
       lv_label_set_text(lblHint, "this takes a minute");
       showSpinner = true;
+      break;
+    case AppState::CONVERSING:
+      // The realtime client animates eyes/mouth from the live audio.
+      setFace(&img_eyes_open, &img_mouth_smile, true);
+      lv_label_set_text(lblTitle, "Let's chat!");
+      lv_label_set_text(lblBig, "");
+      lv_label_set_text(lblHint, "hold to stop");
+      showWavesNow = true;
       break;
     case AppState::RESULT:
       // No full-circle ring here: LVGL v8 arcs show seams at the
@@ -1481,6 +1511,8 @@ static void sendHeartbeat() {
   if (bri > 0) setScreenBrightness(bri);
   int rec = jsonField(body, "record_seconds").toInt();
   if (rec > 0) recordSeconds = min(max(rec, 3), MAX_RECORD_SECONDS);
+  String conv = jsonField(body, "conversation_mode");
+  if (conv.length()) conversationMode = conv == "true";
   // Flag only — handlePress also beats, and a full refetch there would
   // stall the kid's upload. The idle loop does the actual refresh.
   String hash = jsonField(body, "cache_hash");
@@ -1488,13 +1520,26 @@ static void sendHeartbeat() {
     Serial.println("[hb] voice scripts changed on server");
     voiceCacheStale = true;
   }
-  Serial.printf("[hb] ok vol=%d bri=%d rec=%d\n", speakerVolume,
-                screenBrightness, recordSeconds);
+  Serial.printf("[hb] ok vol=%d bri=%d rec=%d conv=%d\n", speakerVolume,
+                screenBrightness, recordSeconds, conversationMode ? 1 : 0);
 }
+
+// ── CONVERSATION MODE ────────────────────────────
+// Included here, after every helper it borrows (audio, HTTP, face).
+
+#include "realtime_client.h"
 
 // ── THE ONE FLOW ─────────────────────────────────
 
 static void handlePress() {
+  // Conversation mode: one live agent session. Falls through to the
+  // one-shot flow only when no session ever started (mode just switched
+  // off, Pi unreachable, Gateway refused) — same contract as the Pi's
+  // _run_conversation.
+  if (conversationMode && runConversation()) {
+    setState(AppState::IDLE);
+    return;
+  }
   setState(AppState::LISTENING);
   playLine("listening");
   size_t pcmBytes = recordAudio(recordSeconds);
@@ -1586,12 +1631,12 @@ static void dumpScreenshot() {
 static void printStatus() {
   Serial.printf("[status] state=%s wifi=%d ip=%s rssi=%d heap=%u psram=%u "
                 "record_s=%d lastwav=%u ver=" FIRMWARE_VERSION
-                " vol=%d bri=%d\n",
+                " vol=%d bri=%d conv=%d\n",
                 stateName(state), WiFi.status(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI(),
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(),
                 recordSeconds, (unsigned)wavLen, speakerVolume,
-                screenBrightness);
+                screenBrightness, conversationMode ? 1 : 0);
 }
 
 static void handleSerial() {

@@ -15,15 +15,17 @@
 // `ai-gateway-realtime.v1` marker. The real client gets both the URL and
 // the protocol list from POST /api/realtime/token on the Pi.
 //
-// Guarded by __has_include so the firmware builds even when the
-// ArduinoWebsockets library isn't installed (build.sh installs it).
-// The spike deliberately uses setInsecure(): certificate pinning is a
-// production decision; heap is what we're measuring.
+// TLS is verified against the same pinned roots as the real client
+// (gateway_ca.h): the library's setInsecure() is a no-op on ESP32 and the
+// core refuses an unverified connect, so an "insecure" probe would only
+// ever report "wss refused". The include is a plain #include (no
+// __has_include guard) so Arduino's library discovery actually links
+// ArduinoWebsockets; build.sh installs it.
 #pragma once
 
-#if __has_include(<ArduinoWebsockets.h>)
 #include <ArduinoWebsockets.h>
-#define HAVE_REALTIME_SPIKE 1
+
+#include "gateway_ca.h"
 
 static void spikeReport(const char *stage) {
   Serial.printf("[spike] %-18s heap=%6u minfree=%6u psram=%u\n", stage,
@@ -47,7 +49,7 @@ static void runRealtimeSpike() {
 
   {
     websockets::WebsocketsClient client;
-    client.setInsecure();
+    client.setCACert(GATEWAY_CA_PEM);
     // A bogus token still pays the full TLS handshake — the expensive
     // part — the Gateway answers 401 "Invalid client secret" afterwards.
     // Either way we learn whether TLS fits next to LVGL.
@@ -82,10 +84,3 @@ static void runRealtimeSpike() {
                 "the Pi-proxy fallback\n",
                 worksetOk ? "ok" : "FAILED");
 }
-#else
-#define HAVE_REALTIME_SPIKE 0
-static void runRealtimeSpike() {
-  Serial.println("[spike] ArduinoWebsockets library not installed; "
-                 "run build.sh to fetch it");
-}
-#endif
