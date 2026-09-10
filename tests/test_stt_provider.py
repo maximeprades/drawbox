@@ -39,7 +39,7 @@ def test_transcribe_audio_dispatches_to_grok(drawbox_dir, monkeypatch):
     req = captured["req"]
     assert req.full_url == drawbox_core.AI_GATEWAY_TRANSCRIPTION_URL
     assert req.get_header("Authorization") == "Bearer vck-test"
-    assert req.get_header("Ai-model-id") == "xai/grok-stt"
+    assert req.get_header("Ai-model-id") == "spacexai/grok-stt"
     body = json.loads(req.data)
     assert body["mediaType"] == "audio/wav"
 

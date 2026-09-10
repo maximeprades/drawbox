@@ -90,7 +90,7 @@ def test_grok_tts_uses_gateway_speech_model(monkeypatch, tmp_path):
     req = captured["req"]
     assert req.full_url == drawbox_core.AI_GATEWAY_SPEECH_URL
     assert req.get_header("Authorization") == "Bearer vck-test"
-    assert req.get_header("Ai-model-id") == "xai/grok-tts"
+    assert req.get_header("Ai-model-id") == "spacexai/grok-tts"
     body = json.loads(req.data)
     assert body["voice"] == "ara"
     assert body["text"].endswith("hello kids")

@@ -142,8 +142,10 @@ IMAGE_ROUTES = {
 SUPPORTED_MODELS = tuple(GATEWAY_IMAGE_CATALOG)
 GATEWAY_TTS_MODEL = "openai/tts-1"
 GATEWAY_STT_MODEL = "openai/whisper-1"
-GATEWAY_GROK_TTS_MODEL = "xai/grok-tts"
-GATEWAY_GROK_STT_MODEL = "xai/grok-stt"
+# The Gateway lists every xAI model under the `spacexai/` creator (same as
+# the image catalog above); `xai/...` is not a catalog id there.
+GATEWAY_GROK_TTS_MODEL = "spacexai/grok-tts"
+GATEWAY_GROK_STT_MODEL = "spacexai/grok-stt"
 # Fast text model for the one-line spoken acknowledgment ("Ooh, a purple
 # dinosaur!"). Latency matters more than brains here.
 ACK_MODEL = "google/gemini-3.1-flash-lite"
