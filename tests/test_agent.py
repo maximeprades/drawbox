@@ -221,6 +221,9 @@ def test_realtime_token_mints_ephemeral_secret(client, monkeypatch):
     assert "spacexai/grok-voice" in body["url"]
     assert body["protocols"] == ["ai-gateway-realtime.v1",
                                  "ai-gateway-auth.eph-123"]
+    # The ESP32 pastes this straight into its Sec-WebSocket-Protocol header.
+    assert body["protocol_header"] == ("ai-gateway-realtime.v1, "
+                                       "ai-gateway-auth.eph-123")
     assert body["session"]["tools"][0]["name"] == "draw_coloring_page"
     assert body["max_session_s"] == drawbox_core.AGENT_SESSION_MAX_S
     req = captured["req"]
@@ -268,6 +271,27 @@ def test_agent_endpoints_403_when_conversation_off(client):
     assert r.get_json()["code"] == "conversation_off"
     r = client.post("/api/agent/intercept", json={"transcript": "a cat"})
     assert r.status_code == 403
+    r = client.post("/api/agent/moderate", json={"text": "a cat"})
+    assert r.status_code == 403
+
+
+def test_agent_moderate_checks_agent_output_only(client):
+    """The ESP32 streams the agent's transcript here. Blocklist yes,
+    interceptor no: an admin phrase spoken by the model must not act."""
+    drawbox_core.save_settings({"conversation_mode": True})
+    drawbox_core.ensure_safety_mode_default()
+    assert client.post("/api/agent/moderate",
+                       json={"text": "a friendly cat"}).get_json()["blocked"] is False
+    assert client.post("/api/agent/moderate",
+                       json={"text": "here is a gun"}).get_json()["blocked"] is True
+    assert client.post("/api/agent/moderate",
+                       json={"text": ""}).get_json()["blocked"] is False
+    # Admin command in the agent's mouth: the setting does not move.
+    drawbox_core.set_poop_mode_enabled(False)
+    r = client.post("/api/agent/moderate",
+                    json={"text": "admin mode enable poop mode"}).get_json()
+    assert r["blocked"] is False
+    assert drawbox_core.poop_mode_enabled() is False
 
 
 def test_agent_draw_endpoint_gates_and_runs(client, monkeypatch):

@@ -321,10 +321,13 @@ def api_device_heartbeat():
     _write_secure_json(drawbox_core.DEVICE_STATUS_FILE, status)
     settings = load_settings()
     provider, voice_id, stability, style = _active_tts()
+    # conversation_mode tells the box whether a tap opens a live agent
+    # session (POST /api/realtime/token) or runs the one-shot record flow.
     return jsonify(ok=True,
                    volume=settings["esp32_volume"],
                    brightness=settings["esp32_brightness"],
                    record_seconds=settings["record_seconds"],
+                   conversation_mode=bool(settings["conversation_mode"]),
                    cache_hash=_voice_cache_hash(load_scripts(), provider,
                                                 voice_id, stability, style))
 
@@ -1582,10 +1585,14 @@ def api_realtime_token():
     url = secret.get("url") or drawbox_core.GATEWAY_REALTIME_URL
     # `protocols` is the Sec-WebSocket-Protocol list the box must offer;
     # the Gateway reads the bearer token from there, not from a header.
+    # `protocol_header` is the same list pre-joined for the ESP32, whose
+    # flat JSON parser has no notion of arrays.
+    protocols = drawbox_core.gateway_realtime_protocols(token)
     return jsonify(ok=True, token=token,
                    expires_at=expires,
                    url=url,
-                   protocols=drawbox_core.gateway_realtime_protocols(token),
+                   protocols=protocols,
+                   protocol_header=", ".join(protocols),
                    session=drawbox_core.realtime_session_config(),
                    max_session_s=drawbox_core.AGENT_SESSION_MAX_S)
 
@@ -1638,6 +1645,30 @@ def api_agent_intercept():
         log.exception("intercept clip synthesis failed")
     return jsonify(action=hit["action"], say=hit["say"],
                    voice_key=hit["voice_key"], ack_key=ack_key)
+
+
+@app.route("/api/agent/moderate", methods=["POST"])
+def api_agent_moderate():
+    """Blocklist check for the AGENT's streamed words (the ESP32 has no
+    local copy of the blocklist; the Pi client calls is_safe directly).
+
+    Deliberately not the interceptor: admin commands must never fire off
+    something the model said. Returns ``blocked`` only.
+    """
+    if not load_settings()["conversation_mode"]:
+        return jsonify(ok=False, error="Conversation mode is off",
+                       code="conversation_off"), 403
+    data = _request_dict()
+    if data is None:
+        return jsonify(ok=False, error="Invalid JSON body"), 400
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(blocked=False)
+    blocked = (drawbox_core.safety_mode_enabled()
+               and not drawbox_core.is_safe(text))
+    if blocked:
+        log.warning("agent output blocked: %r", text[-120:])
+    return jsonify(blocked=blocked)
 
 
 # ── ANALYTICS ────────────────────────────────────

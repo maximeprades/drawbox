@@ -37,6 +37,16 @@ def test_heartbeat_returns_current_settings(client):
     assert body["cache_hash"] == lines["cache_hash"]
 
 
+def test_heartbeat_reports_conversation_mode(client):
+    """The box decides tap → live agent session vs one-shot record from
+    this flag, so a dashboard toggle reaches it within one heartbeat."""
+    assert client.post("/api/device/heartbeat", json={}).get_json()[
+        "conversation_mode"] is False
+    drawbox_core.save_settings({"conversation_mode": True})
+    assert client.post("/api/device/heartbeat", json={}).get_json()[
+        "conversation_mode"] is True
+
+
 def test_heartbeat_cache_hash_tracks_script_edits(client):
     first = client.post("/api/device/heartbeat", json={}).get_json()["cache_hash"]
     client.post("/api/scripts", json={"voice_lines": {"ready": "Howdy, partner!"}})
