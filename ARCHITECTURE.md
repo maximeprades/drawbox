@@ -54,10 +54,10 @@ Pin 11 (GPIO 17) ← Button COM terminal
 | OS | Raspberry Pi OS Bookworm 64-bit Lite | Headless, no desktop |
 | Language | Python 3 | System Python, no virtualenv |
 | GPIO | gpiozero | NOT RPi.GPIO (incompatible with Pi 5) |
-| AI - Image | Vercel AI Gateway | nano-banana, nano-banana-fast, flux-schnell, gpt-image, or any catalog id |
-| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1`) or xAI Grok STT | Selected by the `stt_provider` setting |
-| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1`), ElevenLabs, or Grok (xAI) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
-| AI - Conversation | xAI Grok Voice Agent (`wss://api.x.ai/v1/realtime`) | Opt-in `conversation_mode`; live speech-to-speech with a gated draw tool |
+| AI - Image | Vercel AI Gateway | catalog id from `GATEWAY_IMAGE_CATALOG` |
+| AI - Speech-to-Text | Vercel AI Gateway (`openai/whisper-1` or `spacexai/grok-stt`) | Selected by the `stt_provider` setting |
+| AI - Text-to-Speech | Vercel AI Gateway (`openai/tts-1` or `spacexai/grok-tts`) | Selected by the `voice_provider` setting; gateway voice `alloy` is the default |
+| AI - Conversation | Vercel AI Gateway realtime (`spacexai/grok-voice-think-fast-2.0`) | Opt-in `conversation_mode`; normalized AI SDK realtime events over `wss://ai-gateway.vercel.sh/v4/ai/realtime-model` |
 | Audio Recording | sounddevice + soundfile | Via PortAudio/ALSA |
 | Image Processing | Pillow (PIL) | Threshold + resize to Letter |
 | Audio Playback | mpg123 | Plays cached .mp3 TTS files |
@@ -181,15 +181,14 @@ requirements.txt        # Python dependencies
 
 DrawBox loads API keys with this precedence (first match wins per key):
 
-1. `~/.drawbox/api_keys.json` fields `ai_gateway`, `elevenlabs`, `xai`
+1. `~/.drawbox/api_keys.json` field `ai_gateway`
    (mode 0600, managed from the dashboard)
-2. Environment variables `AI_GATEWAY_API_KEY`, `ELEVENLABS_API_KEY`,
-   `XAI_API_KEY`
+2. Environment variable `AI_GATEWAY_API_KEY`
 
 The OpenAI Python client talks to `https://ai-gateway.vercel.sh/v1` for
-images, gateway TTS, and Whisper. The `elevenlabs` and `xai` keys are only
-needed when the matching `voice_provider` is selected. The dashboard writes
-the JSON file; `deploy-web.sh` migrates an existing systemd
+images. Speech, transcription, and conversation-mode realtime also go
+through the AI Gateway (OpenAI or xAI models, one key). The dashboard
+writes the JSON file; `deploy-web.sh` migrates an existing systemd
 `AI_GATEWAY_API_KEY` into it on first run. New deployments don't need keys
 in the service file at all.
 
@@ -197,7 +196,7 @@ in the service file at all.
 
 | Variable | Effect |
 |---|---|
-| `IMAGE_MODEL` | Default model — `nano-banana`, `flux-schnell`, `gpt-image`, or any gateway catalog id (see `GATEWAY_IMAGE_CATALOG` in `drawbox_core.py`) |
+| `IMAGE_MODEL` | Default model — a gateway catalog id (see `GATEWAY_IMAGE_CATALOG`). Legacy aliases such as `nano-banana` rewrite to the matching catalog id. |
 | `DRAWBOX_ALLOWED_ORIGINS` | Comma-separated CORS allowlist for the dashboard. Defaults cover `*.drawbox.pages.dev`. Accepts exact hosts or `*.domain.tld` patterns. |
 
 ### ALSA Audio (~/.asoundrc)
@@ -258,11 +257,21 @@ Voice Agent session (`drawbox_realtime.py` on the Pi; ESP32 support is
 gated on the Phase-2 heap spike — serial hook `w`). The session config —
 voice, editable `agent_instructions`, server VAD, the `draw_coloring_page`
 tool — is built once in `drawbox_core.realtime_session_config()` so both
-boxes share one personality. Safety is layered: the agent's tool calls run
+boxes share one personality. The wire protocol is the AI SDK's normalized
+realtime event set (`session-update`, `input-audio-append`, `audio-delta`,
+`input-transcription-completed`, `function-call-arguments-done`, ...); the
+Gateway translates to xAI server-side. Auth is a short-lived `vcst_`
+client secret minted by `mint_realtime_client_secret()` (TTL 300 s) and
+carried in the `Sec-WebSocket-Protocol` handshake as `ai-gateway-auth.<token>`
+(`gateway_realtime_protocols()`), never as an `Authorization` header —
+`POST /api/realtime/token` hands the ESP32 the URL, token, and protocol
+list ready-made. Safety is layered: the agent's tool calls run
 the full gates (`execute_draw_tool`), and every input/output transcript
 passes the deterministic `intercept_transcript` (exact-match admin
 commands, then the blocklist) with response-kill on a hit; two strikes end
-the session. Sessions cost ~$0.05/min (xAI), cap at 5 minutes client-side,
+the session. Sessions cost $0.08/min of audio (xAI's rate, passed through
+by the Gateway; the Gateway itself also caps sessions at 25 min and idles
+them out at 5), cap at 5 minutes client-side,
 and any failure falls back to the one-shot flow. See the firmware README
 for setup, build, and the serial test hooks.
 

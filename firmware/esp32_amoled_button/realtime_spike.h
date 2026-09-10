@@ -3,10 +3,17 @@
 // The open question for running Grok Voice Agent sessions on this box is
 // memory: mbedTLS wants ~45-50 KB of internal heap for a WSS connection,
 // and this sketch already runs LVGL with a DMA draw buffer. This probe
-// answers it on the real device: serial 'w' opens a TLS websocket to
-// api.x.ai next to the live UI and prints heap/PSRAM at each step, plus
-// an allocation probe approximating a session's working set (audio
-// chunk staging + event buffers).
+// answers it on the real device: serial 'w' opens a TLS websocket to the
+// Vercel AI Gateway realtime route (the same endpoint the Pi client uses;
+// see drawbox_core.GATEWAY_REALTIME_URL) next to the live UI and prints
+// heap/PSRAM at each step, plus an allocation probe approximating a
+// session's working set (audio chunk staging + event buffers).
+//
+// Gateway contract, mirrored from drawbox_core / @ai-sdk/gateway: the
+// model id rides the `?ai-model-id=` query and the minted `vcst_` token
+// rides Sec-WebSocket-Protocol as `ai-gateway-auth.<token>` next to the
+// `ai-gateway-realtime.v1` marker. The real client gets both the URL and
+// the protocol list from POST /api/realtime/token on the Pi.
 //
 // Guarded by __has_include so the firmware builds even when the
 // ArduinoWebsockets library isn't installed (build.sh installs it).
@@ -42,19 +49,22 @@ static void runRealtimeSpike() {
     websockets::WebsocketsClient client;
     client.setInsecure();
     // A bogus token still pays the full TLS handshake — the expensive
-    // part — the server just refuses the upgrade afterwards. Either
-    // way we learn whether TLS fits next to LVGL.
-    client.addHeader("Authorization", "Bearer spike-probe");
+    // part — the Gateway answers 401 "Invalid client secret" afterwards.
+    // Either way we learn whether TLS fits next to LVGL.
+    client.addHeader("Sec-WebSocket-Protocol",
+                     "ai-gateway-realtime.v1, ai-gateway-auth.vcst_spike_probe");
     spikeReport("client built");
     uint32_t t0 = millis();
-    bool connected =
-        client.connect("wss://api.x.ai/v1/realtime?model=grok-voice-latest");
+    bool connected = client.connect(
+        "wss://ai-gateway.vercel.sh/v4/ai/realtime-model"
+        "?ai-model-id=spacexai/grok-voice-think-fast-2.0");
     spikeReport(connected ? "wss connected" : "wss refused");
     Serial.printf("[spike] connect %s in %lums\n",
                   connected ? "OK" : "rejected/failed",
                   (unsigned long)(millis() - t0));
     if (connected) {
-      client.send("{\"type\":\"session.update\",\"session\":{}}");
+      // Normalized AI SDK event, not OpenAI's session.update.
+      client.send("{\"type\":\"session-update\",\"config\":{}}");
       uint32_t until = millis() + 3000;
       while (millis() < until) {
         client.poll();

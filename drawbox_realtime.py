@@ -13,9 +13,13 @@ the policing:
   - ends the session on idle silence, the session cap, or two blocklist
     strikes.
 
-The protocol is xAI's clone of the OpenAI Realtime API. Event handling is
-separated from socket/audio IO (``AgentSession.handle_event``) so the
-policy logic is unit-testable without hardware or network.
+The wire protocol is the AI SDK's normalized realtime event set, spoken to
+the Vercel AI Gateway (``wss://ai-gateway.vercel.sh/v1/realtime-model``),
+which translates to xAI's session server-side. Event names are kebab-case
+(``audio-delta``, ``input-transcription-completed``, ...) with camelCase
+fields (``responseId``, ``callId``). Event handling is separated from
+socket/audio IO (``AgentSession.handle_event``) so the policy logic is
+unit-testable without hardware or network.
 """
 
 import asyncio
@@ -33,7 +37,11 @@ import drawbox_core
 log = logging.getLogger("drawbox.realtime")
 
 MIC_RATE = 44100          # the USB mic's only supported rate
-AGENT_AUDIO_RATE = 24000  # OpenAI-Realtime-protocol default, pcm16 mono
+AGENT_AUDIO_RATE = drawbox_core.AGENT_AUDIO_FORMAT["rate"]  # pcm16 mono
+# One input-audio-append per 50 ms. PortAudio's default block is a few
+# hundred frames, which would mean 50-100 tiny websocket frames a second
+# for no gain; 50 ms keeps VAD latency negligible and the frame count sane.
+MIC_BLOCK_FRAMES = MIC_RATE // 20
 IDLE_TIMEOUT_S = 45       # no kid speech for this long ends the session
 BLOCK_STRIKES_LIMIT = 2   # blocklist hits before the session ends
 
@@ -72,7 +80,7 @@ class AgentSession:
         self._clear_audio = clear_audio
         self.done = False
         self.failed = False          # fatal: config rejected before start
-        self.configured = False      # session.updated received
+        self.configured = False      # session-updated received
         self.last_activity = time.time()
         self.block_strikes = 0
         self._out_transcripts = {}   # response_id → accumulated text
@@ -82,49 +90,44 @@ class AgentSession:
 
     async def handle_event(self, event):
         etype = event.get("type", "")
-        if etype == "session.updated":
+        if etype == "session-updated":
             self.configured = True
-        elif etype == "input_audio_buffer.speech_started":
+        elif etype == "speech-started":
             self.last_activity = time.time()
-        elif etype == "conversation.item.input_audio_transcription.completed":
+        elif etype == "input-transcription-completed":
             self.last_activity = time.time()
             # xAI delivers transcription as cumulative snapshots and can
             # emit more than one completed event per item; without dedup,
             # one blocked utterance burns both strikes and one "authorize"
             # opens two pairing windows.
-            item_id = event.get("item_id")
+            item_id = event.get("itemId")
             if item_id:
                 if item_id in self._seen_input_items:
                     return
                 self._seen_input_items.add(item_id)
             await self._check_input(event.get("transcript") or "")
-        elif etype == "response.created":
-            self._current_response = \
-                (event.get("response") or {}).get("id") or \
-                event.get("response_id")
-        elif etype in ("response.audio.delta", "response.output_audio.delta"):
-            if event.get("response_id") not in self._killed_responses:
+        elif etype == "response-created":
+            self._current_response = event.get("responseId")
+        elif etype == "audio-delta":
+            if event.get("responseId") not in self._killed_responses:
                 try:
                     self._enqueue_audio(base64.b64decode(event.get("delta") or ""))
                 except (ValueError, TypeError):
                     pass
-        elif etype in ("response.audio_transcript.delta",
-                       "response.output_audio_transcript.delta",
-                       "response.text.delta",
-                       "response.output_text.delta"):
-            await self._check_output(event.get("response_id") or "",
+        elif etype in ("audio-transcript-delta", "text-delta"):
+            await self._check_output(event.get("responseId") or "",
                                      event.get("delta") or "")
-        elif etype == "response.function_call_arguments.done":
+        elif etype == "function-call-arguments-done":
             await self._run_tool(event)
-        elif etype == "response.done":
-            self._out_transcripts.pop(
-                (event.get("response") or {}).get("id"), None)
+        elif etype == "response-done":
+            self._out_transcripts.pop(event.get("responseId"), None)
         elif etype == "error":
-            # Post-config errors are recoverable per the docs (the session
-            # stays open). Before session.updated, an error means our
-            # config was rejected — the session is useless, bail so the
-            # caller can fall back to the one-shot flow.
-            log.warning("realtime error event: %s", event.get("error"))
+            # Post-config errors are recoverable (the session stays open).
+            # Before session-updated, an error means our config was
+            # rejected — the session is useless, bail so the caller can
+            # fall back to the one-shot flow.
+            log.warning("realtime error event: %s (%s)",
+                        event.get("message"), event.get("code"))
             if not self.configured:
                 self.failed = True
                 self.done = True
@@ -161,7 +164,7 @@ class AgentSession:
 
     async def _run_tool(self, event):
         name = event.get("name") or ""
-        call_id = event.get("call_id") or ""
+        call_id = event.get("callId") or ""
         try:
             args = json.loads(event.get("arguments") or "{}")
         except ValueError:
@@ -171,14 +174,15 @@ class AgentSession:
         else:
             outcome = drawbox_core.execute_draw_tool(args.get("description"))
         await self._send({
-            "type": "conversation.item.create",
+            "type": "conversation-item-create",
             "item": {
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": outcome["message"],
+                "type": "function-call-output",
+                "callId": call_id,
+                "name": name,
+                "output": json.dumps(outcome),
             },
         })
-        await self._send({"type": "response.create"})
+        await self._send({"type": "response-create"})
 
     async def _kill_current_response(self):
         """Stop what the agent is saying: drop unplayed audio locally, mark
@@ -189,7 +193,7 @@ class AgentSession:
             self._killed_responses.add(self._current_response)
         self._clear_audio()
         try:
-            await self._send({"type": "response.cancel"})
+            await self._send({"type": "response-cancel"})
         except Exception:
             pass
 
@@ -253,8 +257,11 @@ async def _run_session_async(voice, state):
     import websockets
 
     drawbox_core.apply_api_keys()
-    if not drawbox_core.XAI_API_KEY:
-        raise RuntimeError("XAI_API_KEY not set")
+    secret = drawbox_core.mint_realtime_client_secret()
+    token = secret.get("token") or secret.get("value")
+    url = secret.get("url") or drawbox_core.GATEWAY_REALTIME_URL
+    if not token:
+        raise RuntimeError("AI Gateway realtime mint returned no token")
 
     config = drawbox_core.realtime_session_config()
     loop = asyncio.get_running_loop()
@@ -267,10 +274,11 @@ async def _run_session_async(voice, state):
         loop.call_soon_threadsafe(mic_chunks.put_nowait, data)
 
     speaker = _Speaker(sd)
+    # The Gateway reads the bearer token from Sec-WebSocket-Protocol (the
+    # browser WebSocket API cannot set headers, so that is the contract).
     async with websockets.connect(
-            drawbox_core.XAI_REALTIME_URL,
-            additional_headers={
-                "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}"},
+            url,
+            subprotocols=drawbox_core.gateway_realtime_protocols(token),
     ) as ws:
         async def send(payload):
             await ws.send(json.dumps(payload))
@@ -290,7 +298,7 @@ async def _run_session_async(voice, state):
             await loop.run_in_executor(None, _blocking_speak, key_or_text)
 
         session = AgentSession(send, speak, speaker.enqueue, speaker.clear)
-        await send({"type": "session.update", "session": config})
+        await send({"type": "session-update", "config": config})
         speaker.start()
         started_at = time.time()
         log.info("conversation session started")
@@ -301,7 +309,7 @@ async def _run_session_async(voice, state):
         mic_task = recv_task = None
         try:
             with sd.InputStream(samplerate=MIC_RATE, channels=1,
-                                callback=mic_cb):
+                                blocksize=MIC_BLOCK_FRAMES, callback=mic_cb):
                 while not session.done:
                     now = time.time()
                     if now - started_at > drawbox_core.AGENT_SESSION_MAX_S:
@@ -323,7 +331,7 @@ async def _run_session_async(voice, state):
                         chunk = mic_task.result()
                         mic_task = None
                         await send({
-                            "type": "input_audio_buffer.append",
+                            "type": "input-audio-append",
                             "audio": base64.b64encode(chunk).decode(),
                         })
                     if recv_task in done:
@@ -340,7 +348,7 @@ async def _run_session_async(voice, state):
                     task.cancel()
             speaker.close()
     if session.failed:
-        raise RuntimeError("xAI rejected the session config")
+        raise RuntimeError("AI Gateway rejected the session config")
     log.info("conversation session ended")
 
 

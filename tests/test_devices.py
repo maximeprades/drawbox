@@ -108,33 +108,37 @@ def test_devices_survives_online_device_listed_before_offline(client, drawbox_di
     assert body[1]["status"] is None
 
 
-def test_devices_survives_online_device_listed_before_offline(client, drawbox_dir):
-    # Regression: a per-device local shadowed the loaded status map, so an
-    # online device followed by a never-seen one crashed the endpoint.
-    client.post("/api/device/heartbeat", json={"version": "t", "rssi": -60})
-    code = drawbox_core.open_pairing_window()
-    assert drawbox_core.redeem_pairing_code(code, "second box")
-    body = client.get("/api/devices").get_json()
-    assert [d["online"] for d in body] == [True, False]
-    assert body[1]["status"] is None
-
-
-def test_devices_survives_online_device_listed_before_offline(client, drawbox_dir):
-    # Regression: a per-device local shadowed the loaded status map, so an
-    # online device followed by a never-seen one crashed the endpoint.
-    client.post("/api/device/heartbeat", json={"version": "t", "rssi": -60})
-    code = drawbox_core.open_pairing_window()
-    assert drawbox_core.redeem_pairing_code(code, "second box")
-    body = client.get("/api/devices").get_json()
-    assert [d["online"] for d in body] == [True, False]
-    assert body[1]["status"] is None
-
-
 def test_devices_marks_the_calling_device_as_self(client, drawbox_dir):
     code = drawbox_core.open_pairing_window()
     assert drawbox_core.redeem_pairing_code(code, "other box")
     body = client.get("/api/devices").get_json()
     assert [d["self"] for d in body] == [True, False]
+
+
+def test_devices_marks_this_browser_online_without_heartbeat(client, drawbox_dir):
+    # Playroom: a just-paired dashboard browser never posts the ESP32
+    # heartbeat, but it is the caller of /api/devices.
+    body = client.get("/api/devices").get_json()
+    assert len(body) == 1
+    assert body[0]["name"] == "tests"
+    assert body[0]["self"] is True
+    assert body[0]["online"] is True
+    assert body[0]["last_seen_s"] == 0
+    assert body[0]["status"]["version"] == "dashboard"
+
+
+def test_rename_paired_device(client, drawbox_dir):
+    devices = client.get("/api/pair/devices").get_json()["devices"]
+    dev_id = devices[0]["id"]
+    r = client.patch(f"/api/pair/devices/{dev_id}", json={"name": "Playroom"})
+    assert r.status_code == 200
+    assert r.get_json()["name"] == "Playroom"
+    listed = client.get("/api/devices").get_json()
+    assert listed[0]["name"] == "Playroom"
+    blank = client.patch(f"/api/pair/devices/{dev_id}", json={"name": "   "})
+    assert blank.status_code == 400
+    missing = client.patch("/api/pair/devices/nope", json={"name": "X"})
+    assert missing.status_code == 404
 
 
 def test_revoke_drops_heartbeat_record(client, drawbox_dir):

@@ -36,7 +36,7 @@ def test_generate_image_requires_gateway_key(drawbox_dir, monkeypatch):
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     drawbox_core.apply_api_keys()
     with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
-        drawbox_core.generate_image("a cat", model="nano-banana")
+        drawbox_core.generate_image("a cat", model="google/gemini-3.1-flash-image-preview")
 
 
 def test_generate_image_rejects_unknown_model(drawbox_dir, monkeypatch):
@@ -56,7 +56,7 @@ def test_generate_gpt_image_uses_gateway_slug(drawbox_dir, monkeypatch):
         )])
 
     _gateway_client(monkeypatch, images_generate=fake_generate)
-    path = drawbox_core.generate_image("a rocket", model="gpt-image")
+    path = drawbox_core.generate_image("a rocket", model="openai/gpt-image-2")
     assert seen["model"] == "openai/gpt-image-2"
     assert seen["response_format"] == "b64_json"
     assert seen["prompt"].endswith("Child requested: a rocket")
@@ -79,7 +79,7 @@ def test_generate_image_defaults_to_dashboard_model(drawbox_dir, monkeypatch):
         )])
 
     _gateway_client(monkeypatch, images_generate=fake_generate)
-    drawbox_core.save_settings({"image_model": "gpt-image"})
+    drawbox_core.save_settings({"image_model": "openai/gpt-image-2"})
     drawbox_core.generate_image("a rocket")
     assert seen["model"] == "openai/gpt-image-2"
 
@@ -93,7 +93,7 @@ def test_generate_image_remembers_the_last_page(drawbox_dir, monkeypatch):
         )])
 
     _gateway_client(monkeypatch, images_generate=fake_generate)
-    path = drawbox_core.generate_image("a rocket", model="gpt-image")
+    path = drawbox_core.generate_image("a rocket", model="openai/gpt-image-2")
 
     assert drawbox_core.LAST_IMAGE_FILE.exists()
     with open(path, "rb") as f:
@@ -111,8 +111,8 @@ def test_generate_flux_uses_gateway_slug(drawbox_dir, monkeypatch):
         )])
 
     _gateway_client(monkeypatch, images_generate=fake_generate)
-    drawbox_core.generate_image("a boat", model="flux-schnell")
-    assert seen["model"] == "bfl/flux-schnell"
+    drawbox_core.generate_image("a boat", model="bfl/flux-2-klein-4b")
+    assert seen["model"] == "bfl/flux-2-klein-4b"
     assert seen["response_format"] == "b64_json"
 
 
@@ -132,9 +132,10 @@ def test_generate_nano_banana_uses_chat_modalities(drawbox_dir, monkeypatch):
         ))])
 
     _gateway_client(monkeypatch, chat_create=fake_create)
-    drawbox_core.generate_image("a kitty", model="nano-banana")
+    drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image-preview")
     assert seen["model"] == "google/gemini-3.1-flash-image-preview"
     assert seen["extra_body"]["modalities"] == ["text", "image"]
+    assert seen["extra_body"]["providerOptions"]["google"]["imageConfig"]["aspectRatio"] == "3:4"
 
 
 def test_generate_catalog_model_by_gateway_id(drawbox_dir, monkeypatch):
@@ -173,17 +174,22 @@ def test_generate_catalog_chat_model_by_gateway_id(drawbox_dir, monkeypatch):
     drawbox_core.generate_image("a dog", model="google/gemini-3-pro-image")
     assert seen["model"] == "google/gemini-3-pro-image"
     assert seen["extra_body"]["modalities"] == ["text", "image"]
+    assert seen["extra_body"]["providerOptions"]["google"]["imageConfig"]["aspectRatio"] == "3:4"
 
 
-def test_image_routes_cover_presets_and_catalog():
-    for preset in ("nano-banana", "flux-schnell", "gpt-image"):
-        assert preset in drawbox_core.IMAGE_ROUTES
+def test_image_routes_are_catalog_only():
+    assert "nano-banana" not in drawbox_core.IMAGE_ROUTES
+    assert "flux-schnell" not in drawbox_core.IMAGE_ROUTES
+    assert "gpt-image" not in drawbox_core.IMAGE_ROUTES
     assert set(drawbox_core.GATEWAY_IMAGE_CATALOG.values()) == {"chat", "images"}
     for slug, api in drawbox_core.GATEWAY_IMAGE_CATALOG.items():
         route_api, route_slug, _kwargs = drawbox_core.IMAGE_ROUTES[slug]
         assert route_api == api
         assert route_slug == slug
-    assert drawbox_core.SUPPORTED_MODELS == tuple(drawbox_core.IMAGE_ROUTES)
+    assert drawbox_core.SUPPORTED_MODELS == tuple(drawbox_core.GATEWAY_IMAGE_CATALOG)
+    assert drawbox_core.resolve_image_model("nano-banana") == \
+        "google/gemini-3.1-flash-image-preview"
+    assert drawbox_core.resolve_image_model("gpt-image") == "openai/gpt-image-2"
 
 
 def test_chat_no_image_error_surfaces_model_answer(caplog):
@@ -243,5 +249,5 @@ def test_generate_nano_banana_reads_sdk_dict_images(drawbox_dir, monkeypatch):
         return _gateway_chat_completion(png)
 
     _gateway_client(monkeypatch, chat_create=fake_create)
-    path = drawbox_core.generate_image("a kitty", model="nano-banana")
+    path = drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image-preview")
     assert path.endswith(".png")

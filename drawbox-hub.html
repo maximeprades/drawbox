@@ -200,14 +200,6 @@ function renderCards(){
       </div>
       <div class="pi-settings" id="settings-${id}">
         <div class="setting-row">
-          <span class="setting-label">Image Model</span>
-          <select class="model-select" id="model-${id}" onchange="updateModel('${id}')">
-            <option value="flux-schnell">FLUX Schnell</option>
-            <option value="nano-banana">Nano Banana 2</option>
-            <option value="gpt-image">GPT Image</option>
-          </select>
-        </div>
-        <div class="setting-row">
           <span class="setting-label">Please Mode</span>
           <button class="toggle-btn" id="please-${id}" onclick="togglePiSetting('${id}','please')">--</button>
         </div>
@@ -260,13 +252,6 @@ async function fetchPiStatus(pi){
     }
 
     // Fetch settings
-    try {
-      const sr = await fetch(pi.url+'/api/settings');
-      const sd = await sr.json();
-      const sel = document.getElementById('model-'+pi.id);
-      if(sel && sd.image_model) sel.value = sd.image_model;
-    } catch(e){}
-
     // Fetch please mode
     try {
       const pr = await fetch(pi.url+'/api/please-mode');
@@ -318,20 +303,6 @@ pis.forEach(pi => fetchPiStatus(pi));
 function toggleSettings(piId){
   const el = document.getElementById('settings-'+piId);
   el.classList.toggle('open');
-}
-
-async function updateModel(piId){
-  const pi = pis.find(p => p.id === piId);
-  const model = document.getElementById('model-'+piId).value;
-  try {
-    const r = await fetch(pi.url+'/api/settings', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({image_model: model})
-    });
-    const d = await r.json();
-    if(d.ok) toast('Model updated to '+model);
-    else toast('Failed to update model', false);
-  } catch(e){ toast('Error: '+e.message, false); }
 }
 
 async function togglePiSetting(piId, setting){

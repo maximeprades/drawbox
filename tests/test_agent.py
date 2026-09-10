@@ -17,11 +17,51 @@ def test_session_config_carries_shared_personality(drawbox_dir):
     cfg = drawbox_core.realtime_session_config()
     assert cfg["instructions"] == drawbox_core.DEFAULT_AGENT_INSTRUCTIONS
     assert cfg["voice"] == "eve"
-    assert cfg["turn_detection"]["type"] == "server_vad"
-    assert cfg["turn_detection"]["silence_duration_ms"] == \
+    assert cfg["turnDetection"]["type"] == "server-vad"
+    assert cfg["turnDetection"]["silenceDurationMs"] == \
         drawbox_core.AGENT_SILENCE_MS
     assert cfg["tools"] == [drawbox_core.AGENT_DRAW_TOOL]
-    assert cfg["audio"]["input"]["transcription"]["model"] == "grok-transcribe"
+    # Both transcription channels on: input for the blocklist/admin
+    # interceptor, output for the mid-response moderation kill.
+    assert "inputAudioTranscription" in cfg
+    assert "outputAudioTranscription" in cfg
+    assert cfg["inputAudioFormat"] == {"type": "audio/pcm", "rate": 24000}
+    assert cfg["outputAudioFormat"] == cfg["inputAudioFormat"]
+
+
+def test_session_config_is_normalized_ai_sdk_shape(drawbox_dir):
+    """The Gateway speaks the AI SDK's normalized realtime protocol, not
+    the OpenAI/xAI snake_case wire format. No legacy keys may leak in."""
+    cfg = drawbox_core.realtime_session_config()
+    legacy = {"turn_detection", "tool_choice", "audio", "modalities",
+              "input_audio_format", "output_audio_format"}
+    assert not legacy & set(cfg)
+    allowed = {"instructions", "voice", "outputModalities",
+               "inputAudioFormat", "inputAudioTranscription",
+               "outputAudioTranscription", "outputAudioFormat",
+               "turnDetection", "tools", "providerOptions"}
+    assert set(cfg) <= allowed
+
+
+def test_gateway_realtime_protocols_carry_the_token():
+    protos = drawbox_core.gateway_realtime_protocols("vcst_abc123")
+    assert protos == ["ai-gateway-realtime.v1", "ai-gateway-auth.vcst_abc123"]
+    import pytest
+    with pytest.raises(ValueError):
+        drawbox_core.gateway_realtime_protocols("")
+
+
+def test_gateway_realtime_model_uses_catalog_creator():
+    """The Gateway catalog lists xAI under `spacexai/` (see the image
+    catalog too); `xai/...` is not an id there."""
+    assert drawbox_core.GATEWAY_REALTIME_MODEL.startswith("spacexai/")
+    assert drawbox_core.GATEWAY_GROK_TTS_MODEL.startswith("spacexai/")
+    assert drawbox_core.GATEWAY_GROK_STT_MODEL.startswith("spacexai/")
+    assert drawbox_core.GATEWAY_REALTIME_URL.endswith(
+        "?ai-model-id=" + drawbox_core.GATEWAY_REALTIME_MODEL)
+    # The WS route lives under the v4 protocol base; /v1/realtime-model 404s.
+    assert drawbox_core.GATEWAY_REALTIME_URL.startswith(
+        "wss://ai-gateway.vercel.sh/v4/ai/realtime-model?")
 
 
 def test_session_config_honors_scripts_and_voice(drawbox_dir):
@@ -62,12 +102,12 @@ def test_draw_tool_generates_and_prints_in_background(drawbox_dir, monkeypatch):
     monkeypatch.setattr(drawbox_core, "generate_image", fake_generate)
     monkeypatch.setattr(drawbox_core, "print_image",
                         lambda p, printer_type=None: calls.setdefault("printed", p))
-    drawbox_core.save_settings({"image_model": "gpt-image"})
+    drawbox_core.save_settings({"image_model": "openai/gpt-image-2"})
 
     out = drawbox_core.execute_draw_tool("  a happy dragon  ")
     assert out["ok"] is True
     assert _wait_for(lambda: "printed" in calls)
-    assert calls["gen"] == ("a happy dragon", "gpt-image")
+    assert calls["gen"] == ("a happy dragon", "openai/gpt-image-2")
     assert calls["printed"] == "page.png"
 
 
@@ -146,7 +186,8 @@ def test_content_block_checks_poop_before_safety(drawbox_dir):
 
 class _FakeSecretResponse:
     def read(self, n=-1):
-        return json.dumps({"value": "eph-123", "expires_at": 4102444800}).encode()
+        # Real mint route shape: {token, expiresAt} (epoch seconds).
+        return json.dumps({"token": "eph-123", "expiresAt": 4102444800}).encode()
 
     def __enter__(self):
         return self
@@ -163,7 +204,7 @@ def test_realtime_token_requires_conversation_mode(client):
 
 def test_realtime_token_mints_ephemeral_secret(client, monkeypatch):
     drawbox_core.save_settings({"conversation_mode": True})
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -175,17 +216,45 @@ def test_realtime_token_mints_ephemeral_secret(client, monkeypatch):
     body = client.post("/api/realtime/token").get_json()
     assert body["ok"] is True
     assert body["token"] == "eph-123"
-    assert body["url"].startswith("wss://api.x.ai/v1/realtime")
+    assert body["expires_at"] == 4102444800
+    assert "/v4/ai/realtime-model" in body["url"]
+    assert "spacexai/grok-voice" in body["url"]
+    assert body["protocols"] == ["ai-gateway-realtime.v1",
+                                 "ai-gateway-auth.eph-123"]
     assert body["session"]["tools"][0]["name"] == "draw_coloring_page"
     assert body["max_session_s"] == drawbox_core.AGENT_SESSION_MAX_S
     req = captured["req"]
-    assert req.full_url == drawbox_core.XAI_CLIENT_SECRETS_URL
-    assert req.get_header("Authorization") == "Bearer xai-test"
+    assert req.full_url == drawbox_core.GATEWAY_CLIENT_SECRETS_URL
+    assert req.get_header("Authorization") == "Bearer vck-test"
+    mint = json.loads(req.data)
+    assert mint["model"] == drawbox_core.GATEWAY_REALTIME_MODEL
+    # Live mint route caps expiresIn at 300 (400 "Too big" above that).
+    assert mint["expiresIn"] == 300
 
 
-def test_realtime_token_without_xai_key_is_503(client, monkeypatch):
+def test_realtime_token_mint_without_token_is_502(client, monkeypatch):
     drawbox_core.save_settings({"conversation_mode": True})
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
+
+    class _Empty:
+        def read(self, n=-1):
+            return b'{"expiresAt": 1}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Empty())
+    r = client.post("/api/realtime/token")
+    assert r.status_code == 502
+    assert r.get_json()["code"] == "mint_failed"
+
+
+def test_realtime_token_without_gateway_key_is_503(client, monkeypatch):
+    drawbox_core.save_settings({"conversation_mode": True})
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     r = client.post("/api/realtime/token")
     assert r.status_code == 503
     assert r.get_json()["code"] == "no_key"

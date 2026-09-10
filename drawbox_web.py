@@ -28,14 +28,15 @@ from drawbox_core import (
     API_KEYS_FILE, DRAWBOX_DIR, IMAGE_MODEL, LAST_IMAGE_FILE,
     PLEASE_MODE_FILE, PRINT_LOG_FILE,
     OPENAI_TTS_VOICES, PRINTER_TYPES, SAFETY_MODE_FILE, SERIAL_BAUDS,
-    SUPPORTED_MODELS, VOICE_PROVIDERS, _load_api_keys,
+    VOICE_PROVIDERS, _load_api_keys,
     _write_secure_json, apply_api_keys, content_block, default_scripts,
     ensure_safety_mode_default, resolve_tts_voice,
     device_for_token, generate_image, has_please,
     is_valid_device_token, list_paired_devices, load_scripts,
     load_settings, log_print_event,
     mask_key, please_mode_enabled, poop_mode_enabled,
-    print_image, redeem_pairing_code, revoke_paired_device,
+    print_image, redeem_pairing_code, rename_paired_device,
+    revoke_paired_device,
     safety_mode_enabled, save_scripts, save_settings, set_poop_mode_enabled,
     transcribe_audio,
 )
@@ -246,8 +247,19 @@ def api_paired_devices():
     ])
 
 
-@app.route("/api/pair/devices/<device_id>", methods=["DELETE"])
-def api_revoke_device(device_id):
+@app.route("/api/pair/devices/<device_id>", methods=["DELETE", "PATCH"])
+def api_paired_device(device_id):
+    if request.method == "PATCH":
+        data = _request_dict()
+        if data is None:
+            return jsonify(ok=False, error="Invalid JSON body"), 400
+        name = data.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return jsonify(ok=False, error="Name required"), 400
+        new_name = rename_paired_device(device_id, name)
+        if new_name is None:
+            return jsonify(ok=False, error="Unknown device"), 404
+        return jsonify(ok=True, id=device_id, name=new_name)
     if not revoke_paired_device(device_id):
         return jsonify(ok=False, error="Unknown device"), 404
     status = _load_device_status()
@@ -322,25 +334,35 @@ def api_devices():
     now = _time.time()
     all_status = _load_device_status()
     caller = device_for_token(_request_token()) or {}
+    caller_id = caller.get("id") or ""
+    # This browser is using the dashboard right now. Persist a last-seen
+    # so Playroom does not show "never seen" / Offline after pairing.
+    if caller_id:
+        rec = dict(all_status.get(caller_id) or {})
+        rec["ts"] = now
+        rec.setdefault("version", "dashboard")
+        all_status[caller_id] = rec
+        _write_secure_json(drawbox_core.DEVICE_STATUS_FILE, all_status)
     out = []
     for d in list_paired_devices():
         rec = all_status.get(d.get("id"))
+        is_self = d.get("id") == caller_id
         if rec:
             age = now - rec["ts"]
             status = {k: v for k, v in rec.items() if k != "ts"}
             last_seen_s = int(age)
-            online = age <= _DEVICE_ONLINE_S
+            online = age <= _DEVICE_ONLINE_S or is_self
         else:
             status = None
-            last_seen_s = None
-            online = False
+            last_seen_s = 0 if is_self else None
+            online = is_self
         out.append({
             "id": d.get("id", ""),
             "name": d.get("name", ""),
             "created": d.get("created", ""),
             # The UI warns before a device revokes itself out of the
             # dashboard it is currently using.
-            "self": d.get("id") == caller.get("id"),
+            "self": is_self,
             "online": online,
             "last_seen_s": last_seen_s,
             "status": status,
@@ -749,14 +771,10 @@ def _line_variants(text):
 
 
 def _active_tts():
-    """Provider, voice id, and ElevenLabs knobs, matching the daemon."""
+    """Provider, voice id, and leftover ElevenLabs knobs, matching the daemon."""
     s = load_settings()
     provider = s["voice_provider"]
-    if provider == "elevenlabs":
-        raw = s.get("elevenlabs_voice_id")
-        voice_id = raw.strip() if isinstance(raw, str) and raw.strip() else \
-            drawbox_core.DEFAULT_SETTINGS["elevenlabs_voice_id"]
-    elif provider == "grok":
+    if provider == "grok":
         raw = s.get("grok_voice_id")
         voice_id = raw.strip() if isinstance(raw, str) and raw.strip() else \
             drawbox_core.DEFAULT_SETTINGS["grok_voice_id"]
@@ -978,8 +996,10 @@ def api_settings():
     try:
         if isinstance(data.get("coloring_prompt"), str):
             settings["coloring_prompt"] = data["coloring_prompt"][:5000]
-        if data.get("image_model") in SUPPORTED_MODELS:
-            settings["image_model"] = data["image_model"]
+        if isinstance(data.get("image_model"), str) and \
+                drawbox_core.is_known_image_model(data["image_model"]):
+            settings["image_model"] = drawbox_core.resolve_image_model(
+                data["image_model"])
         if data.get("voice_provider") in VOICE_PROVIDERS:
             settings["voice_provider"] = data["voice_provider"]
         if data.get("stt_provider") in drawbox_core.STT_PROVIDERS:
@@ -1533,42 +1553,39 @@ def api_reboot():
 # same core functions directly — one behavior, two boxes.
 
 
-def _mint_client_secret():
-    import urllib.request
-
-    req = urllib.request.Request(
-        drawbox_core.XAI_CLIENT_SECRETS_URL, data=b"{}",
-        headers={
-            "Authorization": f"Bearer {drawbox_core.XAI_API_KEY}",
-            "Content-Type": "application/json",
-        })
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
-
-
 @app.route("/api/realtime/token", methods=["POST"])
 def api_realtime_token():
-    """Ephemeral xAI client secret + session config for a paired box.
+    """Ephemeral Gateway client secret + session config for a paired box.
 
-    The real XAI key never leaves the Pi; the box connects to xAI with a
-    short-lived secret minted here.
+    The long-lived Gateway key never leaves the Pi; the box connects with
+    a short-lived secret minted here.
     """
     if not load_settings()["conversation_mode"]:
         return jsonify(ok=False, error="Conversation mode is off",
                        code="conversation_off"), 403
     drawbox_core.apply_api_keys()
-    if not drawbox_core.XAI_API_KEY:
-        return jsonify(ok=False, error="XAI_API_KEY not set",
+    if not drawbox_core.AI_GATEWAY_API_KEY:
+        return jsonify(ok=False, error="AI_GATEWAY_API_KEY not set",
                        code="no_key"), 503
     try:
-        secret = _mint_client_secret()
+        secret = drawbox_core.mint_realtime_client_secret()
     except Exception:
         log.exception("client secret mint failed")
-        return jsonify(ok=False, error="Could not reach xAI",
+        return jsonify(ok=False, error="Could not reach AI Gateway",
                        code="mint_failed"), 502
-    return jsonify(ok=True, token=secret.get("value"),
-                   expires_at=secret.get("expires_at"),
-                   url=drawbox_core.XAI_REALTIME_URL,
+    token = secret.get("token") or secret.get("value")
+    if not token:
+        log.error("client secret mint returned no token: %s", secret)
+        return jsonify(ok=False, error="AI Gateway returned no token",
+                       code="mint_failed"), 502
+    expires = secret.get("expiresAt") or secret.get("expires_at")
+    url = secret.get("url") or drawbox_core.GATEWAY_REALTIME_URL
+    # `protocols` is the Sec-WebSocket-Protocol list the box must offer;
+    # the Gateway reads the bearer token from there, not from a header.
+    return jsonify(ok=True, token=token,
+                   expires_at=expires,
+                   url=url,
+                   protocols=drawbox_core.gateway_realtime_protocols(token),
                    session=drawbox_core.realtime_session_config(),
                    max_session_s=drawbox_core.AGENT_SESSION_MAX_S)
 

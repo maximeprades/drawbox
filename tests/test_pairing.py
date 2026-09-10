@@ -145,6 +145,12 @@ def test_paired_devices_list_and_revoke_via_api(client):
     assert [d["name"] for d in devices] == ["tests"]
     assert "token_hash" not in devices[0]
 
+    renamed = client.patch(
+        f"/api/pair/devices/{devices[0]['id']}", json={"name": "Kitchen"})
+    assert renamed.get_json()["ok"] is True
+    assert client.get("/api/pair/devices").get_json()["devices"][0]["name"] == \
+        "Kitchen"
+
     r = client.delete(f"/api/pair/devices/{devices[0]['id']}")
     assert r.get_json()["ok"] is True
     # the client just revoked itself

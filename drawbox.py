@@ -60,18 +60,15 @@ SILENCE_STOP_SEC = 1.5
 # TTS settings — overridden by ~/.drawbox/web_settings.json at startup
 VOICE_PROVIDER = "gateway"
 TTS_VOICE_ID = "alloy"
-ELEVENLABS_VOICE_ID = "xNtG3W2oqJs0cJZuTyBc"
 TTS_STABILITY = 0.5
 TTS_STYLE = 0.0
 TTS_SIMILARITY_BOOST = 0.75
 GROK_VOICE_ID = "eve"
 
-# The drawbox_core key attribute each voice provider needs; keeps the startup
-# key gate in lockstep with the providers _synthesize can dispatch to.
+# Both voice providers speak through the AI Gateway key.
 TTS_PROVIDER_KEYS = {
     "gateway": "AI_GATEWAY_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "grok": "XAI_API_KEY",
+    "grok": "AI_GATEWAY_API_KEY",
 }
 
 # ── VOICE LINES ─────────────────────────────────
@@ -101,13 +98,11 @@ KIDS_JOKES = _load_jokes()
 
 def _apply_tts_settings():
     """Pull the voice provider + per-provider tuning from settings.json."""
-    global VOICE_PROVIDER, TTS_VOICE_ID, ELEVENLABS_VOICE_ID, GROK_VOICE_ID, \
+    global VOICE_PROVIDER, TTS_VOICE_ID, GROK_VOICE_ID, \
         TTS_STABILITY, TTS_STYLE
     s = load_settings()  # load_settings already clamps voice_provider
     VOICE_PROVIDER = s["voice_provider"]
     TTS_VOICE_ID = drawbox_core.resolve_tts_voice(s.get("tts_voice_id"))
-    if isinstance(s.get("elevenlabs_voice_id"), str) and s["elevenlabs_voice_id"].strip():
-        ELEVENLABS_VOICE_ID = s["elevenlabs_voice_id"].strip()
     if isinstance(s.get("grok_voice_id"), str) and s["grok_voice_id"].strip():
         GROK_VOICE_ID = s["grok_voice_id"].strip()
     TTS_STABILITY = max(0.0, min(1.0, float(s.get("tts_stability", TTS_STABILITY))))
@@ -136,9 +131,7 @@ class VoiceFeedback:
 
     def _tts_path(self, text):
         """Cache filename keyed on provider + voice + tuning + text."""
-        if self.provider == "elevenlabs":
-            voice_id = ELEVENLABS_VOICE_ID
-        elif self.provider == "grok":
+        if self.provider == "grok":
             voice_id = GROK_VOICE_ID
         else:
             voice_id = TTS_VOICE_ID
@@ -162,9 +155,7 @@ class VoiceFeedback:
             return False
         log.info("generating TTS: %s…", text[:50])
         try:
-            if self.provider == "elevenlabs":
-                self._elevenlabs_tts(text, out_path)
-            elif self.provider == "grok":
+            if self.provider == "grok":
                 self._grok_tts(text, out_path)
             else:
                 self._gateway_tts(text, out_path)
@@ -223,14 +214,6 @@ class VoiceFeedback:
     def _gateway_tts(self, text, out_path):
         data = drawbox_core.synthesize_speech(
             text, provider="gateway", voice_id=TTS_VOICE_ID,
-            stability=TTS_STABILITY, style=TTS_STYLE,
-            similarity_boost=TTS_SIMILARITY_BOOST)
-        with open(out_path, "wb") as f:
-            f.write(data)
-
-    def _elevenlabs_tts(self, text, out_path):
-        data = drawbox_core.synthesize_speech(
-            text, provider="elevenlabs", voice_id=ELEVENLABS_VOICE_ID,
             stability=TTS_STABILITY, style=TTS_STYLE,
             similarity_boost=TTS_SIMILARITY_BOOST)
         with open(out_path, "wb") as f:
@@ -558,8 +541,6 @@ def _print_config():
     log.info("  image_model = %s", load_settings()["image_model"])
     log.info("  voice       = %s", VOICE_PROVIDER)
     log.info("  ai_gateway  = %s", mask_key(drawbox_core.AI_GATEWAY_API_KEY) or "missing")
-    log.info("  elevenlabs  = %s", mask_key(drawbox_core.ELEVENLABS_API_KEY) or "missing")
-    log.info("  xai         = %s", mask_key(drawbox_core.XAI_API_KEY) or "missing")
     log.info("  keys file   = %s (%s)",
              API_KEYS_FILE,
              "present" if API_KEYS_FILE.exists() else "missing, using env")
