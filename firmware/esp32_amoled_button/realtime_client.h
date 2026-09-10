@@ -317,33 +317,42 @@ static bool rtHttpPost(const char *path, const String &json, int &status,
 // ── AUDIO PLUMBING ───────────────────────────────
 
 // Linear interpolation with a one-sample carry, so chunk boundaries are
-// seamless. Q16 phase: 16 kHz <-> 24 kHz drifts ~3 ms over a 5-minute
-// session, which nobody hears.
+// seamless. The phase is an exact fraction (source position = pos/dst in
+// samples, reduced by the gcd), so 960 samples in are exactly 1440 out
+// and a 5-minute session does not drift.
 struct RtResampler {
   int16_t prev;
-  uint32_t pos;   // Q16 index into [prev, in[0], in[1], ...]
-  uint32_t step;  // Q16 src/dst
+  uint32_t pos;  // source position * dst, into [prev, in[0], in[1], ...]
+  uint32_t src, dst;
 
-  void reset(uint32_t src, uint32_t dst) {
+  void reset(uint32_t s, uint32_t d) {
     prev = 0;
     pos = 0;
-    step = (uint32_t)(((uint64_t)src << 16) / dst);
+    uint32_t a = s, b = d;
+    while (b) {
+      uint32_t t = a % b;
+      a = b;
+      b = t;
+    }
+    src = s / a;
+    dst = d / a;
   }
 
-  // out must hold n * dst / src + 2 samples.
+  // out must hold ceil(n * dst / src) samples.
   size_t run(const int16_t *in, size_t n, int16_t *out) {
     if (!n) return 0;
     size_t o = 0;
-    while ((pos >> 16) < n) {
-      uint32_t i = pos >> 16;
+    uint32_t end = (uint32_t)n * dst;
+    while (pos < end) {
+      uint32_t i = pos / dst;
       int32_t a = i == 0 ? prev : in[i - 1];
       int32_t b = in[i];
-      int32_t frac = (int32_t)(pos & 0xFFFF);
-      out[o++] = (int16_t)(a + (int32_t)(((int64_t)(b - a) * frac) >> 16));
-      pos += step;
+      int32_t frac = (int32_t)(pos % dst);
+      out[o++] = (int16_t)(a + (int32_t)(((int64_t)(b - a) * frac) / (int32_t)dst));
+      pos += src;
     }
     prev = in[n - 1];
-    pos -= (uint32_t)n << 16;
+    pos -= end;
     return o;
   }
 };
