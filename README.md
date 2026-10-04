@@ -228,6 +228,8 @@ After deploying, set up [Cloudflare Access](https://one.dash.cloudflare.com) to 
 |---------|-----|
 | Printer not detected | `lsusb`, try different USB port |
 | Mic not recording | `arecord -l` to list devices, check `~/.asoundrc` |
+| Says "I didn't catch that" on every press | `journalctl -u drawbox -e`. `no usable input devices found` means the Pi sees no mic: check the cable. Each take logs `recorded …s (peak …)`; speech should peak near 0.15. Far lower means the mic gain is down: see [PI-SETUP step 10](PI-SETUP.md#10-set-the-mic-gain-one-time) |
+| Drawing is made but nothing prints | **Settings → Printer Type**: the USB Brother needs **Laser / inkjet (CUPS)**. **M5Stack ATOM thermal — WiFi** works only while the ATOM bridge answers at `drawbox-atom.local` (green LED) |
 | No speaker sound | `aplay -l`, check `~/.asoundrc` card numbers |
 | Button no response | Test with: `python3 -c "from gpiozero import Button; b=Button(17); print('pressed' if b.is_pressed else 'open')"` |
 | Images too dark | Lower threshold from 180 to 150 in `drawbox_core.py` |
