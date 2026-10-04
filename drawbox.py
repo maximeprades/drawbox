@@ -445,12 +445,37 @@ def _wait_for_take(frames, seconds):
         time.sleep(0.05)
 
 
+def _rescan_audio_devices():
+    """Rebuild PortAudio's device list (sounddevice has no public call)."""
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception as e:
+        log.warning("could not rescan audio devices: %s", e)
+
+
 def record_audio(seconds=RECORD_SECONDS):
     """Record up to ``seconds`` seconds (stopping early once the kid stops
     talking) and return a WAV path, or None if silent."""
     log.info("recording for up to %ds", seconds)
+    path, opened = _record_take(seconds)
+    if not opened:
+        # PortAudio lists devices once, when it initializes: a mic plugged
+        # in (or replugged) after the daemon started stays invisible.
+        log.info("no input stream opened; rescanning audio devices")
+        _rescan_audio_devices()
+        path, _opened = _record_take(seconds)
+    return path
 
+
+def _record_take(seconds):
+    """Try each input candidate once.
+
+    Returns ``(wav_path_or_None, opened)``; ``opened`` is False when no
+    input stream opened at all.
+    """
     last_error = None
+    opened = False
     for device in _candidate_input_devices():
         frames = []
         statuses = []
@@ -465,6 +490,7 @@ def record_audio(seconds=RECORD_SECONDS):
             log.info("trying %s", device_label)
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                 callback=cb, device=device):
+                opened = True
                 _wait_for_take(frames, seconds)
         except Exception as e:
             last_error = e
@@ -490,18 +516,18 @@ def record_audio(seconds=RECORD_SECONDS):
             # don't hand Whisper silence to hallucinate from.
             log.warning("recording from %s too quiet: peak=%.4f",
                         device_label, peak)
-            return None
+            return None, True
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         sf.write(path, audio, SAMPLE_RATE)
-        log.info("recorded %.1fs to %s", duration, path)
-        return path
+        log.info("recorded %.1fs (peak %.3f) to %s", duration, peak, path)
+        return path, True
 
     if last_error:
         log.warning("all input devices failed; last error: %s", last_error)
     else:
         log.warning("no usable input devices found; check microphone connection")
-    return None
+    return None, opened
 
 
 # ── TRANSCRIBE ──────────────────────────────────

@@ -138,7 +138,25 @@ rm -rf ~/.drawbox/voice_cache
 
 The cache will rebuild automatically on next startup (~2 minutes for 50 jokes + 15 voice lines).
 
-## 10. Test It
+## 10. Set the Mic Gain (One-Time)
+
+The speech detection uses the same thresholds as the ESP32 box (room tone
+below 0.017, speech above 0.034). They need the USB mic at capture volume
+8 of 16. At 0, speech reads as silence and every press ends with
+"I didn't catch that". On the Pi:
+
+```bash
+amixer -c Device cset name='Mic Capture Volume' 8
+sudo alsactl store
+```
+
+`Device` is the mic's card name from `arecord -l`. `alsactl store` saves
+the level, and ALSA restores it at boot and when the mic is replugged.
+Every take logs its peak in `journalctl -u drawbox`, for example
+`recorded 4.6s (peak 0.152)`. At gain 8, speech peaks near 0.15 and the
+quiet room stays under 0.015.
+
+## 11. Test It
 
 Press the red button and say something! Image generation should now take ~2-5 seconds instead of 30-60 seconds.
 

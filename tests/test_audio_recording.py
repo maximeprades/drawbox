@@ -168,13 +168,16 @@ def test_record_audio_returns_none_when_all_devices_fail(monkeypatch):
     devices = [
         {"name": "USB PnP Sound Device: Audio (hw:3,0)", "max_input_channels": 1},
     ]
+    attempts = []
+    rescans = []
 
     monkeypatch.setattr(drawbox.sd, "query_devices", lambda device=None: devices if device is None else devices[device])
     monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
+    monkeypatch.setattr(drawbox, "_rescan_audio_devices", lambda: rescans.append(1))
 
     class FailingInputStream:
         def __init__(self, *args, **kwargs):
-            pass
+            attempts.append(kwargs["device"])
 
         def __enter__(self):
             raise drawbox.sd.PortAudioError("illegal device")
@@ -185,6 +188,46 @@ def test_record_audio_returns_none_when_all_devices_fail(monkeypatch):
     monkeypatch.setattr(drawbox.sd, "InputStream", FailingInputStream)
 
     assert drawbox.record_audio(seconds=1) is None
+    # One rescan, then one more pass over the rebuilt list — never a loop.
+    assert rescans == [1]
+    assert attempts == [0, None, 0, None]
+
+
+def test_record_audio_rescans_when_the_mic_appears_after_startup(monkeypatch):
+    """PortAudio lists devices once, at init: a mic plugged in after the
+    daemon started stays invisible until the list is rebuilt."""
+    mic = {"name": "USB PnP Sound Device: Audio (hw:3,0)", "max_input_channels": 1}
+    scan = {"devices": [], "rescans": 0}
+
+    def initialize():
+        scan["devices"] = [mic]
+        scan["rescans"] += 1
+
+    monkeypatch.setattr(
+        drawbox.sd, "query_devices",
+        lambda device=None: scan["devices"] if device is None else scan["devices"][device])
+    monkeypatch.setattr(drawbox.sd.default, "device", [-1, None], raising=False)
+    monkeypatch.setattr(drawbox.sd, "_terminate", lambda: None, raising=False)
+    monkeypatch.setattr(drawbox.sd, "_initialize", initialize, raising=False)
+    monkeypatch.setattr(drawbox.time, "sleep", lambda _seconds: None)
+
+    class LoudInputStream:
+        def __init__(self, samplerate, channels, callback, device):
+            self.callback = callback
+
+        def __enter__(self):
+            audio = np.full((drawbox.SAMPLE_RATE, 1), 0.5, dtype=np.float32)
+            self.callback(audio, len(audio), None, None)
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(drawbox.sd, "InputStream", LoudInputStream)
+    monkeypatch.setattr(drawbox.sf, "write", lambda path, audio, sample_rate: None)
+
+    assert drawbox.record_audio(seconds=1) is not None
+    assert scan["rescans"] == 1
 
 
 def test_tts_rate_limit_stops_additional_cache_requests(monkeypatch, tmp_path, caplog):
