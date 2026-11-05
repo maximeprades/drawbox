@@ -308,8 +308,59 @@ def test_print_image_defaults_to_lp(drawbox_dir, monkeypatch, tmp_path):
 
     drawbox_core.print_image(str(img_path))
 
-    assert calls == [["lp", "-d", drawbox_core.PRINTER_NAME,
+    assert calls == [["lpstat", "-p", drawbox_core.PRINTER_NAME],
+                     ["lp", "-d", drawbox_core.PRINTER_NAME,
                       "-o", "media=Letter", "-o", "fit-to-page", str(img_path)]]
+    assert not img_path.exists()
+
+
+def _fake_cups(monkeypatch, lpstat_out, fail=()):
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv[0] in fail:
+            raise drawbox_core.subprocess.CalledProcessError(1, argv)
+        out = lpstat_out if argv[0] == "lpstat" else ""
+        return drawbox_core.subprocess.CompletedProcess(argv, 0, stdout=out)
+
+    monkeypatch.setattr(drawbox_core.subprocess, "run", run)
+    return calls
+
+
+def test_print_image_reenables_paused_cups_queue(drawbox_dir, monkeypatch, tmp_path):
+    calls = _fake_cups(monkeypatch, "printer drawbox-printer disabled since Wed - "
+                                    "Waiting for printer to become available.\n")
+    img_path = tmp_path / "page.png"
+    img_path.write_bytes(b"fake-png")
+
+    drawbox_core.print_image(str(img_path))
+
+    assert [c[0] for c in calls] == ["lpstat", "cancel", "cupsenable", "lp"]
+    assert calls[1] == ["cancel", "-a", drawbox_core.PRINTER_NAME]
+    assert not img_path.exists()
+
+
+def test_print_image_leaves_idle_cups_queue_alone(drawbox_dir, monkeypatch, tmp_path):
+    calls = _fake_cups(monkeypatch, "printer drawbox-printer is idle.  enabled since Wed\n")
+    img_path = tmp_path / "page.png"
+    img_path.write_bytes(b"fake-png")
+
+    drawbox_core.print_image(str(img_path))
+
+    assert [c[0] for c in calls] == ["lpstat", "lp"]
+
+
+def test_print_image_fails_loudly_when_queue_stays_paused(drawbox_dir, monkeypatch, tmp_path):
+    calls = _fake_cups(monkeypatch, "printer drawbox-printer disabled since Wed -\n",
+                       fail=("cupsenable",))
+    img_path = tmp_path / "page.png"
+    img_path.write_bytes(b"fake-png")
+
+    with pytest.raises(OSError, match="cupsenable drawbox-printer"):
+        drawbox_core.print_image(str(img_path))
+
+    assert "lp" not in [c[0] for c in calls]
     assert not img_path.exists()
 
 
@@ -325,8 +376,7 @@ def test_bogus_printer_type_normalizes_to_cups(drawbox_dir, monkeypatch, tmp_pat
 
     drawbox_core.print_image(str(img_path))
 
-    assert len(calls) == 1
-    assert calls[0][0] == "lp"
+    assert [c[0] for c in calls] == ["lpstat", "lp"]
     assert not img_path.exists()
 
 
