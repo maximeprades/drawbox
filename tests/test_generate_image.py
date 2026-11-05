@@ -22,14 +22,21 @@ def _gateway_client(monkeypatch, images_generate=None, chat_create=None):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "vck-test")
 
     class FakeClient:
+        options = {}
+
         def __init__(self, **_kwargs):
             self.images = SimpleNamespace(generate=images_generate)
             self.chat = SimpleNamespace(
                 completions=SimpleNamespace(create=chat_create),
             )
 
+        def with_options(self, **options):
+            FakeClient.options = options
+            return self
+
     monkeypatch.setattr(drawbox_core, "OpenAI", FakeClient)
     drawbox_core.apply_api_keys()
+    return FakeClient
 
 
 def test_generate_image_requires_gateway_key(drawbox_dir, monkeypatch):
@@ -37,6 +44,21 @@ def test_generate_image_requires_gateway_key(drawbox_dir, monkeypatch):
     drawbox_core.apply_api_keys()
     with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
         drawbox_core.generate_image("a cat", model="google/gemini-3.1-flash-image-preview")
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-image-2",
+                                   "google/gemini-3.1-flash-image-preview"])
+def test_image_calls_are_capped_and_not_retried(drawbox_dir, monkeypatch, model):
+    png = base64.b64encode(_png_bytes()).decode()
+    images = lambda **kw: SimpleNamespace(data=[SimpleNamespace(b64_json=png, url=None)])
+    chat = lambda **kw: SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content=None, images=[
+            {"image_url": {"url": f"data:image/png;base64,{png}"}}]),
+        finish_reason="stop")])
+    fake = _gateway_client(monkeypatch, images_generate=images, chat_create=chat)
+    drawbox_core.generate_image("a cat", model=model)
+    assert fake.options == {"timeout": drawbox_core.IMAGE_TIMEOUT_S, "max_retries": 0}
+    assert drawbox_core.IMAGE_TIMEOUT_S < 120  # gunicorn worker timeout
 
 
 def test_generate_image_rejects_unknown_model(drawbox_dir, monkeypatch):
