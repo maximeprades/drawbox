@@ -41,7 +41,7 @@ DEVICE_STATUS_FILE = DRAWBOX_DIR / "device_status.json"
 LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────
-DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image"
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
 PRINTER_NAME = "drawbox-printer"
 
@@ -64,13 +64,12 @@ _API_KEY_ENV_VARS = {
 
 # Image-output models from the AI Gateway catalog (GET {base}/v1/models,
 # same set as https://vercel.com/ai-gateway/models?modality=image),
-# snapshotted 2026-08-22. Each id maps to the API that serves it: the Gemini
+# snapshotted 2026-11-07. Each id maps to the API that serves it: the Gemini
 # multimodal LLMs speak "chat", image-only models "images".
 GATEWAY_IMAGE_CATALOG = {
     "google/gemini-2.5-flash-image": "chat",
     "google/gemini-3-pro-image": "chat",
     "google/gemini-3.1-flash-image": "chat",
-    "google/gemini-3.1-flash-image-preview": "chat",
     "google/gemini-3.1-flash-lite-image": "chat",
     "bfl/flux-2-flex": "images",
     "bfl/flux-2-klein-4b": "images",
@@ -86,12 +85,10 @@ GATEWAY_IMAGE_CATALOG = {
     "bytedance/seedream-4.5": "images",
     "bytedance/seedream-5.0-lite": "images",
     "bytedance/seedream-5.0-pro": "images",
-    "openai/gpt-image-1": "images",
     "openai/gpt-image-1-mini": "images",
     "openai/gpt-image-1.5": "images",
     "openai/gpt-image-2": "images",
     "prodia/flux-fast-schnell": "images",
-    "quiverai/arrow-1.1": "images",
     "recraft/recraft-v2": "images",
     "recraft/recraft-v3": "images",
     "recraft/recraft-v4": "images",
@@ -118,10 +115,13 @@ _GOOGLE_IMAGE_KWARGS = {
     },
 }
 
-# Historical dashboard aliases → current gateway catalog ids. load_settings
-# and generate_image rewrite these so a saved "nano-banana" keeps drawing.
+# Historical dashboard aliases and ids the Gateway retired → current
+# catalog ids. load_settings and generate_image rewrite these, so a box
+# whose saved model disappears keeps drawing instead of failing with 404.
 IMAGE_MODEL_ALIASES = {
-    "nano-banana": "google/gemini-3.1-flash-image-preview",
+    "nano-banana": "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-image-preview": "google/gemini-3.1-flash-image",
+    "openai/gpt-image-1": "openai/gpt-image-2",
     "nano-banana-fast": "google/gemini-3.1-flash-lite-image",
     "gpt-image": "openai/gpt-image-2",
 }

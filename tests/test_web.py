@@ -85,7 +85,7 @@ def test_settings_accepts_valid_model(client):
 def test_settings_rewrites_legacy_image_alias(client):
     client.post("/api/settings", json={"image_model": "nano-banana"})
     assert client.get("/api/settings").get_json()["image_model"] == \
-        "google/gemini-3.1-flash-image-preview"
+        "google/gemini-3.1-flash-image"
 
 
 def test_settings_accepts_gateway_model(client):

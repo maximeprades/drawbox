@@ -52,8 +52,9 @@ Costs ~$0.05/min of chat (xAI); off by default.
 
 DrawBox generates images through Vercel AI Gateway. Pick any catalog model
 from the dashboard Settings page (`image_model`). The default is
-`google/gemini-3.1-flash-image-preview`. Old aliases (`nano-banana`,
-`gpt-image`) still resolve to the matching catalog id.
+`google/gemini-3.1-flash-image`. Old aliases (`nano-banana`,
+`gpt-image`) and ids the Gateway retired (`google/gemini-3.1-flash-image-preview`,
+`openai/gpt-image-1`) still resolve to the matching catalog id.
 
 ## Parts
 

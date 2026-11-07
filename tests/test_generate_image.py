@@ -43,11 +43,11 @@ def test_generate_image_requires_gateway_key(drawbox_dir, monkeypatch):
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     drawbox_core.apply_api_keys()
     with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
-        drawbox_core.generate_image("a cat", model="google/gemini-3.1-flash-image-preview")
+        drawbox_core.generate_image("a cat", model="google/gemini-3.1-flash-image")
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-image-2",
-                                   "google/gemini-3.1-flash-image-preview"])
+                                   "google/gemini-3.1-flash-image"])
 def test_image_calls_are_capped_and_not_retried(drawbox_dir, monkeypatch, model):
     png = base64.b64encode(_png_bytes()).decode()
     images = lambda **kw: SimpleNamespace(data=[SimpleNamespace(b64_json=png, url=None)])
@@ -154,8 +154,8 @@ def test_generate_nano_banana_uses_chat_modalities(drawbox_dir, monkeypatch):
         ))])
 
     _gateway_client(monkeypatch, chat_create=fake_create)
-    drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image-preview")
-    assert seen["model"] == "google/gemini-3.1-flash-image-preview"
+    drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image")
+    assert seen["model"] == "google/gemini-3.1-flash-image"
     assert seen["extra_body"]["modalities"] == ["text", "image"]
     assert seen["extra_body"]["providerOptions"]["google"]["imageConfig"]["aspectRatio"] == "3:4"
 
@@ -210,7 +210,7 @@ def test_image_routes_are_catalog_only():
         assert route_slug == slug
     assert drawbox_core.SUPPORTED_MODELS == tuple(drawbox_core.GATEWAY_IMAGE_CATALOG)
     assert drawbox_core.resolve_image_model("nano-banana") == \
-        "google/gemini-3.1-flash-image-preview"
+        "google/gemini-3.1-flash-image"
     assert drawbox_core.resolve_image_model("gpt-image") == "openai/gpt-image-2"
 
 
@@ -237,7 +237,7 @@ def _gateway_chat_completion(png, finish_reason="stop", content=None):
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "created": 0,
-        "model": "google/gemini-3.1-flash-image-preview",
+        "model": "google/gemini-3.1-flash-image",
         "choices": [{
             "index": 0,
             "message": {
@@ -271,5 +271,5 @@ def test_generate_nano_banana_reads_sdk_dict_images(drawbox_dir, monkeypatch):
         return _gateway_chat_completion(png)
 
     _gateway_client(monkeypatch, chat_create=fake_create)
-    path = drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image-preview")
+    path = drawbox_core.generate_image("a kitty", model="google/gemini-3.1-flash-image")
     assert path.endswith(".png")
