@@ -41,7 +41,7 @@ DEVICE_STATUS_FILE = DRAWBOX_DIR / "device_status.json"
 LAST_IMAGE_FILE = DRAWBOX_DIR / "last_generated.png"
 
 # ── CONFIG ────────────────────────────────────────
-DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview"
+DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image"
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
 PRINTER_NAME = "drawbox-printer"
 
@@ -64,13 +64,12 @@ _API_KEY_ENV_VARS = {
 
 # Image-output models from the AI Gateway catalog (GET {base}/v1/models,
 # same set as https://vercel.com/ai-gateway/models?modality=image),
-# snapshotted 2026-08-22. Each id maps to the API that serves it: the Gemini
+# snapshotted 2026-11-07. Each id maps to the API that serves it: the Gemini
 # multimodal LLMs speak "chat", image-only models "images".
 GATEWAY_IMAGE_CATALOG = {
     "google/gemini-2.5-flash-image": "chat",
     "google/gemini-3-pro-image": "chat",
     "google/gemini-3.1-flash-image": "chat",
-    "google/gemini-3.1-flash-image-preview": "chat",
     "google/gemini-3.1-flash-lite-image": "chat",
     "bfl/flux-2-flex": "images",
     "bfl/flux-2-klein-4b": "images",
@@ -86,12 +85,10 @@ GATEWAY_IMAGE_CATALOG = {
     "bytedance/seedream-4.5": "images",
     "bytedance/seedream-5.0-lite": "images",
     "bytedance/seedream-5.0-pro": "images",
-    "openai/gpt-image-1": "images",
     "openai/gpt-image-1-mini": "images",
     "openai/gpt-image-1.5": "images",
     "openai/gpt-image-2": "images",
     "prodia/flux-fast-schnell": "images",
-    "quiverai/arrow-1.1": "images",
     "recraft/recraft-v2": "images",
     "recraft/recraft-v3": "images",
     "recraft/recraft-v4": "images",
@@ -118,10 +115,13 @@ _GOOGLE_IMAGE_KWARGS = {
     },
 }
 
-# Historical dashboard aliases → current gateway catalog ids. load_settings
-# and generate_image rewrite these so a saved "nano-banana" keeps drawing.
+# Historical dashboard aliases and ids the Gateway retired → current
+# catalog ids. load_settings and generate_image rewrite these, so a box
+# whose saved model disappears keeps drawing instead of failing with 404.
 IMAGE_MODEL_ALIASES = {
-    "nano-banana": "google/gemini-3.1-flash-image-preview",
+    "nano-banana": "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-image-preview": "google/gemini-3.1-flash-image",
+    "openai/gpt-image-1": "openai/gpt-image-2",
     "nano-banana-fast": "google/gemini-3.1-flash-lite-image",
     "gpt-image": "openai/gpt-image-2",
 }
@@ -886,6 +886,11 @@ def generate_ack_text(transcript):
 
 # ── IMAGE GENERATION ──────────────────────────────
 
+# The SDK default (600 s, two retries) left the box silent for up to half
+# an hour after "Drawing it now!" on a stalled request. Pages take 10-60 s;
+# this stays under gunicorn's 120 s worker timeout on the web path.
+IMAGE_TIMEOUT_S = 100
+
 def generate_image(desc, model=None):
     """Generate a coloring page for ``desc`` and return the processed PNG path.
 
@@ -1007,9 +1012,13 @@ def _image_bytes_from_images_response(result):
     return data
 
 
+def _image_client():
+    return client.with_options(timeout=IMAGE_TIMEOUT_S, max_retries=0)
+
+
 def _generate_chat_image(prompt, slug, kwargs):
     t0 = time.time()
-    completion = client.chat.completions.create(
+    completion = _image_client().chat.completions.create(
         model=slug,
         messages=[{"role": "user", "content": prompt}],
         **kwargs,
@@ -1022,7 +1031,7 @@ def _generate_chat_image(prompt, slug, kwargs):
 
 def _generate_images_api(prompt, slug, kwargs):
     t0 = time.time()
-    result = client.images.generate(model=slug, prompt=prompt, **kwargs)
+    result = _image_client().images.generate(model=slug, prompt=prompt, **kwargs)
     img_bytes = _image_bytes_from_images_response(result)
     log.info("gateway image responded in %.1fs (%dKB)",
              time.time() - t0, len(img_bytes) // 1024)
@@ -1099,6 +1108,32 @@ def _unlink_quietly(path):
         pass
 
 
+def _ensure_cups_queue_enabled():
+    """Re-enable the CUPS queue if a past failure paused it.
+
+    With the default error policy, one failed job (printer off, USB cable
+    out) pauses the queue for good, yet ``lp`` keeps accepting jobs: the
+    box says "Here it comes!" and no paper comes out. The jobs stuck
+    behind the pause belong to presses that already failed, so they are
+    dropped instead of printing all at once.
+    """
+    try:
+        r = subprocess.run(["lpstat", "-p", PRINTER_NAME], capture_output=True,
+                           text=True, timeout=5, env={**os.environ, "LC_ALL": "C"})
+    except (OSError, subprocess.SubprocessError):
+        return
+    if getattr(r, "returncode", 1) != 0 or "disabled" not in (r.stdout or ""):
+        return
+    log.warning("printer queue paused, re-enabling: %s", r.stdout.strip())
+    subprocess.run(["cancel", "-a", PRINTER_NAME], check=False, timeout=5)
+    try:
+        subprocess.run(["cupsenable", PRINTER_NAME], check=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise OSError(
+            f"printer queue {PRINTER_NAME} is paused; "
+            f"run: sudo cupsenable {PRINTER_NAME}") from e
+
+
 def print_image(path, printer_type=None):
     """Send ``path`` to the chosen printer and remove the temp file.
 
@@ -1128,6 +1163,7 @@ def print_image(path, printer_type=None):
             _unlink_quietly(path)
         return
     try:
+        _ensure_cups_queue_enabled()
         subprocess.run(
             ["lp", "-d", PRINTER_NAME, "-o", "media=Letter", "-o", "fit-to-page", path],
             check=True,

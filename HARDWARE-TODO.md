@@ -92,7 +92,7 @@ with no heap dip means the certificate chain changed — check
 1. Settings → Image Model → `google/gemini-3.1-flash-lite-image`;
    generate 3 pages by voice or dashboard.
 2. Compare per-model `duration_s` in `/api/analytics` against
-   `google/gemini-3.1-flash-image-preview`. Report both averages.
+   `google/gemini-3.1-flash-image`. Report both averages.
 3. Check the aspect ratio: `curl -s http://drawbox.local:5000/api/last-image -H "Authorization: Bearer <token>" | file -` or fetch
    `~/.drawbox/last_generated.png` — content region 3:4-ish means the
    gateway honors `imageConfig`; square means it ignored it (then remove

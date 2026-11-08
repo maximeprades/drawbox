@@ -49,7 +49,12 @@ def test_load_settings_clamps_stale_image_model(drawbox_dir, monkeypatch):
     # A historical preset alias rewrites to its catalog id.
     drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "nano-banana"}))
     assert drawbox_core.load_settings()["image_model"] == \
-        "google/gemini-3.1-flash-image-preview"
+        "google/gemini-3.1-flash-image"
+    # An id the Gateway retired rewrites to its replacement, not a 404.
+    drawbox_core.SETTINGS_FILE.write_text(json.dumps(
+        {"image_model": "google/gemini-3.1-flash-image-preview"}))
+    assert drawbox_core.load_settings()["image_model"] == \
+        "google/gemini-3.1-flash-image"
     # And a garbage env default falls through to the catalog default.
     monkeypatch.setattr(drawbox_core, "IMAGE_MODEL", "also-removed")
     drawbox_core.SETTINGS_FILE.write_text(json.dumps({"image_model": "dall-e-1"}))
